@@ -1,8 +1,8 @@
 import re
 from uuid import UUID
-from typing import Optional
 from datetime import datetime
-from pydantic import BaseModel, EmailStr, Field, validatorld, validator
+from typing import Optional, List
+from pydantic import BaseModel, EmailStr, Field, validator 
 
 # These schemas are used for employee operations
 # Note: Employees are stored in the User table, these schemas
@@ -56,6 +56,28 @@ class EmployeeUpdate(BaseModel):
 class EmployeeStatusUpdate(BaseModel):
     """Schema for updating employee status"""
     status: int = Field(...)
+    
+    @validator('status')
+    def validate_status(cls, v):
+        valid_statuses = {1, 2, 3}  # 1=Active, 2=Inactive, 3=Deleted
+        if v not in valid_statuses:
+            raise ValueError(f"Status must be one of {valid_statuses}")
+        return v
+
+class EmployeeActivateToggle(BaseModel):
+    """Schema for activating or deactivating an employee"""
+    active: bool = Field(...)
+    
+class BulkEmployeeActivateRequest(BaseModel):
+    """Schema for activating or deactivating multiple employees at once"""
+    employee_ids: List[int] = Field(...)
+    active: bool = Field(...)
+
+class BulkStatusResult(BaseModel):
+    """Schema for results of bulk status update"""
+    success: List[int] = Field(default_factory=list)
+    failed: List[int] = Field(default_factory=list)
+    message: str
 
 class EmployeeListResponse(BaseModel):
     """Schema for paginated list of employees"""

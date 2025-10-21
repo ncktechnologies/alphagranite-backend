@@ -10,7 +10,8 @@ from src.app.middleware.jwt_auth import JWTBearer, get_current_user
 router = APIRouter(
     prefix="/files",
     tags=["Files"],
-    dependencies=[Depends(JWTBearer())],
+    # JWT authentication is already applied at the middleware level,
+    # so we don't need the dependency here
 )
 
 @router.post("/upload")

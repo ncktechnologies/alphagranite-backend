@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
-from src.app.database.user import User  # User and Employee are in the same tablemployee are in the same table
+from src.app.database.user import User  # User and Employee are in the same tablemployee are in the same tablefrom src.app.database.user import User  # User and Employee are in the same tablemployee are in the same table
 from src.app.utils.constants import (
     MSG_EMAIL_EXISTS,
     MSG_EMPLOYEE_EXISTS,
@@ -313,6 +313,97 @@ class EmployeeService:
                 status_code=status.HTTP_400_BAD_REQUEST, 
                 detail=f"Database error: {str(e)}"
             )
+            
+    @staticmethod
+    async def toggle_employee_active_status(db: Session, employee_id: int, active: bool, current_user_id: int, background_tasks):
+        """
+        Activate or deactivate an employee
+        - active=True: Sets status to Active (1)
+        - active=False: Sets status to Inactive (2)
+        """
+        # Convert active bool to status code
+        status_id = 1 if active else 2  # 1 = Active, 2 = Inactive
+        
+        # Call update_employee_status to handle the change
+        return await EmployeeService.update_employee_status(
+            db=db, 
+            employee_id=employee_id,
+            status_id=status_id,
+            current_user_id=current_user_id,
+            background_tasks=background_tasks
+        )
+        
+    @staticmethod
+    async def bulk_toggle_employee_active_status(db: Session, employee_ids: list[int], active: bool, current_user_id: int, background_tasks):
+        """
+        Activate or deactivate multiple employees at once
+        Returns a dictionary with:
+        - success: list of IDs that were successfully updated
+        - failed: list of IDs that failed to update
+        - message: summary message
+        """
+        from src.app.service.background import save_audit_trail
+        
+        # Convert active bool to status code
+        status_id = 1 if active else 2  # 1 = Active, 2 = Inactive
+        status_name = "active" if active else "inactive"
+        
+        # Initialize result lists
+        success_ids = []
+        failed_ids = []
+        
+        # Process each employee
+        for emp_id in employee_ids:
+            try:
+                # Find employee
+                employee = db.query(User).filter(User.id == emp_id).first()
+                if not employee:
+                    failed_ids.append(emp_id)
+                    continue
+                
+                # Update status
+                old_status = employee.status
+                employee.status = status_id
+                employee.updated_at = datetime.now()
+                
+                db.add(employee)
+                
+                # Add to success list
+                success_ids.append(emp_id)
+                
+                # Save audit trail
+                await save_audit_trail(
+                    db=db,
+                    activity="employee_status_changed",
+                    user_id=current_user_id,
+                    message=f"Changed status of employee {employee.username} (ID: {employee.id}) to {status_name}",
+                    activity_trace_id=employee.id
+                )
+                
+            except Exception:
+                # Add to failed list if any exception occurs
+                failed_ids.append(emp_id)
+        
+        # Commit all successful changes
+        try:
+            db.commit()
+        except IntegrityError as e:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Database error: {str(e)}"
+            )
+        
+        # Create result message
+        total = len(employee_ids)
+        success_count = len(success_ids)
+        message = f"Updated {success_count} of {total} employees to {status_name}"
+        
+        return {
+            "success": success_ids,
+            "failed": failed_ids,
+            "message": message
+        }
     
     @staticmethod
     async def get_employee(db: Session, employee_id: int):

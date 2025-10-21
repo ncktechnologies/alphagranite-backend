@@ -8,6 +8,6 @@ class RolePermission(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     permission_id: int = Field(foreign_key="permissions.id")
     role_id: int = Field(foreign_key="roles.id")
-    action_menu_id: int = Field(foreign_key="action_menus.id")
+    action_menu_id: Optional[int] = Field(foreign_key="action_menus.id", default=None)
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)

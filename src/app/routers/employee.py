@@ -1,7 +1,7 @@
 from typing import Optional
 from sqlalchemy.orm import Session
 from fastapi import UploadFile, File, Form
-from fastapi import APIRouter, Depends, Request, BackgroundTasks, Path, Query, HTTPException, statusest, BackgroundTasks, Path, Query, HTTPException, status
+from fastapi import APIRouter, Depends, Request, BackgroundTasks, Path, Query, HTTPException, status
 
 from src.app.utils.config import get_db
 
@@ -12,7 +12,10 @@ from src.app.service.employee import EmployeeService
 # they are differentiated by roles and permissions
 from src.app.utils.helpers import success_response, call_service
 from src.app.utils.enrichment import enrich_employee_with_profile_image, enrich_employees_with_profile_images
-from src.app.interface.employee_schemas import EmployeeCreate, EmployeeListResponse, EmployeeResponse, EmployeeStatusUpdate, EmployeeUpdate
+from src.app.interface.employee_schemas import (
+    EmployeeCreate, EmployeeListResponse, EmployeeResponse, EmployeeStatusUpdate, 
+    EmployeeUpdate, EmployeeActivateToggle, BulkEmployeeActivateRequest, BulkStatusResult,
+)
 
 employee_router = APIRouter(
     prefix="/employees",
@@ -211,6 +214,84 @@ async def update_employee_status(
     return success_response(
         data=result,
         message=f"Employee status changed to {status_name} successfully"
+    )
+
+@employee_router.patch("/{employee_id}/activate")
+async def toggle_employee_activation(
+    request: Request,
+    data: EmployeeActivateToggle,
+    background_tasks: BackgroundTasks,
+    employee_id: int = Path(..., ge=1),
+    db: Session = Depends(get_db)
+):
+    """
+    Activate or deactivate an employee
+    - active=true: Sets status to Active (1)
+    - active=false: Sets status to Inactive (2)
+    """
+    # Get current user from request state
+    current_user = request.state.user
+    
+    # Call service using helper for error handling
+    result = await call_service(
+        EmployeeService.toggle_employee_active_status,
+        db=db,
+        employee_id=employee_id,
+        active=data.active,
+        current_user_id=current_user["user_id"],
+        background_tasks=background_tasks
+    )
+    
+    # Status message for response
+    status_action = "activated" if data.active else "deactivated"
+    
+    return success_response(
+        data=result,
+        message=f"Employee {status_action} successfully"
+    )
+
+@employee_router.post("/bulk-activate")
+async def bulk_toggle_employee_activation(
+    request: Request,
+    data: BulkEmployeeActivateRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """
+    Activate or deactivate multiple employees at once
+    
+    Request body:
+    {
+      "employee_ids": [1, 2, 3],
+      "active": true  # true to activate, false to deactivate
+    }
+    
+    Returns:
+    {
+      "success": [1, 2],  # IDs successfully updated
+      "failed": [3],       # IDs that failed
+      "message": "Updated 2 of 3 employees to active"
+    }
+    """
+    # Get current user from request state
+    current_user = request.state.user
+    
+    # Call service using helper for error handling
+    result = await call_service(
+        EmployeeService.bulk_toggle_employee_active_status,
+        db=db,
+        employee_ids=data.employee_ids,
+        active=data.active,
+        current_user_id=current_user["user_id"],
+        background_tasks=background_tasks
+    )
+    
+    # Status action for message
+    status_action = "activated" if data.active else "deactivated"
+    
+    return success_response(
+        data=result,
+        message=f"Bulk {status_action} {len(result['success'])} employees"
     )
 
 @employee_router.delete("/{employee_id}")

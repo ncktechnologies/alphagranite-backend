@@ -3,8 +3,8 @@ import pathlib
 from dotenv import load_dotenv
 from functools import lru_cache
 from typing import AsyncGenerator
-from pydantic import BaseSettings
 from sqlalchemy.orm import sessionmaker
+from pydantic_settings import BaseSettings
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 load_dotenv()
