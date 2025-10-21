@@ -1,7 +1,10 @@
 from uuid import UUID
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, TYPE_CHECKING
 from sqlmodel import SQLModel, Field, Relationship
+
+if TYPE_CHECKING:
+    from .department import Department
 
 class User(SQLModel, table=True):
     __tablename__ = "users"
@@ -16,7 +19,7 @@ class User(SQLModel, table=True):
     profile_image_id: Optional[int] = Field(default=None)
     first_name: str = Field(max_length=255)
     last_name: str = Field(max_length=255)
-    department: int = Field(default=1)
+    department: int = Field(default=1, foreign_key="departments.id")
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
     status: int = Field(default=1)
@@ -28,5 +31,6 @@ class User(SQLModel, table=True):
     is_first_login: bool = Field(default=True)
     role_id: Optional[int] = Field(default=None)
     email_notifications_enabled: bool = Field(default=True)
-    # Relationships will be added after all models are defined
+    # Relationship to Department
+    department_rel: Optional["Department"] = Relationship(back_populates="users", sa_relationship_kwargs={"foreign_keys": [department]})
   

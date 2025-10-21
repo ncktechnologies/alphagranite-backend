@@ -1,13 +1,14 @@
 from typing import Optional
 from sqlalchemy.orm import Session
-from fastapi import APIRouter, Depends, Request, BackgroundTasks, Path, Query, HTTPException, status
+from fastapi import APIRouter, Depends, Request, BackgroundTasks, Path, Query, HTTPException, status, BackgroundTasks, Path, Query, HTTPException, status
 
+from src.app.utils.config import get_db
+
+from src.app.service.employee import EmployeeService
 # Employee router handles operations related to employees
 # Note: Employees are stored in the same 'users' table as regular users,
 # they are differentiated by roles and permissions
-from ..utils.helpers import success_response
-from ..middleware.jwt_auth import JWTAuthMiddleware
-from src.app.service.employee import EmployeeService
+from src.app.utils.helpers import success_response, call_service
 from src.app.interface.employee_schemas import EmployeeCreate, EmployeeListResponse, EmployeeResponse, EmployeeStatusUpdate, EmployeeUpdate
 
 employee_router = APIRouter(
@@ -16,7 +17,7 @@ employee_router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-@employee_router.post("", response_model=EmployeeResponse)
+@employee_router.post("")
 async def create_employee(
     request: Request,
     data: EmployeeCreate,
@@ -33,17 +34,21 @@ async def create_employee(
     # Get current user from request state
     current_user = request.state.user
     
-    # Call service
-    result = await EmployeeService.create_employee(
+    # Call service using helper for error handling
+    result = await call_service(
+        EmployeeService.create_employee,
         db=db,
         data=data,
         current_user_id=current_user["user_id"],
         background_tasks=background_tasks
     )
     
-    return result
+    return success_response(
+        data=result,
+        message="Employee created successfully"
+    )
 
-@employee_router.get("/{employee_id}", response_model=EmployeeResponse)
+@employee_router.get("/{employee_id}")
 async def get_employee(
     request: Request,
     employee_id: int = Path(..., ge=1),
@@ -55,15 +60,19 @@ async def get_employee(
     # Get current user from request state
     current_user = request.state.user
     
-    # Call service
-    result = await EmployeeService.get_employee(
+    # Call service using helper for error handling
+    result = await call_service(
+        EmployeeService.get_employee,
         db=db,
         employee_id=employee_id
     )
     
-    return result
+    return success_response(
+        data=result,
+        message="Employee details retrieved successfully"
+    )
 
-@employee_router.put("/{employee_id}", response_model=EmployeeResponse)
+@employee_router.put("/{employee_id}")
 async def update_employee(
     request: Request,
     data: EmployeeUpdate,
@@ -76,17 +85,21 @@ async def update_employee(
     # Get current user from request state
     current_user = request.state.user
     
-    # Call service
-    result = await EmployeeService.update_employee(
+    # Call service using helper for error handling
+    result = await call_service(
+        EmployeeService.update_employee,
         db=db,
         employee_id=employee_id,
         data=data,
         current_user_id=current_user["user_id"]
     )
     
-    return result
+    return success_response(
+        data=result,
+        message="Employee updated successfully"
+    )
 
-@employee_router.patch("/{employee_id}/status", response_model=EmployeeResponse)
+@employee_router.patch("/{employee_id}/status")
 async def update_employee_status(
     request: Request,
     data: EmployeeStatusUpdate,
@@ -104,8 +117,9 @@ async def update_employee_status(
     # Get current user from request state
     current_user = request.state.user
     
-    # Call service
-    result = await EmployeeService.update_employee_status(
+    # Call service using helper for error handling
+    result = await call_service(
+        EmployeeService.update_employee_status,
         db=db,
         employee_id=employee_id,
         status_id=data.status,
@@ -113,9 +127,16 @@ async def update_employee_status(
         background_tasks=background_tasks
     )
     
-    return result
+    # Get status name for message
+    status_names = {1: "Active", 2: "Inactive", 3: "Deleted"}
+    status_name = status_names.get(data.status, "Updated")
+    
+    return success_response(
+        data=result,
+        message=f"Employee status changed to {status_name} successfully"
+    )
 
-@employee_router.delete("/{employee_id}", response_model=dict)
+@employee_router.delete("/{employee_id}")
 async def delete_employee(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -129,7 +150,8 @@ async def delete_employee(
     current_user = request.state.user
     
     # Call service to update status to deleted (3)
-    await EmployeeService.update_employee_status(
+    await call_service(
+        EmployeeService.update_employee_status,
         db=db,
         employee_id=employee_id,
         status_id=3,  # 3 = Deleted
@@ -137,9 +159,12 @@ async def delete_employee(
         background_tasks=background_tasks
     )
     
-    return {"success": True, "message": "Employee deleted successfully"}
+    return success_response(
+        data=None,
+        message="Employee deleted successfully"
+    )
 
-@employee_router.get("", response_model=EmployeeListResponse)
+@employee_router.get("")
 async def get_employees(
     request: Request,
     skip: int = Query(0, ge=0, description="Number of records to skip for pagination"),
@@ -169,8 +194,9 @@ async def get_employees(
     # Get current user from request state
     current_user = request.state.user
     
-    # Call service
-    result = await EmployeeService.get_employees(
+    # Call service using helper for error handling
+    result = await call_service(
+        EmployeeService.get_employees,
         db=db,
         skip=skip,
         limit=limit,
@@ -184,9 +210,12 @@ async def get_employees(
         sort_order=sort_order
     )
     
-    return result
+    return success_response(
+        data=result,
+        message="Employees retrieved successfully"
+    )
 
-@employee_router.get("/check-email/{email}", response_model=dict)
+@employee_router.get("/check-email/{email}")
 async def check_email_unique(
     request: Request,
     email: str,
@@ -199,7 +228,11 @@ async def check_email_unique(
     # Get current user from request state
     current_user = request.state.user
     
-    # Call service
+    # Call service using helper for error handling
+    # Note: is_email_unique is likely not async, so we don't use call_service
     is_unique = EmployeeService.is_email_unique(db, email)
     
-    return {"unique": is_unique}
+    return success_response(
+        data={"unique": is_unique},
+        message="Email uniqueness check completed"
+    )
