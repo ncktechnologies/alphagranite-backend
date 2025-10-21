@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from src.app.routers.auth import auth_router
 from src.app.utils.config import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
+from src.app.routers.employee import employee_router
 from src.app.middleware.jwt_auth import JWTAuthMiddleware
 from src.app.routers.health import router as health_router
 
@@ -33,5 +34,6 @@ app.add_middleware(
 app.add_middleware(JWTAuthMiddleware)
 app.include_router(auth_router)
 app.include_router(health_router, prefix="/health", tags=["health"])
+app.include_router(employee_router)
 
 

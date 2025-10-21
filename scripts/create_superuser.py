@@ -5,7 +5,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from passlib.context import CryptContext
+import bcrypt
 
 # Add project root to path
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -15,9 +15,6 @@ sys.path.insert(0, os.path.join(project_root, 'src'))
 from src.app.database.user import User
 
 load_dotenv()
-
-# Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def create_superuser():
     # Get credentials from environment
@@ -47,10 +44,11 @@ def create_superuser():
             print(f"Superuser with username '{username}' or email '{email}' already exists")
             return
         
-        # Hash password
-        hashed_password = pwd_context.hash(password)
+        # Hash password with bcrypt directly
+        password_bytes = password.encode('utf-8')[:72]  # Ensure max 72 bytes
+        hashed_password = bcrypt.hashpw(password_bytes, bcrypt.gensalt()).decode('utf-8')
         
-        # Create superuser
+        # Create superuser without foreign key constraints
         superuser = User(
             username=username,
             email=email,
@@ -62,7 +60,8 @@ def create_superuser():
             status=1,      # Active status
             is_super_admin=True,
             created_at=datetime.now(),
-            updated_at=datetime.now()
+            updated_at=datetime.now(),
+            role_id=None  # No role assigned initially
         )
         
         db.add(superuser)

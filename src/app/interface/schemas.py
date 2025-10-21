@@ -6,6 +6,12 @@ from pydantic import BaseModel, EmailStr, Field, validator
 class HealthResponse(BaseModel):
     """Health check response"""
     status: str
+    
+class DatabaseHealthResponse(BaseModel):
+    """Database health check response"""
+    status: str
+    database: bool
+    message: Optional[str] = None
 
 class LoginRequest(BaseModel):
     username: str
