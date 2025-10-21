@@ -10,4 +10,7 @@ class AuditTrail(SQLModel, table=True):
     user_id: int = Field(foreign_key="users.id")
     activity_table_name: Optional[str] = Field(default=None, max_length=255)
     record_id: Optional[int] = Field(default=None)
+    device_id: Optional[str] = Field(default=None, max_length=255)
+    ip_address: Optional[str] = Field(default=None, max_length=45)
+    browser: Optional[str] = Field(default=None, max_length=255)
     created_at: datetime = Field(default_factory=datetime.now)

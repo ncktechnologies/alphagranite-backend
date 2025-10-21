@@ -22,6 +22,10 @@ class User(SQLModel, table=True):
     status: int = Field(foreign_key="status.value_id")
     is_super_admin: bool = Field(default=False)
     password: str = Field(max_length=255)
-    # Relationships
-    roles: List["UserRole"] = Relationship(back_populates="users")
+    failed_login_attempts: int = Field(default=0)
+    is_locked: bool = Field(default=False)
+    locked_at: Optional[datetime] = Field(default=None)
+    is_first_login: bool = Field(default=True)
+    role_id: Optional[int] = Field(default=None, foreign_key="roles.id")
+    # Relationships will be added after all models are defined
   

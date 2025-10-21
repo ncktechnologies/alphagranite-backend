@@ -15,13 +15,18 @@ async def save_audit_trail(
     activity: str,
     user_id: int,
     message: str,
-    activity_trace_id: int
+    activity_trace_id: int,
+    device_id: str = None,
+    ip_address: str = None,
+    browser: str = None
 ):
     audit = AuditTrail(
-        activity=activity,
+        activity_message=message,
         user_id=user_id,
-        message=message,
-        activity_trace_id=activity_trace_id
+        record_id=activity_trace_id,
+        device_id=device_id,
+        ip_address=ip_address,
+        browser=browser
     )
     db.add(audit)
     db.commit()
@@ -62,12 +67,12 @@ async def send_notification(
 ):
     user = db.query(User).filter(User.id == user_id).first()
     if not user or user.status == "deleted":
-        await save_audit_trail(db, "notification_failed", user_id, f"Notification failed for {email}", activity_trace_id=0)
+        await save_audit_trail(db, "notification_failed", user_id, f"Notification failed for {email}", 0)
         return error_response("User not found or deleted", 404)
     if not user.email_notifications_enabled:
-        await save_audit_trail(db, "notification_off", user_id, f"Notification off for {email}", activity_trace_id=0)
+        await save_audit_trail(db, "notification_off", user_id, f"Notification off for {email}", 0)
         return error_response("Email notifications are off", 400)
     # Send the email using SMTP
     send_email(email, title, body)
-    await save_audit_trail(db, "notification_sent", user_id, f"Notification sent to {email}", activity_trace_id=0)
+    await save_audit_trail(db, "notification_sent", user_id, f"Notification sent to {email}", 0)
     return success_response({"email": email}, "Notification sent.")

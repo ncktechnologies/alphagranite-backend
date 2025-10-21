@@ -1,5 +1,5 @@
+from .auth import auth_router
 # Router layer - API endpoints
-from .items import router as items_router
-from .health import router as health_routerm
+from .health import router as health_router
 
-__all__ = ["items_router", "health_router"]
+__all__ = ["health_router", "auth_router"]
