@@ -2,7 +2,7 @@ import re
 from uuid import UUID
 from typing import Optional
 from datetime import datetime
-from pydantic import BaseModel, EmailStr, Field, validator
+from pydantic import BaseModel, EmailStr, Field, validatorld, validator
 
 # These schemas are used for employee operations
 # Note: Employees are stored in the User table, these schemas
@@ -45,8 +45,9 @@ class EmployeeUpdate(BaseModel):
     """Schema for updating an employee"""
     first_name: Optional[str] = Field(None, min_length=1, max_length=255)
     last_name: Optional[str] = Field(None, min_length=1, max_length=255)
-    phone: Optional[str] = Field(None)
-    department: Optional[int] = Field(None)
+    email: Optional[EmailStr] = Field(None)
+    phone_number: Optional[str] = Field(None)
+    department_id: Optional[int] = Field(None)
     gender: Optional[str] = Field(None)
     home_address: Optional[str] = Field(None)
     profile_image_id: Optional[int] = Field(None)

@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
-from src.app.database.user import User  # User and Employee are in the same table
+from src.app.database.user import User  # User and Employee are in the same tablemployee are in the same table
 from src.app.utils.constants import (
     MSG_EMAIL_EXISTS,
     MSG_EMPLOYEE_EXISTS,
@@ -56,7 +56,7 @@ class EmployeeService:
         - Minimum length of 8
         """
         import random
-        import string
+        import string     
         
         # Define character sets
         uppercase = string.ascii_uppercase
@@ -181,8 +181,17 @@ class EmployeeService:
             )
     
     @staticmethod
-    async def update_employee(db: Session, employee_id: int, data, current_user_id: int):
-        """Update employee details"""
+    async def update_employee(db: Session, employee_id: int, data, current_user_id: int, profile_image_id=None):
+        """
+        Update employee details
+        
+        Args:
+            db: Database session
+            employee_id: ID of employee to update
+            data: EmployeeUpdate data object
+            current_user_id: ID of user making the update
+            profile_image_id: Optional ID of uploaded profile image
+        """
         from src.app.service.background import save_audit_trail
         
         # Find employee
@@ -195,16 +204,18 @@ class EmployeeService:
             employee.first_name = data.first_name
         if data.last_name is not None:
             employee.last_name = data.last_name
-        if data.phone is not None:
-            employee.phone = data.phone
-        if data.department is not None:
-            employee.department = data.department
+        if data.email is not None:
+            employee.email = data.email
+        if data.phone_number is not None:
+            employee.phone = data.phone_number
+        if data.department_id is not None:
+            employee.department = data.department_id
         if data.gender is not None:
             employee.gender = data.gender
         if data.home_address is not None:
             employee.home_address = data.home_address
-        if data.profile_image_id is not None:
-            employee.profile_image_id = data.profile_image_id
+        if profile_image_id is not None:
+            employee.profile_image_id = profile_image_id
         if data.role_id is not None:
             employee.role_id = data.role_id
         

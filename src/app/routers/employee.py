@@ -1,14 +1,17 @@
 from typing import Optional
 from sqlalchemy.orm import Session
-from fastapi import APIRouter, Depends, Request, BackgroundTasks, Path, Query, HTTPException, status, BackgroundTasks, Path, Query, HTTPException, status
+from fastapi import UploadFile, File, Form
+from fastapi import APIRouter, Depends, Request, BackgroundTasks, Path, Query, HTTPException, statusest, BackgroundTasks, Path, Query, HTTPException, status
 
 from src.app.utils.config import get_db
 
+from src.app.service.file import FileService
 from src.app.service.employee import EmployeeService
 # Employee router handles operations related to employees
 # Note: Employees are stored in the same 'users' table as regular users,
 # they are differentiated by roles and permissions
 from src.app.utils.helpers import success_response, call_service
+from src.app.utils.enrichment import enrich_employee_with_profile_image, enrich_employees_with_profile_images
 from src.app.interface.employee_schemas import EmployeeCreate, EmployeeListResponse, EmployeeResponse, EmployeeStatusUpdate, EmployeeUpdate
 
 employee_router = APIRouter(
@@ -20,12 +23,20 @@ employee_router = APIRouter(
 @employee_router.post("")
 async def create_employee(
     request: Request,
-    data: EmployeeCreate,
-    background_tasks: BackgroundTasks,
+    first_name: str = Form(...),
+    last_name: str = Form(...),
+    email: str = Form(...),
+    phone: str = Form(None),
+    department: int = Form(...),
+    gender: str = Form(None),
+    home_address: str = Form(None),
+    role_id: int = Form(None),
+    profile_image: UploadFile = File(None),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
     db: Session = Depends(get_db)
 ):
     """
-    Create a new employee
+    Create a new employee with optional profile image
     - Requires authentication
     - Generates a unique username
     - Sets a random temporary password
@@ -33,6 +44,30 @@ async def create_employee(
     """
     # Get current user from request state
     current_user = request.state.user
+    
+    # Create employee data object from form data
+    data = EmployeeCreate(
+        first_name=first_name,
+        last_name=last_name,
+        email=email,
+        phone=phone,
+        department=department,
+        gender=gender,
+        home_address=home_address,
+        role_id=role_id
+    )
+    
+    # Handle profile image upload if provided
+    profile_image_id = None
+    if profile_image:
+        # Upload the profile image
+        file_data = await call_service(
+            FileService.upload_file,
+            db=db,
+            file=profile_image,
+            current_user=current_user["user_id"]
+        )
+        data.profile_image_id = file_data.id
     
     # Call service using helper for error handling
     result = await call_service(
@@ -43,8 +78,11 @@ async def create_employee(
         background_tasks=background_tasks
     )
     
+    # Enrich employee with profile image URL
+    enriched_employee = await enrich_employee_with_profile_image(db, result)
+    
     return success_response(
-        data=result,
+        data=enriched_employee,
         message="Employee created successfully"
     )
 
@@ -61,29 +99,64 @@ async def get_employee(
     current_user = request.state.user
     
     # Call service using helper for error handling
-    result = await call_service(
+    employee = await call_service(
         EmployeeService.get_employee,
         db=db,
         employee_id=employee_id
     )
     
+    # Enrich employee with profile image URL
+    enriched_employee = await enrich_employee_with_profile_image(db, employee)
+    
     return success_response(
-        data=result,
+        data=enriched_employee,
         message="Employee details retrieved successfully"
     )
 
 @employee_router.put("/{employee_id}")
 async def update_employee(
     request: Request,
-    data: EmployeeUpdate,
     employee_id: int = Path(..., ge=1),
+    first_name: str = Form(None),
+    last_name: str = Form(None),
+    email: str = Form(None),
+    phone_number: str = Form(None),
+    department_id: int = Form(None),
+    gender: str = Form(None),
+    home_address: str = Form(None),
+    role_id: int = Form(None),
+    profile_image: UploadFile = File(None),
     db: Session = Depends(get_db)
 ):
     """
-    Update employee details
+    Update employee details with optional profile image upload
     """
     # Get current user from request state
     current_user = request.state.user
+    
+    # Create employee update object from form data
+    data = EmployeeUpdate(
+        first_name=first_name,
+        last_name=last_name,
+        email=email,
+        phone_number=phone_number,
+        department_id=department_id,
+        gender=gender,
+        home_address=home_address,
+        role_id=role_id
+    )
+    
+    # Handle profile image upload if provided
+    profile_image_id = None
+    if profile_image:
+        # Upload the profile image
+        file_data = await call_service(
+            FileService.upload_file,
+            db=db,
+            file=profile_image,
+            current_user=current_user["user_id"]
+        )
+        profile_image_id = file_data.id
     
     # Call service using helper for error handling
     result = await call_service(
@@ -91,11 +164,15 @@ async def update_employee(
         db=db,
         employee_id=employee_id,
         data=data,
-        current_user_id=current_user["user_id"]
+        current_user_id=current_user["user_id"],
+        profile_image_id=profile_image_id
     )
     
+    # Enrich employee with profile image URL
+    enriched_employee = await enrich_employee_with_profile_image(db, result)
+    
     return success_response(
-        data=result,
+        data=enriched_employee,
         message="Employee updated successfully"
     )
 
@@ -209,6 +286,12 @@ async def get_employees(
         sort_by=sort_by,
         sort_order=sort_order
     )
+    
+    # Enrich employees with profile image URLs
+    if result["data"]:
+        employees_data = result["data"]
+        enriched_employees = await enrich_employees_with_profile_images(db, employees_data)
+        result["data"] = enriched_employees
     
     return success_response(
         data=result,

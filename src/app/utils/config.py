@@ -1,10 +1,16 @@
 import os
+import pathlib
 from dotenv import load_dotenv
+from functools import lru_cache
 from typing import AsyncGenerator
+from pydantic import BaseSettings
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 load_dotenv()
+
+# Base directory for the project
+BASE_DIR = pathlib.Path(__file__).parent.parent.parent.parent
 
 # Database configuration
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./app.db")
@@ -21,6 +27,32 @@ SUPERUSER_EMAIL = os.getenv("SUPERUSER_EMAIL", "admin@example.com")
 SUPERUSER_PASSWORD = os.getenv("SUPERUSER_PASSWORD", "admin123")
 SUPERUSER_FIRST_NAME = os.getenv("SUPERUSER_FIRST_NAME", "Super")
 SUPERUSER_LAST_NAME = os.getenv("SUPERUSER_LAST_NAME", "Admin")
+
+# File upload configuration
+STATIC_DIR = os.getenv("STATIC_DIR", os.path.join(BASE_DIR, "static"))
+UPLOADS_DIR = os.getenv("UPLOADS_DIR", os.path.join(STATIC_DIR, "uploads"))
+MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE", 5 * 1024 * 1024))  # 5 MB default
+ALLOWED_EXTENSIONS = os.getenv("ALLOWED_EXTENSIONS", "jpg,jpeg,png,gif,pdf,doc,docx,xls,xlsx").split(",")
+
+# API base URL for generating file URLs
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+
+class Settings(BaseSettings):
+    """Application settings."""
+    STATIC_DIR: str = STATIC_DIR
+    UPLOADS_DIR: str = UPLOADS_DIR
+    MAX_UPLOAD_SIZE: int = MAX_UPLOAD_SIZE
+    ALLOWED_EXTENSIONS: list = ALLOWED_EXTENSIONS
+    API_BASE_URL: str = API_BASE_URL
+
+@lru_cache
+def get_settings():
+    """Get application settings."""
+    return Settings()
+
+# Ensure directories exist
+os.makedirs(STATIC_DIR, exist_ok=True)
+os.makedirs(UPLOADS_DIR, exist_ok=True)
 
 # Database connection
 engine = create_async_engine(DATABASE_URL)

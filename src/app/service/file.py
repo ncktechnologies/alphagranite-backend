@@ -1,0 +1,175 @@
+import os
+import uuid
+import shutil
+from datetime import datetime
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+from typing import Optional, Dict, Any
+from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import UploadFile, HTTPException, status
+
+from src.app.database.file import File
+
+
+class FileService:
+    """Service for managing file uploads and retrievals"""
+    
+    @staticmethod
+    async def upload_file(
+        db: AsyncSession,
+        file: UploadFile,
+        user_id: int,
+        directory: str = "uploads",
+        file_type: str = None
+    ) -> Dict[str, Any]:
+        """
+        Upload a file to the server and save its metadata in the database
+        
+        Args:
+            db: Database session
+            file: The file to upload
+            user_id: The ID of the user uploading the file
+            directory: The directory to save the file in (relative to UPLOADS_DIR)
+            file_type: The type of file (defaults to derived from content-type)
+            
+        Returns:
+            Dictionary containing file information including ID
+        """
+        # Get environment configuration
+        from src.app.utils.config import get_settings
+        settings = get_settings()
+        
+        # Create uploads directory if it doesn't exist
+        uploads_dir = os.path.join(settings.STATIC_DIR, directory)
+        os.makedirs(uploads_dir, exist_ok=True)
+        
+        # Generate a unique filename
+        file_extension = os.path.splitext(file.filename)[1]
+        unique_filename = f"{uuid.uuid4()}{file_extension}"
+        file_path = os.path.join(directory, unique_filename)
+        full_path = os.path.join(settings.STATIC_DIR, file_path)
+        
+        # Determine file type if not provided
+        if not file_type:
+            file_type = file.content_type
+            
+        # Calculate file size
+        file_size = "0"
+        try:
+            # Get file size
+            contents = await file.read()
+            file_size = str(len(contents))
+            
+            # Write file to disk
+            with open(full_path, "wb") as dest_file:
+                dest_file.write(contents)
+                
+            # Reset file pointer for potential future use
+            await file.seek(0)
+            
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error uploading file: {str(e)}"
+            )
+            
+        # Create file record in database
+        db_file = File(
+            name=file.filename,
+            file_path=file_path,
+            file_type=file_type,
+            file_size=file_size,
+            created_at=datetime.now(),
+            updated_at=datetime.now()
+        )
+        
+        db.add(db_file)
+        await db.flush()
+        await db.commit()
+        await db.refresh(db_file)
+        
+        return {
+            "id": db_file.id,
+            "name": db_file.name,
+            "file_path": db_file.file_path,
+            "file_type": db_file.file_type,
+            "file_size": db_file.file_size,
+            "created_at": db_file.created_at,
+            "url": f"{settings.API_BASE_URL}/static/{file_path}"
+        }
+        
+    @staticmethod
+    async def get_file(db: AsyncSession, file_id: int) -> Dict[str, Any]:
+        """
+        Get file metadata by ID and generate URL
+        
+        Args:
+            db: Database session
+            file_id: The ID of the file to retrieve
+            
+        Returns:
+            Dictionary containing file information including URL
+        """
+        # Get environment configuration
+        from src.app.utils.config import get_settings
+        settings = get_settings()
+        
+        # Query file from database
+        query = select(File).where(File.id == file_id)
+        result = await db.execute(query)
+        file = result.scalar_one_or_none()
+        
+        if not file:
+            return None
+        
+        # Generate file URL
+        file_url = f"{settings.API_BASE_URL}/static/{file.file_path}"
+        
+        return {
+            "id": file.id,
+            "name": file.name,
+            "file_path": file.file_path,
+            "file_type": file.file_type,
+            "file_size": file.file_size,
+            "created_at": file.created_at,
+            "url": file_url
+        }
+        
+    @staticmethod
+    async def delete_file(db: AsyncSession, file_id: int) -> bool:
+        """
+        Delete a file from the server and database
+        
+        Args:
+            db: Database session
+            file_id: The ID of the file to delete
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        # Get environment configuration
+        from src.app.utils.config import get_settings
+        settings = get_settings()
+        
+        # Query file from database
+        query = select(File).where(File.id == file_id)
+        result = await db.execute(query)
+        file = result.scalar_one_or_none()
+        
+        if not file:
+            return False
+        
+        # Delete file from disk
+        full_path = os.path.join(settings.STATIC_DIR, file.file_path)
+        try:
+            if os.path.exists(full_path):
+                os.remove(full_path)
+        except Exception:
+            # Continue even if file deletion fails
+            pass
+        
+        # Delete file from database
+        await db.delete(file)
+        await db.commit()
+        
+        return True
