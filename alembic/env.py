@@ -3,10 +3,9 @@ import sys
 from logging.config import fileConfig
 
 from sqlalchemy import pool
-from sqlalchemy import engine_from_config
-
 from alembic import context
-from dotenv import load_dotenv
+from dotenv import load_dotenv 
+from sqlalchemy import engine_from_config
 
 # Add the project root directory to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -19,10 +18,18 @@ from sqlmodel import SQLModel
 
 # Import your models to register them with SQLModel.metadata
 from src.app.database.user import User
+from src.app.database.file import File
+from src.app.database.role import Role
 from src.app.database.status import Status
+from src.app.database.user_role import UserRole
+from src.app.database.user_role import UserRole
 from src.app.database.department import Department
+from src.app.database.permission import Permission
 from src.app.database.audit_trail import AuditTrail
-# Import other models as needed
+# Import other models so SQLModel.metadata includes them for autogenerate
+from src.app.database.action_menu import ActionMenu
+from src.app.database.role_permission import RolePermission
+# Import any additional models here as needed
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

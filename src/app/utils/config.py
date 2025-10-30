@@ -42,8 +42,11 @@ class Settings(BaseSettings):
     STATIC_DIR: str = STATIC_DIR
     UPLOADS_DIR: str = UPLOADS_DIR
     MAX_UPLOAD_SIZE: int = MAX_UPLOAD_SIZE
-    ALLOWED_EXTENSIONS: list = ALLOWED_EXTENSIONS
     API_BASE_URL: str = API_BASE_URL
+    
+    @property
+    def ALLOWED_EXTENSIONS(self):
+        return ALLOWED_EXTENSIONS
 
 @lru_cache
 def get_settings():

@@ -1,10 +1,11 @@
-from typing import Optional
+from typing import Optional, Union
 from sqlalchemy.orm import Session
 from fastapi import UploadFile, File, Form
 from fastapi import APIRouter, Depends, Request, BackgroundTasks, Path, Query, HTTPException, status
 
 from src.app.utils.config import get_db
-
+from src.app.database.user import User
+from src.app.routers.auth import get_current_user
 from src.app.service.file import FileService
 from src.app.service.employee import EmployeeService
 # Employee router handles operations related to employees
@@ -25,28 +26,26 @@ employee_router = APIRouter(
 
 @employee_router.post("")
 async def create_employee(
-    request: Request,
     first_name: str = Form(...),
     last_name: str = Form(...),
     email: str = Form(...),
-    phone: str = Form(None),
     department: int = Form(...),
+    phone: str = Form(None),
     gender: str = Form(None),
     home_address: str = Form(None),
-    role_id: int = Form(None),
-    profile_image: UploadFile = File(None),
+    profile_image: Optional[UploadFile] = File(default=None),
     background_tasks: BackgroundTasks = BackgroundTasks(),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
     Create a new employee with optional profile image
     - Requires authentication
+    - Requires department assignment
     - Generates a unique username
     - Sets a random temporary password
     - Sends email with login credentials
     """
-    # Get current user from request state
-    current_user = request.state.user
     
     # Create employee data object from form data
     data = EmployeeCreate(
@@ -56,28 +55,27 @@ async def create_employee(
         phone=phone,
         department=department,
         gender=gender,
-        home_address=home_address,
-        role_id=role_id
+        home_address=home_address
     )
     
     # Handle profile image upload if provided
     profile_image_id = None
-    if profile_image:
+    if profile_image and hasattr(profile_image, 'file'):
         # Upload the profile image
         file_data = await call_service(
             FileService.upload_file,
             db=db,
             file=profile_image,
-            current_user=current_user["user_id"]
+            user_id=current_user.id
         )
-        data.profile_image_id = file_data.id
+        data.profile_image_id = file_data["id"]
     
     # Call service using helper for error handling
     result = await call_service(
         EmployeeService.create_employee,
         db=db,
         data=data,
-        current_user_id=current_user["user_id"],
+        current_user_id=current_user.id,
         background_tasks=background_tasks
     )
     
@@ -91,15 +89,13 @@ async def create_employee(
 
 @employee_router.get("/{employee_id}")
 async def get_employee(
-    request: Request,
     employee_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
     Get employee details by ID
     """
-    # Get current user from request state
-    current_user = request.state.user
     
     # Call service using helper for error handling
     employee = await call_service(
@@ -118,7 +114,6 @@ async def get_employee(
 
 @employee_router.put("/{employee_id}")
 async def update_employee(
-    request: Request,
     employee_id: int = Path(..., ge=1),
     first_name: str = Form(None),
     last_name: str = Form(None),
@@ -127,15 +122,14 @@ async def update_employee(
     department_id: int = Form(None),
     gender: str = Form(None),
     home_address: str = Form(None),
-    role_id: int = Form(None),
-    profile_image: UploadFile = File(None),
+    role_id: Optional[int] = Form(None),
+    profile_image: Optional[UploadFile] = File(default=None),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
     Update employee details with optional profile image upload
     """
-    # Get current user from request state
-    current_user = request.state.user
     
     # Create employee update object from form data
     data = EmployeeUpdate(
@@ -151,15 +145,15 @@ async def update_employee(
     
     # Handle profile image upload if provided
     profile_image_id = None
-    if profile_image:
+    if profile_image and hasattr(profile_image, 'file'):
         # Upload the profile image
         file_data = await call_service(
             FileService.upload_file,
             db=db,
             file=profile_image,
-            current_user=current_user["user_id"]
+            user_id=current_user.id
         )
-        profile_image_id = file_data.id
+        profile_image_id = file_data["id"]
     
     # Call service using helper for error handling
     result = await call_service(
@@ -167,7 +161,7 @@ async def update_employee(
         db=db,
         employee_id=employee_id,
         data=data,
-        current_user_id=current_user["user_id"],
+        current_user_id=current_user.id,
         profile_image_id=profile_image_id
     )
     
@@ -181,10 +175,10 @@ async def update_employee(
 
 @employee_router.patch("/{employee_id}/status")
 async def update_employee_status(
-    request: Request,
     data: EmployeeStatusUpdate,
     background_tasks: BackgroundTasks,
     employee_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -194,8 +188,6 @@ async def update_employee_status(
     2 - Inactive
     3 - Deleted
     """
-    # Get current user from request state
-    current_user = request.state.user
     
     # Call service using helper for error handling
     result = await call_service(
@@ -203,7 +195,7 @@ async def update_employee_status(
         db=db,
         employee_id=employee_id,
         status_id=data.status,
-        current_user_id=current_user["user_id"],
+        current_user_id=current_user.id,
         background_tasks=background_tasks
     )
     
@@ -218,10 +210,10 @@ async def update_employee_status(
 
 @employee_router.patch("/{employee_id}/activate")
 async def toggle_employee_activation(
-    request: Request,
     data: EmployeeActivateToggle,
     background_tasks: BackgroundTasks,
     employee_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -229,8 +221,6 @@ async def toggle_employee_activation(
     - active=true: Sets status to Active (1)
     - active=false: Sets status to Inactive (2)
     """
-    # Get current user from request state
-    current_user = request.state.user
     
     # Call service using helper for error handling
     result = await call_service(
@@ -238,7 +228,7 @@ async def toggle_employee_activation(
         db=db,
         employee_id=employee_id,
         active=data.active,
-        current_user_id=current_user["user_id"],
+        current_user_id=current_user.id,
         background_tasks=background_tasks
     )
     
@@ -252,9 +242,9 @@ async def toggle_employee_activation(
 
 @employee_router.post("/bulk-activate")
 async def bulk_toggle_employee_activation(
-    request: Request,
     data: BulkEmployeeActivateRequest,
     background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -273,8 +263,6 @@ async def bulk_toggle_employee_activation(
       "message": "Updated 2 of 3 employees to active"
     }
     """
-    # Get current user from request state
-    current_user = request.state.user
     
     # Call service using helper for error handling
     result = await call_service(
@@ -282,7 +270,7 @@ async def bulk_toggle_employee_activation(
         db=db,
         employee_ids=data.employee_ids,
         active=data.active,
-        current_user_id=current_user["user_id"],
+        current_user_id=current_user.id,
         background_tasks=background_tasks
     )
     
@@ -296,16 +284,14 @@ async def bulk_toggle_employee_activation(
 
 @employee_router.delete("/{employee_id}")
 async def delete_employee(
-    request: Request,
     background_tasks: BackgroundTasks,
     employee_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
     Delete an employee (sets status to deleted)
     """
-    # Get current user from request state
-    current_user = request.state.user
     
     # Call service to update status to deleted (3)
     await call_service(
@@ -313,7 +299,7 @@ async def delete_employee(
         db=db,
         employee_id=employee_id,
         status_id=3,  # 3 = Deleted
-        current_user_id=current_user["user_id"],
+        current_user_id=current_user.id,
         background_tasks=background_tasks
     )
     
@@ -324,7 +310,6 @@ async def delete_employee(
 
 @employee_router.get("")
 async def get_employees(
-    request: Request,
     skip: int = Query(0, ge=0, description="Number of records to skip for pagination"),
     limit: int = Query(100, ge=1, le=500, description="Maximum number of records to return"),
     search: Optional[str] = Query(None, description="Search term for name, email or username"),
@@ -335,6 +320,7 @@ async def get_employees(
     phone: Optional[str] = Query(None, description="Filter by phone number"),
     sort_by: Optional[str] = Query("id", description="Field to sort by (id, first_name, last_name, email, created_at)"),
     sort_order: Optional[str] = Query("asc", description="Sort order (asc, desc)"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -349,8 +335,6 @@ async def get_employees(
     - Filter by exact email or phone
     - Sort by various fields in ascending or descending order
     """
-    # Get current user from request state
-    current_user = request.state.user
     
     # Call service using helper for error handling
     result = await call_service(
@@ -381,19 +365,15 @@ async def get_employees(
 
 @employee_router.get("/check-email/{email}")
 async def check_email_unique(
-    request: Request,
     email: str,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
     Check if email is unique
     Returns {"unique": true/false}
     """
-    # Get current user from request state
-    current_user = request.state.user
     
-    # Call service using helper for error handling
-    # Note: is_email_unique is likely not async, so we don't use call_service
     is_unique = EmployeeService.is_email_unique(db, email)
     
     return success_response(

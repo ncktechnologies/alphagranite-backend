@@ -18,8 +18,6 @@ class Permission(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
     
-    # Many-to-many relationship with roles through role_permissions
-    roles: List["Role"] = Relationship(
-        back_populates="permissions",
-        sa_relationship_kwargs={"lazy": "selectin"}
-    )
+    # Roles relationship removed to avoid implicit many-to-many
+    # configuration in models. Services should load roles/permissions
+    # via explicit queries against the association table when needed.

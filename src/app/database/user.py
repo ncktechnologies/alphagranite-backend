@@ -4,6 +4,7 @@ from typing import Optional, List, TYPE_CHECKING
 from sqlmodel import SQLModel, Field, Relationship
 
 if TYPE_CHECKING:
+    from .user_role import UserRole
     from .department import Department
 
 class User(SQLModel, table=True):
@@ -32,5 +33,11 @@ class User(SQLModel, table=True):
     role_id: Optional[int] = Field(default=None)
     email_notifications_enabled: bool = Field(default=True)
     # Relationship to Department
-    department_rel: Optional["Department"] = Relationship(back_populates="users", sa_relationship_kwargs={"foreign_keys": [department]})
+    # SQLModel will infer the foreign key from the `department` Field above,
+    # so we don't need to pass a raw Field into `foreign_keys` (that causes
+    # SQLAlchemy type errors). Keep the relationship simple and rely on the
+    # declared foreign key.
+    department_rel: Optional["Department"] = Relationship(back_populates="users")
+    # Relationship to user_roles (association table)
+    roles: Optional[List["UserRole"]] = Relationship(back_populates="user")
   

@@ -264,7 +264,7 @@ class DepartmentService:
         db: AsyncSession,
         page: int = 1,
         size: int = 10,
-        status_filter: Optional[int] = None
+        status_filter: Optional[int] = 1
     ) -> Tuple[List[Dict[str, Any]], int]:
         """
         Get a list of departments with user samples and counts

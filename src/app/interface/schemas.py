@@ -16,6 +16,15 @@ class DatabaseHealthResponse(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+    
+    # @validator('password')
+    # def truncate_password(cls, v):
+    #     """Truncate password to 72 bytes for bcrypt compatibility"""
+    #     if isinstance(v, str):
+    #         v_bytes = v.encode('utf-8')
+    #         if len(v_bytes) > 72:
+    #             return v_bytes[:72].decode('utf-8', errors='ignore')
+    #     return v
 
 class TokenSchema(BaseModel):
     access_token: str
@@ -33,6 +42,15 @@ class PasswordChangeRequest(BaseModel):
     current_password: str
     new_password: str
     confirm_password: str
+    
+    @validator('current_password', 'new_password', 'confirm_password')
+    def truncate_password(cls, v):
+        """Truncate password to 72 bytes for bcrypt compatibility"""
+        if isinstance(v, str):
+            v_bytes = v.encode('utf-8')
+            if len(v_bytes) > 72:
+                return v_bytes[:72].decode('utf-8', errors='ignore')
+        return v
     
     @validator('new_password')
     def validate_password_strength(cls, v):
@@ -69,6 +87,15 @@ class PasswordResetConfirm(BaseModel):
     token: str
     new_password: str
     confirm_password: str
+    
+    @validator('new_password', 'confirm_password')
+    def truncate_password(cls, v):
+        """Truncate password to 72 bytes for bcrypt compatibility"""
+        if isinstance(v, str):
+            v_bytes = v.encode('utf-8')
+            if len(v_bytes) > 72:
+                return v_bytes[:72].decode('utf-8', errors='ignore')
+        return v
     
     @validator('new_password')
     def validate_password_strength(cls, v):

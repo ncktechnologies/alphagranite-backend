@@ -1,4 +1,6 @@
 import math
+import math
+from src.app.database.user import User
 from typing import Optional, List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.app.database.department import Department
@@ -29,10 +31,9 @@ router = APIRouter(
     summary="Create a new department"
 )
 async def create_department(
-    request: Request,
     data: DepartmentCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Create a new department with the given name and description
@@ -45,7 +46,7 @@ async def create_department(
         DepartmentService.create_department, 
         db=db, 
         data=data, 
-        user_id=current_user["id"]
+        user_id=current_user.id
     )
     
     # Get department with users for the response
@@ -65,11 +66,10 @@ async def create_department(
     summary="Update a department"
 )
 async def update_department(
-    request: Request,
     data: DepartmentUpdate,
     department_id: int = Path(..., gt=0),
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Update an existing department's details
@@ -83,7 +83,7 @@ async def update_department(
         db=db, 
         department_id=department_id,
         data=data, 
-        user_id=current_user["id"]
+        user_id=current_user.id
     )
     
     # Get department with users for the response
@@ -103,11 +103,10 @@ async def update_department(
     summary="Change department status"
 )
 async def change_department_status(
-    request: Request,
     data: DepartmentStatusChange,
     department_id: int = Path(..., gt=0),
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Change the status of a department
@@ -122,7 +121,7 @@ async def change_department_status(
         db=db, 
         department_id=department_id,
         status_data=data, 
-        user_id=current_user["id"]
+        user_id=current_user.id
     )
     
     # Get department with users for the response
@@ -142,13 +141,13 @@ async def change_department_status(
     summary="Delete a department"
 )
 async def delete_department(
-    request: Request,
     department_id: int = Path(..., gt=0),
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Delete a department (soft delete by changing status)
+    
     
     Note: Cannot delete if department has users assigned.
     """
@@ -156,7 +155,7 @@ async def delete_department(
         DepartmentService.delete_department,
         db=db, 
         department_id=department_id, 
-        user_id=current_user["id"]
+        user_id=current_user.id
     )
     
     return success_response(
@@ -169,10 +168,10 @@ async def delete_department(
     summary="List all departments"
 )
 async def list_departments(
-    request: Request,
     page: int = Query(1, ge=1, description="Page number"),
     size: int = Query(10, ge=1, le=100, description="Items per page"),
     status: Optional[int] = Query(None, description="Filter by status"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -213,8 +212,8 @@ async def list_departments(
     summary="Get department details"
 )
 async def get_department(
-    request: Request,
     department_id: int = Path(..., gt=0),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -236,7 +235,6 @@ async def get_department(
     summary="List users in a department"
 )
 async def list_department_users(
-    request: Request,
     department_id: int = Path(..., gt=0),
     page: int = Query(1, ge=1, description="Page number"),
     size: int = Query(10, ge=1, le=100, description="Items per page"),
@@ -244,6 +242,7 @@ async def list_department_users(
     gender: Optional[str] = Query(None, description="Filter by gender"),
     sort_by: Optional[str] = Query(None, description="Field to sort by"),
     sort_order: Optional[str] = Query(None, description="Sort order (asc or desc)"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """

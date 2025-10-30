@@ -3,23 +3,28 @@ import jwt
 import uuid
 import pytest
 import asyncio
+import pytest_asyncio
 from pathlib import Path
-from httpx import AsyncClient
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime, timedelta
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSessionte_async_engine, AsyncSession
+from httpx import AsyncClient, ASGITransport
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 
 # Ensure project root is on sys.path so tests can import the 'src' package
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# Ensure tests and AuthService use a predictable secret key BEFORE importing app
+import os
+os.environ.setdefault("SECRET_KEY", "testsecretkey")
+
 from src.app.main import app
 from src.app.database.user import User
 from src.app.utils.config import get_db
-from src.app.database.department import Departmentment
+from src.app.database.department import Department
 
 
 # Use in-memory SQLite database for tests
@@ -51,7 +56,7 @@ app.dependency_overrides[get_db] = override_get_db
 test_client = TestClient(app)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def test_db():
     # Create tables
     from src.app.database.user import User
@@ -113,13 +118,14 @@ async def test_db():
         await conn.run_sync(Status.metadata.drop_all)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def client():
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def test_department(test_db):
     """Create a test department"""
     async with TestingSessionLocal() as session:
@@ -142,23 +148,23 @@ async def get_test_token_header(client):
         "password": "password123"
     }
     
-    # If we don't have a working login endpoint, we'll create a token manually
-    secret_key = "testsecretkey"
+    # Create a token using the application's AuthService so signing matches
+    from src.app.service.auth import AuthService
+    auth_service = AuthService()
     token_data = {
         "sub": "testadmin@example.com",
-        "id": 1,
-        "exp": datetime.utcnow() + timedelta(minutes=30),
+        "user_id": 1,
         "is_super_admin": True
     }
-    token = jwt.encode(token_data, secret_key, algorithm="HS256")
-    
+    token = auth_service.create_access_token(token_data)
+
     return {"Authorization": f"Bearer {token}"}
 
 
 # Fix event loop issues
-@pytest.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session")
 def event_loop():
-    """Create an instance of the default event loop for each test case."""
+    """Create an instance of the default event loop for each test session."""
     loop = asyncio.get_event_loop_policy().new_event_loop()
     yield loop
     loop.close()

@@ -331,22 +331,45 @@ class RoleService:
         Raises:
             HTTPException: If role doesn't exist
         """
-        # Query the role with permissions
-        stmt = (
-            select(Role)
-            .options(joinedload(Role.permissions))
-            .where(Role.id == role_id)
-        )
-        result = await db.execute(stmt)
-        role = result.scalar_one_or_none()
-        
+        # Get the role
+        role_query = await db.execute(select(Role).where(Role.id == role_id))
+        role = role_query.scalar_one_or_none()
         if not role:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Role with ID {role_id} not found"
             )
-        
-        return role
+
+        # Load permissions explicitly via the association table
+        perm_stmt = (
+            select(Permission)
+            .join(RolePermission, Permission.id == RolePermission.permission_id)
+            .where(RolePermission.role_id == role_id)
+        )
+        perm_result = await db.execute(perm_stmt)
+        permissions = perm_result.scalars().all()
+
+        # Return a serializable representation combining role and permissions
+        return {
+            "id": role.id,
+            "name": role.name,
+            "description": role.description,
+            "status": role.status,
+            "created_at": role.created_at,
+            "updated_at": role.updated_at,
+            "permissions": [
+                {
+                    "id": p.id,
+                    "name": getattr(p, 'name', None),
+                    "description": getattr(p, 'description', None),
+                    "can_create": getattr(p, 'can_create', False),
+                    "can_read": getattr(p, 'can_read', False),
+                    "can_update": getattr(p, 'can_update', False),
+                    "can_delete": getattr(p, 'can_delete', False),
+                }
+                for p in permissions
+            ]
+        }
     
     @staticmethod
     async def get_roles(

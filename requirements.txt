@@ -13,3 +13,9 @@ pyjwt
 passlib[bcrypt]
 starlette
 python-multipart
+
+# test
+httpx>=0.25.0
+faker>=19.0.0
+pytest>=7.4.0
+pytest-asyncio>=0.21.0

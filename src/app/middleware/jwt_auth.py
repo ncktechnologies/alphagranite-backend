@@ -22,9 +22,19 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
             
         auth_header = request.headers.get("Authorization")
-        if not auth_header or not auth_header.startswith("Bearer "):
+        if not auth_header:
             return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"detail": "Missing or invalid token"})
-        token = auth_header.split(" ", 1)[1]
+
+        # Accept either "Bearer <token>" or a raw token value to be more
+        # forgiving with different client behaviours (e.g. Swagger UI sends
+        # the token as "Bearer <token>" automatically; some clients may
+        # send just the token).
+        if auth_header.startswith("Bearer "):
+            print('token here ==============')
+            token = auth_header.split(" ", 1)[1]
+            print(token)
+        else:
+            token = auth_header
         try:
             payload = self.auth_service.decode_token(token)
             request.state.user = payload

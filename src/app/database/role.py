@@ -19,8 +19,6 @@ class Role(SQLModel, table=True):
     # Relationships
     users: List["UserRole"] = Relationship(back_populates="role")
     
-    # Many-to-many relationship with permissions through role_permissions
-    permissions: List["Permission"] = Relationship(
-        back_populates="roles",
-        sa_relationship_kwargs={"lazy": "selectin"}
-    )
+    # Permissions relationship removed to avoid implicit many-to-many
+    # relationship configuration in SQLModel. Permissions are loaded
+    # explicitly by the service layer via the RolePermission association table.

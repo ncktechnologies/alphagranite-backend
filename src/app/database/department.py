@@ -11,4 +11,4 @@ class Department(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.now)
     status: int = Field(foreign_key="status.value_id")
     # Relationships
-    users: List["User"] = Relationship(back_populates="department")
+    users: List["User"] = Relationship(back_populates="department_rel")

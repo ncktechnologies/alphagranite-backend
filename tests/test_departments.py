@@ -4,7 +4,6 @@ from fastapi import status
 from httpx import AsyncClient
 
 from tests.conftest import get_test_token_header
-from src.app.database.department import Departmentest_token_header
 
 
 @pytest.mark.asyncio
