@@ -63,7 +63,9 @@ def load_default_departments():
         # Get Active status value_id from status table
         result = db.execute(text("SELECT value_id FROM status WHERE slug = 'active'"))
         active_status = result.fetchone()
-        active_status_id = active_status[0] if active_status else 1
+        if not active_status:
+            raise Exception("'active' status not found in status table. Please seed status values first.")
+        active_status_id = active_status[0]
         
         # Insert departments with proper column handling
         for name, description in departments:
@@ -97,10 +99,12 @@ def load_default_departments():
         print(f"\nLoaded {len(departments_loaded)} departments:")
         for dept in departments_loaded:
             print(f"  - {dept[1]}: {dept[2]}")
+        return departments_loaded
         
     except Exception as e:
         db.rollback()
         print(f"❌ Error loading departments: {str(e)}")
+        return None
     finally:
         db.close()
 

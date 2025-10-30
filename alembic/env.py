@@ -35,13 +35,16 @@ from src.app.database.role_permission import RolePermission
 # access to the values within the .ini file in use.
 config = context.config
 
-# Get DATABASE_URL from environment variable
+
+# Get DATABASE_URL from environment variable and force psycopg2 for migrations
 database_url = os.environ.get("DATABASE_URL")
 if database_url is None:
     raise Exception("DATABASE_URL environment variable is not set")
-
-# Override the sqlalchemy.url in the alembic.ini file
-config.set_main_option("sqlalchemy.url", database_url)
+if database_url.startswith("postgresql+asyncpg://"):
+    sync_url = database_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+    config.set_main_option("sqlalchemy.url", sync_url)
+else:
+    config.set_main_option("sqlalchemy.url", database_url)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.

@@ -99,10 +99,11 @@ async def _create_superuser_async():
             print("Error while querying existing user:", e)
             raise
 
-        # Hash password with bcrypt
+        # Hash password using passlib CryptContext to match app logic
         try:
-            password_bytes = PASSWORD.encode("utf-8")[:72]
-            hashed_password = bcrypt.hashpw(password_bytes, bcrypt.gensalt()).decode("utf-8")
+            from passlib.context import CryptContext
+            pwd_context = CryptContext(schemes=["pbkdf2_sha256", "bcrypt_sha256"], deprecated="auto")
+            hashed_password = pwd_context.hash(PASSWORD)
         except Exception as e:
             print("Error hashing password:", e)
             raise
