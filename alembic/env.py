@@ -29,6 +29,11 @@ from src.app.database.audit_trail import AuditTrail
 # Import other models so SQLModel.metadata includes them for autogenerate
 from src.app.database.action_menu import ActionMenu
 from src.app.database.role_permission import RolePermission
+# Import business models from generated schemas to avoid duplicates
+from src.app.interface.generated_schemas import (
+    Job, Templating, SlabSmith, ShopPlanning, 
+    PlanningSection, WorkStation
+)
 # Import any additional models here as needed
 
 # this is the Alembic Config object, which provides
