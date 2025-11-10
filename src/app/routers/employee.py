@@ -1,17 +1,18 @@
-from typing import Optional, Union
+import logging
+from typing import Optional
 from sqlalchemy.orm import Session
-from fastapi import UploadFile, File, Form
-from fastapi import APIRouter, Depends, Request, BackgroundTasks, Path, Query, HTTPException, status
-
-from src.app.utils.config import get_db
 from src.app.database.user import User
-from src.app.routers.auth import get_current_user
+from src.app.utils.config import get_db
+from fastapi import File, Form, UploadFile
 from src.app.service.file import FileService
+from src.app.routers.auth import get_current_user
 from src.app.service.employee import EmployeeService
+from src.app.utils.permissions import PermissionChecker
 # Employee router handles operations related to employees
 # Note: Employees are stored in the same 'users' table as regular users,
 # they are differentiated by roles and permissions
 from src.app.utils.helpers import success_response, call_service
+from fastapi import APIRouter, Depends, Request, BackgroundTasks, Path, Query, HTTPException, status, Body 
 from src.app.utils.enrichment import enrich_employee_with_profile_image, enrich_employees_with_profile_images
 from src.app.interface.employee_schemas import (
     EmployeeCreate, EmployeeListResponse, EmployeeResponse, EmployeeStatusUpdate, 
@@ -33,10 +34,12 @@ async def create_employee(
     phone: str = Form(None),
     gender: str = Form(None),
     home_address: str = Form(None),
-    profile_image: Optional[UploadFile] = File(default=None),
+    role_id: Optional[int] = Form(None),
+    profile_image: UploadFile = File(None),
     background_tasks: BackgroundTasks = BackgroundTasks(),
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    _: User = Depends(PermissionChecker("employees", "create"))
 ):
     """
     Create a new employee with optional profile image
@@ -47,37 +50,64 @@ async def create_employee(
     - Sends email with login credentials
     """
     
-    # Create employee data object from form data
-    data = EmployeeCreate(
-        first_name=first_name,
-        last_name=last_name,
-        email=email,
-        phone=phone,
-        department=department,
-        gender=gender,
-        home_address=home_address
-    )
+    # Validate required fields
+    if not email or email == "string" or "@" not in email:
+        raise HTTPException(status_code=400, detail="Valid email address is required")
+    if not first_name or first_name == "string":
+        raise HTTPException(status_code=400, detail="Valid first name is required")
+    if not last_name or last_name == "string":
+        raise HTTPException(status_code=400, detail="Valid last name is required")
+    
+    # Debug logging for profile_image
+    print(f"[CREATE ROUTER] profile_image received: {profile_image}")
+    print(f"[CREATE ROUTER] profile_image type: {type(profile_image)}")
+    print(f"[CREATE ROUTER] profile_image is UploadFile: {isinstance(profile_image, UploadFile)}")
+    print(f"[CREATE ROUTER] profile_image has 'file' attribute: {hasattr(profile_image, 'file')}")
+    if profile_image:
+        print(f"[CREATE ROUTER] profile_image attributes: {dir(profile_image)}")
     
     # Handle profile image upload if provided
     profile_image_id = None
-    if profile_image and hasattr(profile_image, 'file'):
-        # Upload the profile image
+    if profile_image and  hasattr(profile_image, 'file'):
+        print(f"[CREATE ROUTER] Uploading profile image: {profile_image.filename}")
         file_data = await call_service(
             FileService.upload_file,
             db=db,
             file=profile_image,
             user_id=current_user.id
         )
-        data.profile_image_id = file_data["id"]
+        profile_image_id = file_data["id"] if file_data else None
+        print(f"[CREATE ROUTER] Profile image uploaded with ID: {profile_image_id}")
     
-    # Call service using helper for error handling
+    # Create employee data object from form data (including profile_image_id and role_id)
+    data = EmployeeCreate(
+        first_name=first_name,
+        last_name=last_name,
+        email=email,
+        phone=phone if phone and phone != "string" else None,
+        department=department,
+        gender=gender if gender and gender != "string" else None,
+        home_address=home_address if home_address and home_address != "string" else None,
+        profile_image_id=profile_image_id,
+        role_id=role_id
+    )
+    
+    print(f"[CREATE ROUTER] EmployeeCreate data object created with profile_image_id: {data.profile_image_id}")
+    
+    # Create the employee
     result = await call_service(
         EmployeeService.create_employee,
         db=db,
         data=data,
         current_user_id=current_user.id,
+        profile_image_id=profile_image_id,
         background_tasks=background_tasks
     )
+    # Diagnostic log: show what the service returned before enrichment
+    logger = logging.getLogger("employee_router")
+    logger.info(f"[ROUTER] create_employee service result: type={type(result)} repr={result!r}")
+    logger.info(f"[ROUTER] profile_image_id in data: {data.profile_image_id}, passed to service: {data.profile_image_id}")
+
     
     # Enrich employee with profile image URL
     enriched_employee = await enrich_employee_with_profile_image(db, result)
@@ -90,7 +120,7 @@ async def create_employee(
 @employee_router.get("/{employee_id}")
 async def get_employee(
     employee_id: int = Path(..., ge=1),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(PermissionChecker("employees", "read")),
     db: Session = Depends(get_db)
 ):
     """
@@ -119,34 +149,27 @@ async def update_employee(
     last_name: str = Form(None),
     email: str = Form(None),
     phone_number: str = Form(None),
-    department_id: int = Form(None),
+    department_id: Optional[str] = Form(None),
     gender: str = Form(None),
     home_address: str = Form(None),
-    role_id: Optional[int] = Form(None),
-    profile_image: Optional[UploadFile] = File(default=None),
-    current_user: User = Depends(get_current_user),
+    role_id: Optional[str] = Form(None),
+    profile_image: UploadFile = File(None),
+    current_user: User = Depends(PermissionChecker("employees", "update")),
     db: Session = Depends(get_db)
 ):
     """
     Update employee details with optional profile image upload
     """
     
-    # Create employee update object from form data
-    data = EmployeeUpdate(
-        first_name=first_name,
-        last_name=last_name,
-        email=email,
-        phone_number=phone_number,
-        department_id=department_id,
-        gender=gender,
-        home_address=home_address,
-        role_id=role_id
-    )
+    # Convert empty strings to None
+    dep_id = int(department_id) if department_id not in (None, "") else None
+    r_id = int(role_id) if role_id not in (None, "") else None
+   
     
-    # Handle profile image upload if provided
+    # Handle profile image upload if provided (BEFORE creating data object)
     profile_image_id = None
-    if profile_image and hasattr(profile_image, 'file'):
-        # Upload the profile image
+    if profile_image and  hasattr(profile_image, 'file'):
+        print(f"[UPDATE ROUTER] Uploading profile image: {profile_image.filename}")
         file_data = await call_service(
             FileService.upload_file,
             db=db,
@@ -154,6 +177,19 @@ async def update_employee(
             user_id=current_user.id
         )
         profile_image_id = file_data["id"]
+        print(f"[UPDATE ROUTER] Profile image uploaded with ID: {profile_image_id}")
+    
+    data = EmployeeUpdate(
+        first_name=first_name if first_name else None,
+        last_name=last_name if last_name else None,
+        email=email if email else None,
+        phone_number=phone_number if phone_number else None,
+        department_id=dep_id,
+        gender=gender if gender else None,
+        home_address=home_address if home_address else None,
+        profile_image_id=profile_image_id,
+        role_id=r_id
+    )
     
     # Call service using helper for error handling
     result = await call_service(
@@ -178,7 +214,7 @@ async def update_employee_status(
     data: EmployeeStatusUpdate,
     background_tasks: BackgroundTasks,
     employee_id: int = Path(..., ge=1),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(PermissionChecker("employees", "update")),
     db: Session = Depends(get_db)
 ):
     """
@@ -213,7 +249,7 @@ async def toggle_employee_activation(
     data: EmployeeActivateToggle,
     background_tasks: BackgroundTasks,
     employee_id: int = Path(..., ge=1),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(PermissionChecker("employees", "update")),
     db: Session = Depends(get_db)
 ):
     """
@@ -244,7 +280,7 @@ async def toggle_employee_activation(
 async def bulk_toggle_employee_activation(
     data: BulkEmployeeActivateRequest,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(PermissionChecker("employees", "update")),
     db: Session = Depends(get_db)
 ):
     """
@@ -286,7 +322,7 @@ async def bulk_toggle_employee_activation(
 async def delete_employee(
     background_tasks: BackgroundTasks,
     employee_id: int = Path(..., ge=1),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(PermissionChecker("employees", "delete")),
     db: Session = Depends(get_db)
 ):
     """
@@ -320,7 +356,7 @@ async def get_employees(
     phone: Optional[str] = Query(None, description="Filter by phone number"),
     sort_by: Optional[str] = Query("id", description="Field to sort by (id, first_name, last_name, email, created_at)"),
     sort_order: Optional[str] = Query("asc", description="Sort order (asc, desc)"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(PermissionChecker("employees", "read")),
     db: Session = Depends(get_db)
 ):
     """
@@ -366,7 +402,7 @@ async def get_employees(
 @employee_router.get("/check-email/{email}")
 async def check_email_unique(
     email: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(PermissionChecker("employees", "read")),
     db: Session = Depends(get_db)
 ):
     """
@@ -374,7 +410,7 @@ async def check_email_unique(
     Returns {"unique": true/false}
     """
     
-    is_unique = EmployeeService.is_email_unique(db, email)
+    is_unique = await EmployeeService.is_email_unique(db, email)
     
     return success_response(
         data={"unique": is_unique},

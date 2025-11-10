@@ -1,5 +1,6 @@
+from sqlalchemy import select
 from typing import Dict, Any, Optional, List
-from sqlalchemy.ext.asyncio import AsyncSession 
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.service.file import FileService
 from src.app.utils.config import get_settings
@@ -8,78 +9,71 @@ async def enrich_employee_with_profile_image(
     db: AsyncSession, 
     employee: Dict[str, Any]
 ) -> Dict[str, Any]:
-    """
-    Enrich employee data with profile image URL
-    
-    Args:
-        db: Database session
-        employee: Employee data dictionary
-        
-    Returns:
-        Employee data with profile_image_url field
-    """
+    import logging
+    logger = logging.getLogger("employee_enrichment")
     settings = get_settings()
     
-    # Handle both single employee and list of employees
     if not employee:
+        logger.warning("[ENRICH] No employee data provided.")
         return employee
     
-    # Create a copy to avoid modifying the original
-    if isinstance(employee, dict):
-        # Enrich a single employee
-        result = {**employee}
-        
-        # Add profile_image_url field if profile_image_id exists
-        if result.get("profile_image_id"):
-            file_data = await FileService.get_file(db, result["profile_image_id"])
-            if file_data:
-                result["profile_image_url"] = file_data.get("url")
-            else:
-                result["profile_image_url"] = None
-        else:
-            # Set default profile image
-            result["profile_image_url"] = f"{settings.API_BASE_URL}/static/defaults/profile.png"
-            
-        return result
+    logger.info(f"[ENRICH] Input employee type: {type(employee)}, value: {employee!r}")
     
+    result = None
+    if isinstance(employee, dict):
+        result = {**employee}
+        logger.info(f"[ENRICH] Enriching employee dict: keys={result.keys()}, profile_image_id={result.get('profile_image_id')}")
     elif hasattr(employee, "__dict__"):
-        # Convert SQLAlchemy model to dict and enrich
         result = {**employee.__dict__}
-        
-        # Remove SQLAlchemy internal attributes
+        logger.info(f"[ENRICH] Enriching employee object: profile_image_id={result.get('profile_image_id')}")
         if "_sa_instance_state" in result:
             del result["_sa_instance_state"]
-        
-        # Add profile_image_url field if profile_image_id exists
-        if result.get("profile_image_id"):
-            file_data = await FileService.get_file(db, result["profile_image_id"])
-            if file_data:
-                result["profile_image_url"] = file_data.get("url")
-            else:
-                result["profile_image_url"] = None
+    else:
+        logger.warning("[ENRICH] Employee is neither dict nor object with __dict__.")
+        return employee
+
+    # Remove sensitive fields
+    sensitive_fields = ["password", "failed_login_attempts", "is_locked", "locked_at", "is_first_login"]
+    for field in sensitive_fields:
+        if field in result:
+            del result[field]
+
+    # Add status name
+    if result.get("status"):
+        from src.app.database.status import Status
+        status_result = await db.execute(select(Status).where(Status.value_id == result["status"]))
+        status_obj = status_result.scalars().first()
+        result["status_name"] = status_obj.name if status_obj else None
+
+    # Add department name
+    if result.get("department"):
+        from src.app.database.department import Department
+        dept_result = await db.execute(select(Department).where(Department.id == result["department"]))
+        dept_obj = dept_result.scalars().first()
+        result["department_name"] = dept_obj.name if dept_obj else None
+
+    # Add profile_image_url
+    if result.get("profile_image_id"):
+        logger.info(f"[ENRICH] Fetching file for profile_image_id: {result['profile_image_id']}")
+        file_data = await FileService.get_file(db, result["profile_image_id"])
+        logger.info(f"[ENRICH] File data: {file_data}")
+        if file_data and file_data.get("url"):
+            result["profile_image_url"] = file_data.get("url")
         else:
-            # Set default profile image
+            # If file not found, use default
+            logger.warning(f"[ENRICH] File not found for profile_image_id: {result['profile_image_id']}, using default")
             result["profile_image_url"] = f"{settings.API_BASE_URL}/static/defaults/profile.png"
-            
-        return result
-    
-    # If not a dict or model, return as is
-    return employee
+    else:
+        logger.info("[ENRICH] No profile_image_id, using default profile image URL.")
+        result["profile_image_url"] = f"{settings.API_BASE_URL}/static/defaults/profile.png"
+
+    logger.info(f"[ENRICH] Final enriched employee: {result}")
+    return result
 
 async def enrich_employees_with_profile_images(
     db: AsyncSession,
     employees: List
 ) -> List[Dict[str, Any]]:
-    """
-    Enrich a list of employees with profile image URLs
-    
-    Args:
-        db: Database session
-        employees: List of employee objects or dictionaries
-        
-    Returns:
-        List of employees with profile_image_url fields
-    """
     if not employees:
         return []
         

@@ -18,11 +18,11 @@ from src.app.utils.config import get_db
 from src.app.routers.auth import get_current_user
 from src.app.service.department import DepartmentService
 from src.app.utils.helpers import success_response, call_service
+from src.app.utils.permissions import PermissionChecker
 
 router = APIRouter(
     prefix="/departments",
     tags=["Departments"],
-    dependencies=[Depends(get_current_user)],
 )
 
 @router.post(
@@ -32,7 +32,7 @@ router = APIRouter(
 )
 async def create_department(
     data: DepartmentCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(PermissionChecker("departments", "create")),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -68,7 +68,7 @@ async def create_department(
 async def update_department(
     data: DepartmentUpdate,
     department_id: int = Path(..., gt=0),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(PermissionChecker("departments", "update")),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -105,7 +105,7 @@ async def update_department(
 async def change_department_status(
     data: DepartmentStatusChange,
     department_id: int = Path(..., gt=0),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(PermissionChecker("departments", "update")),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -142,7 +142,7 @@ async def change_department_status(
 )
 async def delete_department(
     department_id: int = Path(..., gt=0),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(PermissionChecker("departments", "delete")),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -171,7 +171,7 @@ async def list_departments(
     page: int = Query(1, ge=1, description="Page number"),
     size: int = Query(10, ge=1, le=100, description="Items per page"),
     status: Optional[int] = Query(None, description="Filter by status"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(PermissionChecker("departments", "read")),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -183,12 +183,15 @@ async def list_departments(
     
     Results can be filtered by department status and paginated.
     """
+    # If caller didn't provide a status filter, default to active (1)
+    status_to_use = status if status is not None else 1
+
     departments, total = await call_service(
         DepartmentService.get_departments_list,
-        db=db, 
-        page=page, 
-        size=size, 
-        status_filter=status
+        db=db,
+        page=page,
+        size=size,
+        status_filter=status_to_use,
     )
     
     # Calculate pagination values
@@ -213,7 +216,7 @@ async def list_departments(
 )
 async def get_department(
     department_id: int = Path(..., gt=0),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(PermissionChecker("departments", "read")),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -242,7 +245,7 @@ async def list_department_users(
     gender: Optional[str] = Query(None, description="Filter by gender"),
     sort_by: Optional[str] = Query(None, description="Field to sort by"),
     sort_order: Optional[str] = Query(None, description="Sort order (asc or desc)"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(PermissionChecker("departments", "read")),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -284,3 +287,16 @@ async def list_department_users(
         data=response_data,
         message="Department users retrieved successfully"
     )
+
+
+@router.get(
+    "/statuses",
+    summary="List all status values"
+)
+async def list_statuses(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Return all status values (value_id, name, slug)"""
+    statuses = await call_service(DepartmentService.get_statuses, db=db)
+    return success_response(data=statuses, message="Statuses retrieved successfully")

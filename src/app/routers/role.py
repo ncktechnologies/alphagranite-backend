@@ -1,10 +1,13 @@
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import APIRouter, Depends, Request, Path, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, Path, Query, BackgroundTasks
 
+from src.app.database.user import User
 from src.app.utils.config import get_db
 from src.app.service.role import RoleService
-from src.app.utils.helpers import call_service, success_response 
+from src.app.routers.auth import get_current_user
+from src.app.utils.helpers import call_service, success_response
+from src.app.utils.permissions import PermissionChecker 
 from src.app.interface.role_schemas import (
     RoleCreate,
     RoleUpdate,
@@ -26,8 +29,8 @@ role_router = APIRouter(
 
 @role_router.post("")
 async def create_role(
-    request: Request,
     data: RoleCreate,
+    current_user: User = Depends(PermissionChecker("roles", "create")),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -42,9 +45,6 @@ async def create_role(
     - permission_ids: List of permission IDs to associate with the role
     - status: Role status (1=Active, 2=Inactive)
     """
-    # Get current user from request state
-    current_user = request.state.user
-    
     # Call service using helper for error handling
     result = await call_service(
         RoleService.create_role,
@@ -53,7 +53,7 @@ async def create_role(
         description=data.description,
         permission_ids=data.permission_ids,
         status=data.status,
-        current_user_id=current_user["user_id"]
+        current_user_id=current_user.id
     )
     
     return success_response(
@@ -63,9 +63,9 @@ async def create_role(
 
 @role_router.get("/{role_id}")
 async def get_role(
-    request: Request,
     role_id: int = Path(..., ge=1),
     with_permissions: bool = Query(True, description="Include permissions in response"),
+    current_user: User = Depends(PermissionChecker("roles", "read")),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -74,8 +74,6 @@ async def get_role(
     This endpoint retrieves a role by its ID.
     If with_permissions is True (default), it will include the role's permissions in the response.
     """
-    # Get current user from request state
-    current_user = request.state.user
     
     # Call service using helper for error handling
     if with_permissions:
@@ -98,9 +96,9 @@ async def get_role(
 
 @role_router.put("/{role_id}")
 async def update_role(
-    request: Request,
     data: RoleUpdate,
     role_id: int = Path(..., ge=1),
+    current_user: User = Depends(PermissionChecker("roles", "update")),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -113,8 +111,7 @@ async def update_role(
     - permission_ids: New list of permission IDs
     - status: New role status (1=Active, 2=Inactive)
     """
-    # Get current user from request state
-    current_user = request.state.user
+    # current_user is provided by Depends(get_current_user)
     
     # Call service using helper for error handling
     result = await call_service(
@@ -125,7 +122,7 @@ async def update_role(
         description=data.description,
         permission_ids=data.permission_ids,
         status=data.status,
-        current_user_id=current_user["user_id"]
+        current_user_id=current_user.id
     )
     
     return success_response(
@@ -135,9 +132,9 @@ async def update_role(
 
 @role_router.patch("/{role_id}/status")
 async def update_role_status(
-    request: Request,
     data: RoleStatusUpdate,
     role_id: int = Path(..., ge=1),
+    current_user: User = Depends(PermissionChecker("roles", "update")),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -148,8 +145,7 @@ async def update_role_status(
     - 1: Active
     - 2: Inactive
     """
-    # Get current user from request state
-    current_user = request.state.user
+    # current_user is provided by Depends(get_current_user)
     
     # Call service using helper for error handling
     result = await call_service(
@@ -157,7 +153,7 @@ async def update_role_status(
         db=db,
         role_id=role_id,
         status_id=data.status,
-        current_user_id=current_user["user_id"]
+        current_user_id=current_user.id
     )
     
     # Get status name for message
@@ -171,7 +167,7 @@ async def update_role_status(
 
 @role_router.get("")
 async def get_roles(
-    request: Request,
+    current_user: User = Depends(PermissionChecker("roles", "read")),
     skip: int = Query(0, ge=0, description="Number of records to skip for pagination"),
     limit: int = Query(100, ge=1, le=500, description="Maximum number of records to return"),
     search: Optional[str] = Query(None, description="Search term for role name or description"),
@@ -193,8 +189,7 @@ async def get_roles(
     - Sort by various fields in ascending or descending order
     - Include member statistics and top members
     """
-    # Get current user from request state
-    current_user = request.state.user
+    # current_user is provided by Depends(get_current_user)
     
     # Call service using helper for error handling
     if with_stats:
@@ -227,8 +222,8 @@ async def get_roles(
 
 @role_router.get("/check-name/{name}")
 async def check_role_name_unique(
-    request: Request,
     name: str,
+    current_user: User = Depends(PermissionChecker("roles", "read")),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -236,8 +231,7 @@ async def check_role_name_unique(
     
     Returns {"unique": true/false}
     """
-    # Get current user from request state
-    current_user = request.state.user
+    # current_user is provided by Depends(get_current_user)
     
     # Call service to check if name is unique
     is_unique = await call_service(
@@ -253,7 +247,7 @@ async def check_role_name_unique(
 
 @role_router.delete("/{role_id}")
 async def delete_role(
-    request: Request,
+    current_user: User = Depends(PermissionChecker("roles", "delete")),
     role_id: int = Path(..., ge=1),
     db: AsyncSession = Depends(get_db)
 ):
@@ -263,15 +257,14 @@ async def delete_role(
     This endpoint deletes a role by setting its status to deleted (3).
     The role will no longer be visible in normal role listings.
     """
-    # Get current user from request state
-    current_user = request.state.user
+    # current_user is provided by Depends(get_current_user)
     
     # Call service using helper for error handling
     result = await call_service(
         RoleService.delete_role,
         db=db,
         role_id=role_id,
-        current_user_id=current_user["user_id"]
+        current_user_id=current_user.id
     )
     
     return success_response(
@@ -281,7 +274,7 @@ async def delete_role(
 
 @role_router.patch("/users/{user_id}/deactivate")
 async def deactivate_user(
-    request: Request,
+    current_user: User = Depends(PermissionChecker("roles", "update")),
     user_id: int = Path(..., ge=1),
     db: AsyncSession = Depends(get_db)
 ):
@@ -291,15 +284,14 @@ async def deactivate_user(
     This endpoint deactivates a user by setting their status to inactive (2).
     The user will no longer be able to log in.
     """
-    # Get current user from request state
-    current_user = request.state.user
+    # current_user is provided by Depends(get_current_user)
     
     # Call service using helper for error handling
     result = await call_service(
         RoleService.deactivate_user,
         db=db,
         user_id=user_id,
-        current_user_id=current_user["user_id"]
+        current_user_id=current_user.id
     )
     
     return success_response(
@@ -309,7 +301,7 @@ async def deactivate_user(
 
 @role_router.get("/{role_id}/members")
 async def get_role_with_members(
-    request: Request,
+    current_user: User = Depends(PermissionChecker("roles", "read")),
     role_id: int = Path(..., ge=1),
     skip: int = Query(0, ge=0, description="Number of records to skip for pagination"),
     limit: int = Query(100, ge=1, le=500, description="Maximum number of records to return"),
@@ -332,8 +324,7 @@ async def get_role_with_members(
     - Filter by status
     - Sort by various fields in ascending or descending order
     """
-    # Get current user from request state
-    current_user = request.state.user
+    # current_user is provided by Depends(get_current_user)
     
     # Call service using helper for error handling
     result = await call_service(
@@ -352,3 +343,44 @@ async def get_role_with_members(
         data=result,
         message="Role with members retrieved successfully"
     )
+
+
+@role_router.get("/{role_id}/debug-members")
+async def debug_role_members(
+    role_id: int = Path(..., ge=1),
+    current_user: User = Depends(PermissionChecker("roles", "read")),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Debug endpoint: return raw UserRole rows and joined user info for a role.
+    Use this to confirm which users are assigned to a role in the database.
+    """
+    from sqlalchemy import select, func
+    from src.app.database.user import User
+    from src.app.database.user_role import UserRole
+
+    # Get raw user_role rows for this role
+    query = select(UserRole, User).join(User, User.id == UserRole.user_id).where(UserRole.role_id == role_id)
+    result = await db.execute(query)
+    rows = result.all()
+
+    items = []
+    for ur, u in rows:
+        items.append({
+            "user_role_id": ur.id,
+            "user_id": ur.user_id,
+            "role_id": ur.role_id,
+            "assigned_at": getattr(ur, "created_at", None),
+            "user": {
+                "id": u.id,
+                "email": u.email,
+                "first_name": u.first_name,
+                "last_name": u.last_name,
+                "status": u.status,
+            }
+        })
+
+    count_res = await db.execute(select(func.count()).select_from(UserRole).where(UserRole.role_id == role_id))
+    total = count_res.scalar_one()
+
+    return success_response(data={"total": total, "rows": items}, message="Debug user_role rows for role returned")

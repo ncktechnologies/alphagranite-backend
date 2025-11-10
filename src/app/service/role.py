@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from sqlalchemy.orm import joinedload
 from fastapi import HTTPException, status
@@ -440,11 +441,24 @@ class RoleService:
         result = await db.execute(query)
         roles = result.scalars().all()
         
+        # Convert roles to dict for JSON serialization
+        roles_data = [
+            {
+                "id": role.id,
+                "name": role.name,
+                "description": role.description,
+                "status": role.status,
+                "created_at": role.created_at,
+                "updated_at": role.updated_at
+            }
+            for role in roles
+        ]
+        
         return {
             "total": total_count,
             "page": skip // limit + 1 if limit > 0 else 1,
             "per_page": limit,
-            "data": roles
+            "data": roles_data
         }
     
     @staticmethod
@@ -560,7 +574,7 @@ class RoleService:
                     file_result = await db.execute(file_query)
                     file = file_result.scalar_one_or_none()
                     if file:
-                        profile_image_url = f"{API_BASE_URL}/static/uploads/{file.path}"
+                        profile_image_url = f"{API_BASE_URL}/static/uploads/{file.file_path}"
                 
                 members_with_images.append({
                     "id": member.id,
@@ -626,6 +640,8 @@ class RoleService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Role with ID {role_id} not found"
             )
+        logger = logging.getLogger("role_service")
+        logger.info(f"[ROLE] Retrieved role id={role_id}: {role}")
         
         # Get member statistics
         # 1. Total members
@@ -674,9 +690,9 @@ class RoleService:
                 User.email,
                 User.status,
                 User.created_at.label('invited_at'),
-                User.last_login,
+                User.updated_at.label('last_login'),
                 User.profile_image_id,
-                File.path.label('profile_image_path')
+                File.file_path.label('profile_image_path')
             )
             .join(UserRole, User.id == UserRole.user_id)
             .outerjoin(File, User.profile_image_id == File.id)
@@ -701,6 +717,7 @@ class RoleService:
         count_query = select(func.count()).select_from(member_query.subquery())
         total_count_result = await db.execute(count_query)
         total_count = total_count_result.scalar_one()
+        logger.info(f"[ROLE] member count SQL: {str(member_query)}; total_count={total_count}")
         
         # Apply sorting
         valid_sort_fields = {
@@ -710,7 +727,7 @@ class RoleService:
             "email": User.email,
             "status": User.status,
             "invited_at": User.created_at,
-            "last_login": User.last_login
+            "last_login": User.updated_at
         }
         
         # Default to first_name if invalid sort field
@@ -728,6 +745,7 @@ class RoleService:
         # Execute query
         members_result = await db.execute(member_query)
         members_raw = members_result.fetchall()
+        logger.info(f"[ROLE] fetched {len(members_raw)} raw member rows")
         
         # Format member data
         members = []

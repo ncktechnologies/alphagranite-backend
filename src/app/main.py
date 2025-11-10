@@ -4,10 +4,17 @@
 
 import os
 from fastapi import FastAPI
+# New routers for business logic
+from src.app.routers import job_extras
+from src.app.routers import workstation
+from src.app.routers import shop_planning
 from fastapi.staticfiles import StaticFiles
 from src.app.routers.auth import auth_router
 from src.app.routers.role import role_router
+from src.app.routers import planning_section
 from fastapi.openapi.utils import get_openapi
+from src.app.routers import operator_workflow
+from src.app.routers import shop_planning_section
 from fastapi.middleware.cors import CORSMiddleware
 from src.app.routers.employee import employee_router
 from src.app.routers.file import router as file_router
@@ -71,12 +78,23 @@ app.add_middleware(
     allow_headers=cors_headers,
 )
 
+
+# Existing routers
 app.include_router(auth_router)
 app.include_router(health_router, prefix="/health", tags=["health"])
 app.include_router(employee_router)
 app.include_router(department_router)
 app.include_router(file_router)
 app.include_router(role_router)
+
+
+
+app.include_router(job_extras.router, prefix="/api/v1", tags=["Job Extras"])
+app.include_router(planning_section.router, prefix="/api/v1", tags=["Planning Sections"])
+app.include_router(workstation.router, prefix="/api/v1", tags=["Workstations"])
+app.include_router(shop_planning.router, prefix="/api/v1", tags=["Shop Planning"])
+app.include_router(shop_planning_section.router, prefix="/api/v1", tags=["Shop Planning Sections"])
+app.include_router(operator_workflow.router, prefix="/api/v1", tags=["Operator Workflows"])
 
 # Mount static files directory
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

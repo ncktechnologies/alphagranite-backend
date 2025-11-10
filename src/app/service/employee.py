@@ -1,117 +1,90 @@
 import re
+import random
+import string
 import bcrypt
+import logging
 from uuid import uuid4
 from datetime import datetime
-from sqlalchemy.orm import Session
-from fastapi import HTTPException, status
+from typing import List, Optional
+
+from sqlalchemy import select, func, or_
 from sqlalchemy.exc import IntegrityError
-from src.app.database.user import User  # User and Employee are in the same tablemployee are in the same tablefrom src.app.database.user import User  # User and Employee are in the same tablemployee are in the same table
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from fastapi import HTTPException, status
+
+from src.app.database.user import User
+from src.app.database.status import Status
+from src.app.database.user_role import UserRole
+from src.app.database.department import Department
 from src.app.utils.constants import (
     MSG_EMAIL_EXISTS,
     MSG_EMPLOYEE_EXISTS,
     MSG_EMPLOYEE_NOT_FOUND,
 )
+from src.app.service.background import save_audit_trail, send_notification
 
-# This service handles employee operations using the shared User table
-# Both users and employees are stored in the same database table
+logger = logging.getLogger("employee_service")
 
 
 class EmployeeService:
-    """
-    Service for managing employees in the system
-    
-    All operations are performed on the User table since employees and users
-    share the same underlying data structure. The difference is primarily in how
-    they are created, managed, and what roles/permissions they have in the system.
-    """
     
     @staticmethod
-    def generate_username(first_name: str, last_name: str, db: Session) -> str:
-        """
-        Generate a unique username based on first and last name
-        Format: first letter of first name + last name + number if necessary
-        Example: John Doe -> jdoe, Jane Doe -> jdoe1
-        """
+    async def generate_username(first_name: str, last_name: str, db: AsyncSession) -> str:
         base_username = f"{first_name[0].lower()}{last_name.lower()}"
-        # Replace spaces and special characters
         username = re.sub(r'[^a-z0-9]', '', base_username)
         
-        # Check if username exists
         counter = 0
         unique_username = username
-        while db.query(User).filter(User.username == unique_username).first():
+        result = await db.execute(select(User).where(User.username == unique_username))
+        while result.scalars().first():
             counter += 1
             unique_username = f"{username}{counter}"
+            result = await db.execute(select(User).where(User.username == unique_username))
         
         return unique_username
     
     @staticmethod
     def generate_random_password() -> str:
-        """
-        Generate a random secure password with:
-        - At least one uppercase letter
-        - At least one lowercase letter
-        - At least one digit
-        - At least one special character
-        - Minimum length of 8
-        """
-        import random
-        import string     
-        
-        # Define character sets
         uppercase = string.ascii_uppercase
         lowercase = string.ascii_lowercase
         digits = string.digits
         special = "!@#$%^&*"
-        
-        # Ensure at least one of each type
+
         password = [
             random.choice(uppercase),
             random.choice(lowercase),
             random.choice(digits),
-            random.choice(special)
+            random.choice(special),
         ]
-        
-        # Fill up to desired length (12 characters)
+
         all_chars = uppercase + lowercase + digits + special
         password.extend(random.choice(all_chars) for _ in range(8))
-        
-        # Shuffle for randomness
         random.shuffle(password)
-        
-        return ''.join(password)
+
+        return "".join(password)
     
     @staticmethod
-    async def create_employee(db: Session, data, current_user_id: int, background_tasks):
-        """
-        Create a new employee with generated username and password
-        
-        Note: Employees are stored in the same 'users' table as regular users,
-        they are differentiated by roles and permissions.
-        
-        Steps:
-        1. Check if email is unique
-        2. Generate username
-        3. Generate random password
-        4. Create user record in the users table
-        5. Send welcome email with credentials
-        6. Create audit log
-        """
-        from src.app.service.background import save_audit_trail, send_notification
-
-        # Check if email exists
-        if db.query(User).filter(User.email == data.email).first():
+    async def create_employee(db: AsyncSession, data, current_user_id: int, background_tasks, profile_image_id: Optional[int] = None):
+        result = await db.execute(select(User).where(User.email == data.email))
+        if result.scalars().first():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=MSG_EMAIL_EXISTS)
+
+        # Validate department exists
+        dept_result = await db.execute(select(Department).where(Department.id == data.department))
+        if not dept_result.scalars().first():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Department does not exist")
+
+        # Use profile_image_id from data object if present, otherwise use parameter
+        final_profile_image_id = data.profile_image_id if hasattr(data, 'profile_image_id') and data.profile_image_id is not None else profile_image_id
         
-        # Generate username and password
-        username = EmployeeService.generate_username(data.first_name, data.last_name, db)
+        username = await EmployeeService.generate_username(data.first_name, data.last_name, db)
+        logger.info(f"[CREATE] Creating employee: email={data.email} username={username} profile_image_id={final_profile_image_id}")
         password = EmployeeService.generate_random_password()
-        
-        # Hash password
-        password_bytes = password.encode('utf-8')[:72]  # Ensure max 72 bytes for bcrypt
+
+        password_bytes = password.encode('utf-8')[:72]
         hashed_password = bcrypt.hashpw(password_bytes, bcrypt.gensalt()).decode('utf-8')
-        
-        # Create new user
+
         try:
             new_employee = User(
                 username=username,
@@ -124,20 +97,20 @@ class EmployeeService:
                 department=data.department,
                 gender=data.gender,
                 home_address=data.home_address,
-                profile_image_id=data.profile_image_id,
+                profile_image_id=final_profile_image_id,
                 role_id=data.role_id,
-                status=1,  # Active
+                status=1,
                 is_super_admin=False,
                 is_first_login=True,
                 created_at=datetime.now(),
                 updated_at=datetime.now()
             )
-            
+
             db.add(new_employee)
-            db.commit()
-            db.refresh(new_employee)
-            
-            # Save audit trail
+            await db.commit()
+            await db.refresh(new_employee)
+            logger.info(f"[CREATE] Created employee object: id={getattr(new_employee, 'id', None)} username={getattr(new_employee, 'username', None)} repr={new_employee!r}")
+
             await save_audit_trail(
                 db=db,
                 activity="employee_created",
@@ -145,23 +118,21 @@ class EmployeeService:
                 message=f"Created employee {new_employee.username} (ID: {new_employee.id})",
                 activity_trace_id=new_employee.id
             )
-            
-            # Send welcome email with credentials
+
             email_body = f"""
             Welcome to Alpha Granite!
-            
+
             Your account has been created. Here are your login credentials:
-            
+
             Username: {username}
             Password: {password}
-            
+
             Please login and change your password immediately.
-            
+
             Best regards,
             The Alpha Granite Team
             """
-            
-            # Send notification
+
             await send_notification(
                 db=db,
                 email=data.email,
@@ -169,37 +140,37 @@ class EmployeeService:
                 body=email_body,
                 user_id=current_user_id
             )
-            
-            # Return employee without password
+
             return new_employee
-            
+
         except IntegrityError as e:
-            db.rollback()
+            await db.rollback()
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, 
                 detail=f"Database error: {str(e)}"
             )
     
     @staticmethod
-    async def update_employee(db: Session, employee_id: int, data, current_user_id: int, profile_image_id=None):
-        """
-        Update employee details
+    async def update_employee(db: AsyncSession, employee_id: int, data, current_user_id: int, profile_image_id=None):
+        # use module-level logger
+        logger = logging.getLogger("employee_update")
         
-        Args:
-            db: Database session
-            employee_id: ID of employee to update
-            data: EmployeeUpdate data object
-            current_user_id: ID of user making the update
-            profile_image_id: Optional ID of uploaded profile image
-        """
-        from src.app.service.background import save_audit_trail
+        # Use profile_image_id from data object if present, otherwise use parameter
+        final_profile_image_id = data.profile_image_id if hasattr(data, 'profile_image_id') and data.profile_image_id is not None else profile_image_id
         
-        # Find employee
-        employee = db.query(User).filter(User.id == employee_id).first()
+        result = await db.execute(select(User).where(User.id == employee_id))
+        employee = result.scalars().first()
+        logger.info(f"[UPDATE] Fetched employee: {employee}")
         if not employee:
+            logger.error(f"[UPDATE] Employee not found: {employee_id}")
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_EMPLOYEE_NOT_FOUND)
         
-        # Update fields if provided
+        # Validate department exists if being updated
+        if data.department_id is not None:
+            dept_result = await db.execute(select(Department).where(Department.id == data.department_id))
+            if not dept_result.scalars().first():
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Department does not exist")
+        
         if data.first_name is not None:
             employee.first_name = data.first_name
         if data.last_name is not None:
@@ -210,23 +181,42 @@ class EmployeeService:
             employee.phone = data.phone_number
         if data.department_id is not None:
             employee.department = data.department_id
-        if data.gender is not None:
-            employee.gender = data.gender
-        if data.home_address is not None:
-            employee.home_address = data.home_address
-        if profile_image_id is not None:
-            employee.profile_image_id = profile_image_id
         if data.role_id is not None:
             employee.role_id = data.role_id
+            # Ensure the role assignment exists in user_roles table as well
+            try:
+                ur_result = await db.execute(
+                    select(UserRole).where(
+                        UserRole.user_id == employee.id,
+                        UserRole.role_id == data.role_id,
+                    )
+                )
+                existing_ur = ur_result.scalars().first()
+                if not existing_ur:
+                    new_user_role = UserRole(
+                        user_id=employee.id,
+                        role_id=data.role_id,
+                        created_at=datetime.now(),
+                    )
+                    db.add(new_user_role)
+            except Exception:
+                # don't block the update if user_role insertion fails; log and continue
+                logger = logging.getLogger("employee_update")
+                logger.exception(f"Failed to ensure UserRole for user {employee.id} role {data.role_id}")
+        
+        # Update profile_image_id if provided (use final_profile_image_id which prioritizes data object)
+        if final_profile_image_id is not None:
+            employee.profile_image_id = final_profile_image_id
+            logger.info(f"[UPDATE] Setting profile_image_id to {final_profile_image_id}")
         
         employee.updated_at = datetime.now()
         
         try:
             db.add(employee)
-            db.commit()
-            db.refresh(employee)
+            await db.commit()
+            await db.refresh(employee)
+            logger.info(f"[UPDATE] Employee after update: {employee}")
             
-            # Save audit trail
             await save_audit_trail(
                 db=db,
                 activity="employee_updated",
@@ -238,44 +228,35 @@ class EmployeeService:
             return employee
             
         except IntegrityError as e:
-            db.rollback()
+            await db.rollback()
+            logger.error(f"[UPDATE] IntegrityError: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, 
                 detail=f"Database error: {str(e)}"
             )
     
     @staticmethod
-    async def update_employee_status(db: Session, employee_id: int, status_id: int, current_user_id: int, background_tasks):
-        """
-        Update employee status (active, inactive, deleted)
-        Status codes:
-        1 - Active
-        2 - Inactive
-        3 - Deleted
-        """
-        from src.app.service.background import save_audit_trail, send_notification
+    async def update_employee_status(db: AsyncSession, employee_id: int, status_id: int, current_user_id: int, background_tasks):
+        # save_audit_trail and send_notification imported at module top
         
-        # Find employee
-        employee = db.query(User).filter(User.id == employee_id).first()
+        result = await db.execute(select(User).where(User.id == employee_id))
+        employee = result.scalars().first()
         if not employee:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_EMPLOYEE_NOT_FOUND)
         
-        # Update status
         old_status = employee.status
         employee.status = status_id
         employee.updated_at = datetime.now()
         
         try:
             db.add(employee)
-            db.commit()
-            db.refresh(employee)
+            await db.commit()
+            await db.refresh(employee)
             
-            # Status name mapping
             status_names = {1: "active", 2: "inactive", 3: "deleted"}
             old_status_name = status_names.get(old_status, "unknown")
             new_status_name = status_names.get(status_id, "unknown")
             
-            # Save audit trail
             await save_audit_trail(
                 db=db,
                 activity="employee_status_changed",
@@ -284,7 +265,6 @@ class EmployeeService:
                 activity_trace_id=employee.id
             )
             
-            # Send notification to admin
             admin_email_body = f"""
             Employee status changed:
             
@@ -292,10 +272,9 @@ class EmployeeService:
             Status changed from {old_status_name} to {new_status_name}
             """
             
-            # Get super admin emails
-            super_admins = db.query(User).filter(User.is_super_admin == True).all()
+            result = await db.execute(select(User).where(User.is_super_admin == True))
+            super_admins = result.scalars().all()
             
-            # Send notifications to super admins
             for admin in super_admins:
                 await send_notification(
                     db=db,
@@ -308,23 +287,15 @@ class EmployeeService:
             return employee
             
         except IntegrityError as e:
-            db.rollback()
+            await db.rollback()
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, 
                 detail=f"Database error: {str(e)}"
             )
             
     @staticmethod
-    async def toggle_employee_active_status(db: Session, employee_id: int, active: bool, current_user_id: int, background_tasks):
-        """
-        Activate or deactivate an employee
-        - active=True: Sets status to Active (1)
-        - active=False: Sets status to Inactive (2)
-        """
-        # Convert active bool to status code
-        status_id = 1 if active else 2  # 1 = Active, 2 = Inactive
-        
-        # Call update_employee_status to handle the change
+    async def toggle_employee_active_status(db: AsyncSession, employee_id: int, active: bool, current_user_id: int, background_tasks):
+        status_id = 1 if active else 2
         return await EmployeeService.update_employee_status(
             db=db, 
             employee_id=employee_id,
@@ -334,44 +305,30 @@ class EmployeeService:
         )
         
     @staticmethod
-    async def bulk_toggle_employee_active_status(db: Session, employee_ids: list[int], active: bool, current_user_id: int, background_tasks):
-        """
-        Activate or deactivate multiple employees at once
-        Returns a dictionary with:
-        - success: list of IDs that were successfully updated
-        - failed: list of IDs that failed to update
-        - message: summary message
-        """
-        from src.app.service.background import save_audit_trail
+    async def bulk_toggle_employee_active_status(db: AsyncSession, employee_ids: list[int], active: bool, current_user_id: int, background_tasks):
+        # save_audit_trail imported at module top
         
-        # Convert active bool to status code
-        status_id = 1 if active else 2  # 1 = Active, 2 = Inactive
+        status_id = 1 if active else 2
         status_name = "active" if active else "inactive"
         
-        # Initialize result lists
         success_ids = []
         failed_ids = []
         
-        # Process each employee
         for emp_id in employee_ids:
             try:
-                # Find employee
-                employee = db.query(User).filter(User.id == emp_id).first()
+                result = await db.execute(select(User).where(User.id == emp_id))
+                employee = result.scalars().first()
                 if not employee:
                     failed_ids.append(emp_id)
                     continue
                 
-                # Update status
                 old_status = employee.status
                 employee.status = status_id
                 employee.updated_at = datetime.now()
                 
                 db.add(employee)
-                
-                # Add to success list
                 success_ids.append(emp_id)
                 
-                # Save audit trail
                 await save_audit_trail(
                     db=db,
                     activity="employee_status_changed",
@@ -381,20 +338,17 @@ class EmployeeService:
                 )
                 
             except Exception:
-                # Add to failed list if any exception occurs
                 failed_ids.append(emp_id)
         
-        # Commit all successful changes
         try:
-            db.commit()
+            await db.commit()
         except IntegrityError as e:
-            db.rollback()
+            await db.rollback()
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Database error: {str(e)}"
             )
         
-        # Create result message
         total = len(employee_ids)
         success_count = len(success_ids)
         message = f"Updated {success_count} of {total} employees to {status_name}"
@@ -406,16 +360,28 @@ class EmployeeService:
         }
     
     @staticmethod
-    async def get_employee(db: Session, employee_id: int):
-        """Get employee by ID"""
-        employee = db.query(User).filter(User.id == employee_id).first()
-        if not employee:
+    async def get_employee(db: AsyncSession, employee_id: int):
+        result = await db.execute(
+            select(User, Department.name, Status.name)
+            .join(Department, User.department == Department.id)
+            .join(Status, User.status == Status.value_id)
+            .where(User.id == employee_id)
+        )
+        row = result.first()
+        if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_EMPLOYEE_NOT_FOUND)
-        return employee
+        employee, department_name, status_name = row
+        employee_dict = employee.__dict__.copy()
+        # Remove sensitive/internal fields
+        for key in ["is_locked", "failed_login_attempts", "password"]:
+            employee_dict.pop(key, None)
+        employee_dict["department_name"] = department_name
+        employee_dict["status_name"] = status_name
+        return employee_dict
     
     @staticmethod
     async def get_employees(
-        db: Session, 
+        db: AsyncSession, 
         skip: int = 0, 
         limit: int = 100, 
         search: str = None, 
@@ -427,47 +393,37 @@ class EmployeeService:
         sort_by: str = "id",
         sort_order: str = "asc"
     ):
-        """
-        Get employees with filtering options
-        - skip: pagination offset
-        - limit: pagination limit
-        - search: search term for first name, last name, email, or username
-        - department_id: filter by department
-        - status_id: filter by status
-        - role_id: filter by role
-        - email: filter by exact email
-        - phone: filter by phone number
-        - sort_by: field to sort by
-        - sort_order: asc or desc
-        """
-        query = db.query(User)
+       
+        query = select(User, Department.name, Status.name)
+        query = query.join(Department, User.department == Department.id)
+        query = query.join(Status, User.status == Status.value_id)
         
-        # Apply filters if provided
         if search:
             search_term = f"%{search}%"
-            query = query.filter(
-                (User.first_name.ilike(search_term)) |
-                (User.last_name.ilike(search_term)) |
-                (User.email.ilike(search_term)) |
-                (User.username.ilike(search_term))
+            query = query.where(
+                or_(
+                    User.first_name.ilike(search_term),
+                    User.last_name.ilike(search_term),
+                    User.email.ilike(search_term),
+                    User.username.ilike(search_term)
+                )
             )
         
         if department_id:
-            query = query.filter(User.department == department_id)
+            query = query.where(User.department == department_id)
         
         if status_id:
-            query = query.filter(User.status == status_id)
-            
-        if role_id:
-            query = query.filter(User.role_id == role_id)
-            
-        if email:
-            query = query.filter(User.email == email)
-            
-        if phone:
-            query = query.filter(User.phone.ilike(f"%{phone}%"))
+            query = query.where(User.status == status_id)
         
-        # Apply sorting
+        if role_id:
+            query = query.where(User.role_id == role_id)
+        
+        if email:
+            query = query.where(User.email == email)
+        
+        if phone:
+            query = query.where(User.phone.ilike(f"%{phone}%"))
+        
         valid_sort_fields = {
             "id": User.id,
             "first_name": User.first_name,
@@ -480,20 +436,50 @@ class EmployeeService:
             "status": User.status
         }
         
-        # Default to id if invalid sort field
         sort_field = valid_sort_fields.get(sort_by, User.id)
         
-        # Apply sort order
         if sort_order.lower() == "desc":
             query = query.order_by(sort_field.desc())
         else:
             query = query.order_by(sort_field.asc())
         
-        # Get total count for pagination
-        total_count = query.count()
+        count_query = select(func.count()).select_from(User)
+        if search:
+            search_term = f"%{search}%"
+            count_query = count_query.where(
+                or_(
+                    User.first_name.ilike(search_term),
+                    User.last_name.ilike(search_term),
+                    User.email.ilike(search_term),
+                    User.username.ilike(search_term)
+                )
+            )
+        if department_id:
+            count_query = count_query.where(User.department == department_id)
+        if status_id:
+            count_query = count_query.where(User.status == status_id)
+        if role_id:
+            count_query = count_query.where(User.role_id == role_id)
+        if email:
+            count_query = count_query.where(User.email == email)
+        if phone:
+            count_query = count_query.where(User.phone.ilike(f"%{phone}%"))
         
-        # Get paginated results
-        employees = query.offset(skip).limit(limit).all()
+        count_result = await db.execute(count_query)
+        total_count = count_result.scalar()
+        
+        query = query.offset(skip).limit(limit)
+        result = await db.execute(query)
+        rows = result.all()
+        employees = []
+        for row in rows:
+            employee, department_name, status_name = row
+            employee_dict = employee.__dict__.copy()
+            for key in ["is_locked", "failed_login_attempts", "password"]:
+                employee_dict.pop(key, None)
+            employee_dict["department_name"] = department_name
+            employee_dict["status_name"] = status_name
+            employees.append(employee_dict)
         
         return {
             "total": total_count,
@@ -503,10 +489,7 @@ class EmployeeService:
         }
 
     @staticmethod
-    def is_email_unique(db: Session, email: str) -> bool:
-        """
-        Check if email is unique in the system
-        Returns True if email is unique (doesn't exist), False otherwise
-        """
-        existing_user = db.query(User).filter(User.email == email).first()
+    async def is_email_unique(db: AsyncSession, email: str) -> bool:
+        result = await db.execute(select(User).where(User.email == email))
+        existing_user = result.scalars().first()
         return existing_user is None

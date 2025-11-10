@@ -287,8 +287,12 @@ class DepartmentService:
         # Execute query to get departments
         result = await db.execute(query)
         departments = result.scalars().all()
-        
-        # For each department, get member count and sample members
+
+        # Load status lookup once to avoid repeated queries
+        statuses_res = await db.execute(select(Status))
+        statuses = {s.value_id: s.name for s in statuses_res.scalars().all()}
+
+    # For each department, get member count and sample members
         department_data = []
         for dept in departments:
             # Get user count
@@ -317,12 +321,16 @@ class DepartmentService:
                 for user in sample_users
             ]
             
+            # Resolve status name if available
+            status_name = statuses.get(dept.status)
+
             # Create department summary
             department_data.append({
                 "id": dept.id,
                 "name": dept.name,
                 "description": dept.description,
                 "status": dept.status,
+                "status_name": status_name,
                 "total_members": user_count,
                 "sample_members": sample_members
             })
@@ -348,29 +356,46 @@ class DepartmentService:
                 detail=f"Department with ID {department_id} not found"
             )
 
-        # Get all users in this department
+        # Get all users in this department (full user data)
         users_query = select(User).where(User.department == department_id)
         users_result = await db.execute(users_query)
         users = users_result.scalars().all()
 
-        # Format user data
+        # Load status lookup
+        statuses_res = await db.execute(select(Status))
+        statuses = {s.value_id: s.name for s in statuses_res.scalars().all()}
+
+        # Format user data with status_name where applicable
         user_data = [
             {
                 "id": user.id,
+                "employee_id": user.employee_id,
+                "username": user.username,
+                "email": user.email,
                 "first_name": user.first_name,
                 "last_name": user.last_name,
-                "email": user.email,
-                "profile_image_id": user.profile_image_id
+                "phone": user.phone,
+                "department": user.department,
+                "home_address": user.home_address,
+                "gender": user.gender,
+                "profile_image_id": user.profile_image_id,
+                "status": user.status,
+                "status_name": statuses.get(user.status),
+                "role_id": user.role_id,
+                "is_super_admin": user.is_super_admin,
+                "created_at": user.created_at,
+                "updated_at": user.updated_at,
             }
             for user in users
         ]
 
-        # Create department details
+        # Create department details with status_name
         department_data = {
             "id": department.id,
             "name": department.name,
             "description": department.description,
             "status": department.status,
+            "status_name": statuses.get(department.status),
             "created_at": department.created_at,
             "updated_at": department.updated_at,
             "users": user_data,
@@ -462,16 +487,36 @@ class DepartmentService:
                 "gender": user.gender,
                 "profile_image_id": user.profile_image_id,
                 "created_at": user.created_at,
-                "phone": user.phone
+                "phone": user.phone,
+                "status": user.status,
+                "status_name": statuses.get(user.status)
             }
             for user in users
         ]
 
-        # Create department info
+    @staticmethod
+    async def get_statuses(db: AsyncSession) -> List[Dict[str, Any]]:
+        """
+        Return all available statuses as a list of {value_id, name, slug}.
+        """
+        result = await db.execute(select(Status))
+        rows = result.scalars().all()
+        return [
+            {"value_id": r.value_id, "name": r.name, "slug": r.slug}
+            for r in rows
+        ]
+
+        # Load status lookup (for department and users)
+        statuses_res = await db.execute(select(Status))
+        statuses = {s.value_id: s.name for s in statuses_res.scalars().all()}
+
+        # Create department info including status_name
         department_info = {
             "department_id": department.id,
             "department_name": department.name,
-            "department_description": department.description
+            "department_description": department.description,
+            "status": department.status,
+            "status_name": statuses.get(department.status)
         }
 
         return department_info, user_data, total_count, total_pages

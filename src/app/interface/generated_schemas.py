@@ -1,0 +1,288 @@
+
+from datetime import datetime
+from typing import Optional, List
+from sqlmodel import SQLModel, Field
+
+# --- Jobs ---
+class Job(SQLModel, table=True):
+    __tablename__ = "jobs"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field()
+    account_id: int = Field()
+    status_id: int = Field()
+    created_by: int = Field()
+    updated_by: Optional[int] = Field(default=None)
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+
+# --- Templatings ---
+class Templating(SQLModel, table=True):
+    __tablename__ = "templatings"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    fab_id: int = Field()
+    technician_id: Optional[int] = Field(default=None)
+    schedule_start_date: Optional[datetime] = Field(default=None)
+    schedule_due_date: Optional[datetime] = Field(default=None)
+    total_sqft: Optional[str] = Field(default=None)
+    notes: Optional[str] = Field(default=None)
+    is_templating_schedule: bool = Field(default=False)
+    status_id: int = Field()
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+    updated_by: Optional[int] = Field(default=None)
+
+# --- Slab Smiths ---
+class SlabSmith(SQLModel, table=True):
+    __tablename__ = "slab_smiths"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    fab_id: int = Field()
+    slab_smith_type: str = Field()
+    drafter_id: int = Field()
+    status_id: int = Field()
+    start_date: datetime = Field()
+    end_date: Optional[datetime] = Field(default=None)
+    total_sqft_completed: Optional[str] = Field(default=None)
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+    updated_by: Optional[int] = Field(default=None)
+    file_ids: Optional[str] = Field(default=None)
+
+# --- Shop Planning ---
+class ShopPlanning(SQLModel, table=True):
+    __tablename__ = "shop_planning"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field()
+    description: Optional[str] = Field(default=None)
+    status_id: int = Field()
+    created_by: int = Field()
+    updated_by: Optional[int] = Field(default=None)
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+
+class PlanningSection(SQLModel, table=True):
+    __tablename__ = "planning_sections"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field()
+    description: Optional[str] = Field(default=None)
+    status_id: int = Field()
+    created_by: int = Field()
+    updated_by: Optional[int] = Field(default=None)
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+
+
+# --- WorkStations ---
+class WorkStation(SQLModel, table=True):
+    __tablename__ = "work_stations"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field()
+    description: Optional[str] = Field(default=None)
+    status_id: int = Field()
+    created_by: int = Field()
+    updated_by: Optional[int] = Field(default=None)
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+
+
+
+# --- Fabs ---
+class Fab(SQLModel, table=True):
+    __tablename__ = "fabs"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    fab_type: str = Field()
+    stone_colour: str = Field()
+    stone_thickness: str = Field()
+    edges: str = Field()
+    input_area: str = Field()
+    totl_sqft: str = Field()
+    notes: Optional[str] = Field(default=None)
+    sales_person_id: int = Field()
+    job_id: int = Field()
+    template_needed: bool = Field()
+    drafting_needed: bool = Field()
+    slab_smith_needed_ag: bool = Field()
+    slab_smith_needed_cust: bool = Field()
+    sct_needed: bool = Field(default=True)
+    final_programming_needed: bool = Field()
+    status_id: int = Field()
+    created_by: int = Field()
+    updated_by: Optional[int] = Field(default=None)
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+    curremt_stage: str = Field(description="equivalent to the table name of the process e.g templatings")
+
+# --- Stone Types ---
+class StoneType(SQLModel, table=True):
+    __tablename__ = "stone_types"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field()
+    descripition: Optional[str] = Field(default=None)
+    status_id: int = Field()
+    created_by: int = Field()
+    updated_by: Optional[int] = Field(default=None)
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+
+# --- Accounts ---
+class Account(SQLModel, table=True):
+    __tablename__ = "accounts"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field()
+    account_id: int = Field()
+    descripition: Optional[str] = Field(default=None)
+    status_id: int = Field()
+    created_by: int = Field()
+    updated_by: Optional[int] = Field(default=None)
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+    redraft_notes: Optional[str] = Field(default=None)
+    schedule_start_date: Optional[datetime] = Field(default=None)
+    technician_id: Optional[int] = Field(default=None)
+    schedule_due_date: Optional[datetime] = Field(default=None)
+    total_sqft: Optional[str] = Field(default=None)
+    technician_start_date: Optional[datetime] = Field(default=None)
+    technician_end_date: Optional[datetime] = Field(default=None)
+    status_id: Optional[int] = Field(default=None)
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+    updated_by: int = Field()
+
+# --- Draftings ---
+class Drafting(SQLModel, table=True):
+    __tablename__ = "draftings"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    drafter_id: int = Field()
+    fab_id: int = Field()
+    scheduled_start_date: datetime = Field()
+    scheduled_end_date: datetime = Field()
+    drafter_start_date: Optional[datetime] = Field(default=None)
+    drafter_end_date: Optional[datetime] = Field(default=None)
+    status_id: int = Field()
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+    updated_by: Optional[int] = Field(default=None)
+    file_ids: Optional[str] = Field(default=None, description="stores a list of differrent file id that belongs to this drafting, each pointing to a file on the files table")
+    no_of_piece_drafted: Optional[str] = Field(default=None)
+    total_sqft_required_to_draft: str = Field()
+    total_sqft_drafted: Optional[str] = Field(default=None)
+    draft_note: Optional[str] = Field(default=None)
+    mentions: Optional[str] = Field(default=None, description="List of user_ids of user to be notified of the draft submission")
+    is_redrafting: bool = Field(default=False)
+
+# --- Pre Draft Reviews ---
+class PreDraftReview(SQLModel, table=True):
+    __tablename__ = "pre_draft_reviews"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    fab_id: int = Field()
+    draft_notes: int = Field()
+    is_redrafting_needed: int = Field()
+    created_at: datetime = Field()
+    updated_by: int = Field()
+    updated_at: datetime = Field()
+    status_id: Optional[int] = Field(default=None)
+
+# --- Sales CTs ---
+class SalesCT(SQLModel, table=True):
+    __tablename__ = "sales_cts"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    fab_id: int = Field()
+    is_revision_needed: bool = Field()
+    is_revision_completed: Optional[bool] = Field(default=None)
+    status_id: int = Field()
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+    updated_by: Optional[int] = Field(default=None)
+    no_of_revisions: Optional[str] = Field(default=None)
+    current_revision_count: Optional[str] = Field(default=None)
+    slab_smith_type: str = Field()
+    drafter_id: int = Field()
+    status_id: int = Field()
+    start_date: datetime = Field()
+    end_date: datetime = Field()
+    total_sqft_completed: Optional[str] = Field(default=None)
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+    updated_by: Optional[int] = Field(default=None)
+    file_ids: Optional[str] = Field(default=None, description="stores a list of differrent file id that belongs to this drafting, each pointing to a file on the files table")
+
+# --- Cut List ---
+class CutList(SQLModel, table=True):
+    __tablename__ = "cut_list"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    fab_id: int = Field()
+    is_final_progreamming_completed: bool = Field(default=False)
+    shop_schedule_date: Optional[datetime] = Field(default=None)
+    status_id: int = Field()
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+    updated_by: Optional[int] = Field(default=None)
+    no_of_piece: Optional[str] = Field(default=None)
+    total_sqft: Optional[str] = Field(default=None)
+    installation_date: Optional[datetime] = Field(default=None)
+    Ln_ft_map: Optional[str] = Field(default=None, description="contains the map of key value pair of Lnft e.g water jet Ln ft and so on")
+
+# --- Job Technician Workflows ---
+class JobTechnicianWorkflow(SQLModel, table=True):
+    __tablename__ = "job_technician_workflows"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    fab_id: int = Field()
+    technician_id: int = Field()
+    table_name: str = Field(description="templating")
+    notes: Optional[str] = Field(default=None)
+    pause_reason: Optional[str] = Field(default=None)
+    total_sqft_done: str = Field()
+    started_at: datetime = Field()
+    completed_at: datetime = Field(description="this is is when workflow finished , it may be that the only fabid was puase or the  section was done")
+    table_id: int = Field(description="related to the id for the table_name")
+    created_at: datetime = Field()
+    created_by: int = Field()
+
+# --- Final Programmings ---
+class FinalProgramming(SQLModel, table=True):
+    __tablename__ = "final_programmings"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    drafter_id: int = Field()
+    fab_id: int = Field()
+    scheduled_start_date: datetime = Field()
+    scheduled_end_date: datetime = Field()
+    drafter_start_date: Optional[datetime] = Field(default=None)
+    drafter_end_date: Optional[datetime] = Field(default=None)
+    status_id: int = Field()
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+    updated_by: Optional[int] = Field(default=None)
+    file_ids: Optional[str] = Field(default=None, description="stores a list of differrent file id that belongs to this drafting, each pointing to a file on the files table")
+    no_of_piece_drafted: Optional[str] = Field(default=None)
+    total_sqft_required_to_draft: str = Field()
+    total_sqft_drafted: Optional[str] = Field(default=None)
+    notes: Optional[str] = Field(default=None)
+
+# --- Shop Planning Sections ---
+class ShopPlanningSection(SQLModel, table=True):
+    __tablename__ = "shop_planning_sections"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    work_station_id: int = Field()
+    operator_ids: Optional[str] = Field(default=None)
+    machine: Optional[str] = Field(default=None)
+    scheduled_sqft: Optional[str] = Field(default=None)
+    completed_sqft: Optional[str] = Field(default=None)
+    start_date: Optional[datetime] = Field(default=None)
+    end_date: Optional[datetime] = Field(default=None)
+    status_id: int = Field()
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+    updated_by: Optional[int] = Field(default=None)
+
+# --- Operation Workflow ---
+class OperationWorkflow(SQLModel, table=True):
+    __tablename__ = "operation_workflow"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    shop_planning_sections: int = Field()
+    started_at: datetime = Field()
+    finished_at: datetime = Field()
+    total_sqft_done: str = Field()
+    reason_for_pause: str = Field()
+    notes: Optional[str] = Field(default=None)
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+    updated_by: Optional[int] = Field(default=None)

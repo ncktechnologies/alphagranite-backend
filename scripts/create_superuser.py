@@ -46,7 +46,7 @@ def _env_default(name: str, default: str) -> str:
 
 USERNAME = _env_default("SUPERUSER_USERNAME", "admin")
 EMAIL = _env_default("SUPERUSER_EMAIL", "admin@example.com")
-PASSWORD = _env_default("SUPERUSER_PASSWORD", "admin123@Daewi")
+PASSWORD = _env_default("SUPERUSER_PASSWORD", "admin123@Daewi1")
 FIRST_NAME = _env_default("SUPERUSER_FIRST_NAME", "Super")
 LAST_NAME = _env_default("SUPERUSER_LAST_NAME", "Admin")
 

@@ -127,6 +127,30 @@ async def login(
             )
             raise error_response(MSG_ACCOUNT_LOCKED, 403)
 
+        # Account must be active (status == 1)
+        # If not active, deny login
+        if getattr(user, "status", None) != 1:
+            background_tasks.add_task(
+                save_audit_trail,
+                db,
+                AUDIT_ACCOUNT_LOCKED,
+                user.id,
+                MSG_ACCOUNT_INACTIVE,
+                0,
+                device_id,
+                ip_address,
+                browser,
+            )
+            background_tasks.add_task(
+                send_notification,
+                db,
+                ADMIN_EMAIL,
+                NOTIF_ACCOUNT_INACTIVE,
+                f"Attempted login to inactive account {login_data.username}",
+                user.id,
+            )
+            raise error_response(MSG_ACCOUNT_INACTIVE, 403)
+
         # Password verification
         if not auth_service.verify_password(login_data.password, user.password):
             # Increment failed login attempts and potentially lock account
