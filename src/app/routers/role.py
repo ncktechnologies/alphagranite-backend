@@ -6,8 +6,8 @@ from src.app.database.user import User
 from src.app.utils.config import get_db
 from src.app.service.role import RoleService
 from src.app.routers.auth import get_current_user
-from src.app.utils.helpers import call_service, success_response
 from src.app.utils.permissions import PermissionChecker 
+from src.app.utils.helpers import call_service, success_response 
 from src.app.interface.role_schemas import (
     RoleCreate,
     RoleUpdate,
@@ -19,7 +19,10 @@ from src.app.interface.role_schemas import (
     RoleListResponse,
     RoleWithPermissions,
     RoleMembersResponse,
+    ActionMenuPermission,
 )
+from sqlalchemy import select, func
+from src.app.database.user_role import UserRole
 
 role_router = APIRouter(
     prefix="/roles",
@@ -34,24 +37,36 @@ async def create_role(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Create a new role with permissions
+    Create a new role with action menu permissions and assign users
     
-    This endpoint creates a new role with the specified permissions.
+    This endpoint creates a new role with permissions for multiple action menus.
     The role name must be unique.
     
     The request body should include:
     - name: Role name (must be unique)
     - description: Optional role description
-    - permission_ids: List of permission IDs to associate with the role
+    - action_menu_permissions: List of action menus with CRUD permissions
+      - Each item contains: action_menu_id, can_create, can_read, can_update, can_delete
+    - user_ids: List of user IDs to assign to this role
     - status: Role status (1=Active, 2=Inactive)
+    
+    The backend will:
+    1. Create permission records for each action menu
+    2. Create the role
+    3. Create role_permission records linking role + permission + action_menu
+    4. Assign users to the role via user_role records
     """
+    # Convert Pydantic models to dicts for service layer
+    action_menu_permissions_dicts = [amp.dict() for amp in data.action_menu_permissions]
+    
     # Call service using helper for error handling
     result = await call_service(
         RoleService.create_role,
         db=db,
         name=data.name,
         description=data.description,
-        permission_ids=data.permission_ids,
+        action_menu_permissions=action_menu_permissions_dicts,
+        user_ids=data.user_ids,
         status=data.status,
         current_user_id=current_user.id
     )
@@ -65,18 +80,60 @@ async def create_role(
 async def get_role(
     role_id: int = Path(..., ge=1),
     with_permissions: bool = Query(True, description="Include permissions in response"),
+    with_members: bool = Query(True, description="Include members in response"),
+    skip: int = Query(0, ge=0, description="Number of members to skip for pagination"),
+    limit: int = Query(100, ge=1, le=1000, description="Number of members to return"),
+    search: str = Query(None, description="Search members by name or email"),
+    status_id: int = Query(None, description="Filter members by status"),
+    sort_by: str = Query("first_name", description="Field to sort members by"),
+    sort_order: str = Query("asc", description="Sort order (asc or desc)"),
     current_user: User = Depends(PermissionChecker("roles", "read")),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Get role details by ID
+    Get role details by ID with permissions and members
     
-    This endpoint retrieves a role by its ID.
-    If with_permissions is True (default), it will include the role's permissions in the response.
+    This endpoint retrieves a role by its ID with:
+    - Basic role information (name, description, status, dates)
+    - Permissions list (if with_permissions=True)
+    - Member statistics (total, active, inactive, pending)
+    - Paginated members list (if with_members=True)
+    
+    Query Parameters:
+    - with_permissions: Include role permissions (default: True)
+    - with_members: Include members list (default: True)
+    - skip: Pagination offset for members
+    - limit: Number of members per page
+    - search: Search members by name or email
+    - status_id: Filter members by status
+    - sort_by: Sort field (first_name, last_name, email, status, invited_at, last_login)
+    - sort_order: Sort direction (asc/desc)
     """
     
-    # Call service using helper for error handling
-    if with_permissions:
+    # Get role with members and stats
+    if with_members:
+        result = await call_service(
+            RoleService.get_role_with_members,
+            db=db,
+            role_id=role_id,
+            skip=skip,
+            limit=limit,
+            search=search,
+            status_id=status_id,
+            sort_by=sort_by,
+            sort_order=sort_order
+        )
+        
+        # Add permissions if requested
+        if with_permissions:
+            permissions_result = await call_service(
+                RoleService.get_role_with_permissions,
+                db=db,
+                role_id=role_id
+            )
+            result["permissions"] = permissions_result.get("permissions", [])
+    
+    elif with_permissions:
         result = await call_service(
             RoleService.get_role_with_permissions,
             db=db,
@@ -355,9 +412,7 @@ async def debug_role_members(
     Debug endpoint: return raw UserRole rows and joined user info for a role.
     Use this to confirm which users are assigned to a role in the database.
     """
-    from sqlalchemy import select, func
-    from src.app.database.user import User
-    from src.app.database.user_role import UserRole
+  
 
     # Get raw user_role rows for this role
     query = select(UserRole, User).join(User, User.id == UserRole.user_id).where(UserRole.role_id == role_id)

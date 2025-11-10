@@ -10,9 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.app.database.role import Role
 from src.app.database.user import User
 from src.app.database.file import File
+from src.app.database.status import Status
 from src.app.utils.config import API_BASE_URL
 from src.app.database.user_role import UserRole
+from src.app.utils.helpers import error_response
 from src.app.database.permission import Permission
+from src.app.database.action_menu import ActionMenu
+from src.app.service.background import save_audit_trail
 from src.app.database.role_permission import RolePermission
 
 class RoleService:
@@ -31,19 +35,21 @@ class RoleService:
     async def create_role(
         db: AsyncSession, 
         name: str, 
-        description: Optional[str], 
-        permission_ids: List[int], 
+        description: Optional[str],
+        action_menu_permissions: List[Dict[str, Any]],
+        user_ids: List[int],
         status: int,
         current_user_id: int
     ):
         """
-        Create a new role with the specified permissions
+        Create a new role with action menu permissions and assign users
         
         Args:
             db: Database session
             name: Role name (must be unique)
             description: Optional role description
-            permission_ids: List of permission IDs to associate with the role
+            action_menu_permissions: List of dicts with action_menu_id and CRUD flags
+            user_ids: List of user IDs to assign to this role
             status: Role status (1=Active, 2=Inactive)
             current_user_id: ID of the user creating the role
             
@@ -53,24 +59,27 @@ class RoleService:
         Raises:
             HTTPException: If role name already exists or if there are database errors
         """
-        from src.app.service.background import save_audit_trail
+     
         
         # Check if role name already exists
         existing_role = await db.execute(select(Role).where(Role.name == name))
         if existing_role.scalar_one_or_none():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Role with name '{name}' already exists"
+            raise error_response(
+                message=f"Role with name '{name}' already exists",
+                status_code=400
             )
         
-        # Verify all permissions exist
-        permissions_count = await db.execute(
-            select(func.count(Permission.id)).where(Permission.id.in_(permission_ids))
+        # Verify all action menus exist
+        action_menu_ids = [amp["action_menu_id"] for amp in action_menu_permissions]
+        action_menus_result = await db.execute(
+            select(ActionMenu).where(ActionMenu.id.in_(action_menu_ids))
         )
-        if permissions_count.scalar_one() != len(permission_ids):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="One or more permission IDs do not exist"
+        action_menus = action_menus_result.scalars().all()
+        
+        if len(action_menus) != len(action_menu_ids):
+            raise error_response(
+                message="One or more action menu IDs do not exist",
+                status_code=400
             )
         
         try:
@@ -86,13 +95,71 @@ class RoleService:
             db.add(new_role)
             await db.flush()  # Flush to get the new role ID
             
-            # Associate permissions with the role
-            for permission_id in permission_ids:
+            # Create permissions and role_permission entries for each action menu
+            created_permissions = []
+            for amp in action_menu_permissions:
+                action_menu_id = amp["action_menu_id"]
+                
+                # Get action menu name for permission naming
+                action_menu = next((am for am in action_menus if am.id == action_menu_id), None)
+                if not action_menu:
+                    continue
+                
+                # Create permission name based on role and action menu
+                permission_name = f"{name.lower().replace(' ', '_')}_{action_menu.code}_permission"
+                
+                # Create new permission
+                permission = Permission(
+                    name=permission_name,
+                    description=f"{name} permission for {action_menu.name}",
+                    can_create=amp["can_create"],
+                    can_read=amp["can_read"],
+                    can_update=amp["can_update"],
+                    can_delete=amp["can_delete"],
+                    created_at=datetime.now(),
+                    updated_at=datetime.now()
+                )
+                db.add(permission)
+                await db.flush()  # Get permission ID
+                created_permissions.append(permission)
+                
+                # Create role_permission entry with action_menu_id
                 role_permission = RolePermission(
                     role_id=new_role.id,
-                    permission_id=permission_id
+                    permission_id=permission.id,
+                    action_menu_id=action_menu_id,
+                    created_at=datetime.now(),
+                    updated_at=datetime.now()
                 )
                 db.add(role_permission)
+            
+            # Assign users to the role
+            for user_id in user_ids:
+                # Verify user exists
+                user_result = await db.execute(
+                    select(User).where(User.id == user_id)
+                )
+                user = user_result.scalar_one_or_none()
+                
+                if not user:
+                    raise error_response(
+                        message=f"User with ID {user_id} does not exist",
+                        status_code=400
+                    )
+                
+                # Check if user already has this role
+                existing_user_role = await db.execute(
+                    select(UserRole).where(
+                        and_(UserRole.user_id == user_id, UserRole.role_id == new_role.id)
+                    )
+                )
+                if not existing_user_role.scalar_one_or_none():
+                    user_role = UserRole(
+                        user_id=user_id,
+                        role_id=new_role.id,
+                        created_at=datetime.now()
+                    )
+                    db.add(user_role)
             
             await db.commit()
             await db.refresh(new_role)
@@ -112,9 +179,9 @@ class RoleService:
             
         except IntegrityError as e:
             await db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, 
-                detail=f"Database error: {str(e)}"
+            raise error_response(
+                message=f"Database error: {str(e)}",
+                status_code=400
             )
     
     @staticmethod
@@ -151,18 +218,18 @@ class RoleService:
         role_query = await db.execute(select(Role).where(Role.id == role_id))
         role = role_query.scalar_one_or_none()
         if not role:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Role with ID {role_id} not found"
+            raise error_response(
+                message=f"Role with ID {role_id} not found",
+                status_code=404
             )
         
         # Check if new name already exists (if name is being updated)
         if name and name != role.name:
             existing_role = await db.execute(select(Role).where(Role.name == name))
             if existing_role.scalar_one_or_none():
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Role with name '{name}' already exists"
+                raise error_response(
+                    message=f"Role with name '{name}' already exists",
+                    status_code=400
                 )
         
         try:
@@ -183,9 +250,9 @@ class RoleService:
                     select(func.count(Permission.id)).where(Permission.id.in_(permission_ids))
                 )
                 if permissions_count.scalar_one() != len(permission_ids):
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="One or more permission IDs do not exist"
+                    raise error_response(
+                        message="One or more permission IDs do not exist",
+                        status_code=400
                     )
                 
                 # Delete existing role_permissions
@@ -219,9 +286,9 @@ class RoleService:
             
         except IntegrityError as e:
             await db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, 
-                detail=f"Database error: {str(e)}"
+            raise error_response(
+                message=f"Database error: {str(e)}",
+                status_code=400
             )
     
     @staticmethod
@@ -255,9 +322,9 @@ class RoleService:
         role_query = await db.execute(select(Role).where(Role.id == role_id))
         role = role_query.scalar_one_or_none()
         if not role:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Role with ID {role_id} not found"
+            raise error_response(
+                message=f"Role with ID {role_id} not found",
+                status_code=404
             )
         
         try:
@@ -288,9 +355,9 @@ class RoleService:
             
         except IntegrityError as e:
             await db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, 
-                detail=f"Database error: {str(e)}"
+            raise error_response(
+                message=f"Database error: {str(e)}",
+                status_code=400
             )
     
     @staticmethod
@@ -303,19 +370,35 @@ class RoleService:
             role_id: ID of the role to retrieve
             
         Returns:
-            The role
+            The role with status name
             
         Raises:
             HTTPException: If role doesn't exist
         """
-        role_query = await db.execute(select(Role).where(Role.id == role_id))
-        role = role_query.scalar_one_or_none()
-        if not role:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Role with ID {role_id} not found"
+        role_query = await db.execute(
+            select(Role, Status)
+            .outerjoin(Status, Role.status == Status.value_id)
+            .where(Role.id == role_id)
+        )
+        role_result = role_query.first()
+        
+        if not role_result:
+            raise error_response(
+                message=f"Role with ID {role_id} not found",
+                status_code=404
             )
-        return role
+        
+        role, status_obj = role_result
+        
+        return {
+            "id": role.id,
+            "name": role.name,
+            "description": role.description,
+            "status": role.status,
+            "status_name": status_obj.name if status_obj else None,
+            "created_at": role.created_at,
+            "updated_at": role.updated_at,
+        }
     
     @staticmethod
     async def get_role_with_permissions(db: AsyncSession, role_id: int):
@@ -332,23 +415,33 @@ class RoleService:
         Raises:
             HTTPException: If role doesn't exist
         """
-        # Get the role
-        role_query = await db.execute(select(Role).where(Role.id == role_id))
-        role = role_query.scalar_one_or_none()
-        if not role:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Role with ID {role_id} not found"
+        from src.app.database.action_menu import ActionMenu
+        
+        # Get the role with status
+        role_query = await db.execute(
+            select(Role, Status)
+            .outerjoin(Status, Role.status == Status.value_id)
+            .where(Role.id == role_id)
+        )
+        role_result = role_query.first()
+        
+        if not role_result:
+            raise error_response(
+                message=f"Role with ID {role_id} not found",
+                status_code=404
             )
+        
+        role, status_obj = role_result
 
-        # Load permissions explicitly via the association table
+        # Load permissions with action menu info via the association table
         perm_stmt = (
-            select(Permission)
+            select(Permission, RolePermission, ActionMenu)
             .join(RolePermission, Permission.id == RolePermission.permission_id)
+            .outerjoin(ActionMenu, RolePermission.action_menu_id == ActionMenu.id)
             .where(RolePermission.role_id == role_id)
         )
         perm_result = await db.execute(perm_stmt)
-        permissions = perm_result.scalars().all()
+        permission_rows = perm_result.all()
 
         # Return a serializable representation combining role and permissions
         return {
@@ -356,6 +449,7 @@ class RoleService:
             "name": role.name,
             "description": role.description,
             "status": role.status,
+            "status_name": status_obj.name if status_obj else None,
             "created_at": role.created_at,
             "updated_at": role.updated_at,
             "permissions": [
@@ -367,8 +461,10 @@ class RoleService:
                     "can_read": getattr(p, 'can_read', False),
                     "can_update": getattr(p, 'can_update', False),
                     "can_delete": getattr(p, 'can_delete', False),
+                    "action_menu_id": rp.action_menu_id if rp else None,
+                    "action_menu_name": am.name if am else None,
                 }
-                for p in permissions
+                for p, rp, am in permission_rows
             ]
         }
     
@@ -632,14 +728,21 @@ class RoleService:
         Raises:
             HTTPException: If role doesn't exist
         """
-        # Get role
-        role_query = await db.execute(select(Role).where(Role.id == role_id))
-        role = role_query.scalar_one_or_none()
-        if not role:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Role with ID {role_id} not found"
+        # Get role with status
+        role_query = await db.execute(
+            select(Role, Status)
+            .outerjoin(Status, Role.status == Status.value_id)
+            .where(Role.id == role_id)
+        )
+        role_result = role_query.first()
+        
+        if not role_result:
+            raise error_response(
+                message=f"Role with ID {role_id} not found",
+                status_code=404
             )
+        
+        role, role_status = role_result
         logger = logging.getLogger("role_service")
         logger.info(f"[ROLE] Retrieved role id={role_id}: {role}")
         
@@ -681,7 +784,7 @@ class RoleService:
         inactive_members_result = await db.execute(inactive_members_query)
         inactive_members = inactive_members_result.scalar_one()
         
-        # Build query for members
+        # Build query for members with status
         member_query = (
             select(
                 User.id,
@@ -689,6 +792,7 @@ class RoleService:
                 User.last_name,
                 User.email,
                 User.status,
+                Status.name.label('status_name'),
                 User.created_at.label('invited_at'),
                 User.updated_at.label('last_login'),
                 User.profile_image_id,
@@ -696,6 +800,7 @@ class RoleService:
             )
             .join(UserRole, User.id == UserRole.user_id)
             .outerjoin(File, User.profile_image_id == File.id)
+            .outerjoin(Status, User.status == Status.value_id)
             .where(UserRole.role_id == role_id)
         )
         
@@ -760,6 +865,7 @@ class RoleService:
                 "last_name": member.last_name,
                 "email": member.email,
                 "status": member.status,
+                "status_name": member.status_name if hasattr(member, 'status_name') else None,
                 "invited_at": member.invited_at,
                 "last_login": member.last_login,
                 "profile_image_url": profile_image_url
@@ -771,6 +877,7 @@ class RoleService:
             "name": role.name,
             "description": role.description,
             "status": role.status,
+            "status_name": role_status.name if role_status else None,
             "created_at": role.created_at,
             "updated_at": role.updated_at,
             "total_members": total_members,
@@ -813,9 +920,9 @@ class RoleService:
         role_query = await db.execute(select(Role).where(Role.id == role_id))
         role = role_query.scalar_one_or_none()
         if not role:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Role with ID {role_id} not found"
+            raise error_response(
+                message=f"Role with ID {role_id} not found",
+                status_code=404
             )
         
         try:
@@ -841,9 +948,9 @@ class RoleService:
             
         except IntegrityError as e:
             await db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, 
-                detail=f"Database error: {str(e)}"
+            raise error_response(
+                message=f"Database error: {str(e)}",
+                status_code=400
             )
             
     @staticmethod
@@ -872,9 +979,9 @@ class RoleService:
         user_query = await db.execute(select(User).where(User.id == user_id))
         user = user_query.scalar_one_or_none()
         if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"User with ID {user_id} not found"
+            raise error_response(
+                message=f"User with ID {user_id} not found",
+                status_code=404
             )
         
         try:
@@ -900,7 +1007,7 @@ class RoleService:
             
         except IntegrityError as e:
             await db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, 
-                detail=f"Database error: {str(e)}"
+            raise error_response(
+                message=f"Database error: {str(e)}",
+                status_code=400
             )

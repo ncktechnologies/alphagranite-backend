@@ -7,22 +7,38 @@ class PermissionBase(BaseModel):
     id: int
     name: str
     description: Optional[str] = None
+    can_create: bool = False
+    can_read: bool = False
+    can_update: bool = False
+    can_delete: bool = False
+    action_menu_id: Optional[int] = None
+    action_menu_name: Optional[str] = None
     
     class Config:
         from_attributes = True
 
+class ActionMenuPermission(BaseModel):
+    """Schema for action menu with CRUD permissions"""
+    action_menu_id: int = Field(..., description="Action menu ID")
+    can_create: bool = Field(False, description="Permission to create")
+    can_read: bool = Field(False, description="Permission to read")
+    can_update: bool = Field(False, description="Permission to update")
+    can_delete: bool = Field(False, description="Permission to delete")
+
 class RoleCreate(BaseModel):
     """Schema for creating a new role"""
-    name: str = Field(..., min_length=1, max_length=255)
-    description: Optional[str] = Field(None)
-    permission_ids: List[int] = Field(..., description="List of permission IDs to associate with the role")
+    name: str = Field(..., min_length=1, max_length=255, description="Role name")
+    description: Optional[str] = Field(None, description="Role description")
+    action_menu_permissions: List[ActionMenuPermission] = Field(..., description="List of action menus with their CRUD permissions")
+    user_ids: List[int] = Field(default_factory=list, description="List of user IDs to assign to this role")
     status: int = Field(1, description="Role status (1=Active, 2=Inactive)")
 
 class RoleUpdate(BaseModel):
     """Schema for updating an existing role"""
-    name: Optional[str] = Field(None, min_length=1, max_length=255)
-    description: Optional[str] = Field(None)
-    permission_ids: Optional[List[int]] = Field(None, description="List of permission IDs to associate with the role")
+    name: Optional[str] = Field(None, min_length=1, max_length=255, description="Role name")
+    description: Optional[str] = Field(None, description="Role description")
+    action_menu_permissions: Optional[List[ActionMenuPermission]] = Field(None, description="List of action menus with their CRUD permissions")
+    user_ids: Optional[List[int]] = Field(None, description="List of user IDs to assign to this role")
     status: Optional[int] = Field(None, description="Role status (1=Active, 2=Inactive)")
 
 class RoleStatusUpdate(BaseModel):
@@ -47,6 +63,7 @@ class RoleUserInfo(UserBasicInfo):
     """User information for detailed role member listing"""
     email: str
     status: int
+    status_name: Optional[str] = None
     invited_at: datetime
     last_login: Optional[datetime] = None
     
@@ -59,6 +76,7 @@ class RoleResponse(BaseModel):
     name: str
     description: Optional[str] = None
     status: int
+    status_name: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     

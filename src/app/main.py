@@ -21,6 +21,7 @@ from src.app.routers.file import router as file_router
 from src.app.utils.config import load_dotenv, STATIC_DIR
 from src.app.routers.health import router as health_router
 from src.app.routers.department import router as department_router 
+from src.app.routers.action_menu import action_menu_router, permission_router 
 
 # Load environment variables
 load_dotenv()
@@ -86,6 +87,8 @@ app.include_router(employee_router)
 app.include_router(department_router)
 app.include_router(file_router)
 app.include_router(role_router)
+app.include_router(action_menu_router)
+app.include_router(permission_router)
 
 
 

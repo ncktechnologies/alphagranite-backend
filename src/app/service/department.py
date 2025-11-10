@@ -475,6 +475,10 @@ class DepartmentService:
         result = await db.execute(query)
         users = result.scalars().all()
 
+        # Load status lookup (for department and users)
+        statuses_res = await db.execute(select(Status))
+        statuses = {s.value_id: s.name for s in statuses_res.scalars().all()}
+
         # Format user data
         user_data = [
             {
@@ -494,6 +498,17 @@ class DepartmentService:
             for user in users
         ]
 
+        # Create department info including status_name
+        department_info = {
+            "department_id": department.id,
+            "department_name": department.name,
+            "department_description": department.description,
+            "status": department.status,
+            "status_name": statuses.get(department.status)
+        }
+
+        return department_info, user_data, total_count, total_pages
+
     @staticmethod
     async def get_statuses(db: AsyncSession) -> List[Dict[str, Any]]:
         """
@@ -505,18 +520,3 @@ class DepartmentService:
             {"value_id": r.value_id, "name": r.name, "slug": r.slug}
             for r in rows
         ]
-
-        # Load status lookup (for department and users)
-        statuses_res = await db.execute(select(Status))
-        statuses = {s.value_id: s.name for s in statuses_res.scalars().all()}
-
-        # Create department info including status_name
-        department_info = {
-            "department_id": department.id,
-            "department_name": department.name,
-            "department_description": department.description,
-            "status": department.status,
-            "status_name": statuses.get(department.status)
-        }
-
-        return department_info, user_data, total_count, total_pages
