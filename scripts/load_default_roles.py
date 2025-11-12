@@ -1,18 +1,8 @@
 import os
 import sys
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
-
-# Add project root to path
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, project_root)
-
-import os
-import sys
-from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
 
 # Add project root to path
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -72,43 +62,53 @@ def load_default_roles():
         # Insert roles
         for name, description in roles:
             db.execute(text("""
-                INSERT INTO roles (name, description, created_at, updated_at)
-                VALUES (:name, :description, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                INSERT INTO roles (name, description, status, created_at, updated_at)
+                VALUES (:name, :description, :status, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 ON CONFLICT (name) DO NOTHING
-            """), {"name": name, "description": description})
+            """), {"name": name, "description": description, "status": active_status_id})
         # Ensure permissions table exists
         db.execute(text("""
             CREATE TABLE IF NOT EXISTS permissions (
                 id SERIAL PRIMARY KEY,
                 name VARCHAR(255) NOT NULL UNIQUE,
                 description TEXT,
-                module VARCHAR(100),
-                action VARCHAR(100),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                can_create BOOLEAN DEFAULT false,
+                can_update BOOLEAN DEFAULT false,
+                can_delete BOOLEAN DEFAULT false,
+                can_read BOOLEAN DEFAULT false,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """))
         # Get action menu items
         result = db.execute(text("SELECT id, code FROM action_menus"))
         menu_items = {row[1]: row[0] for row in result.fetchall()}
-        # Default permissions
+        # Default permissions - simplified to match Permission model
         permissions = []
         for menu_slug, menu_id in menu_items.items():
-            permissions.extend([
-                (f"{menu_slug}.create", f"Create {menu_slug}", menu_slug, "create"),
-                (f"{menu_slug}.read", f"View {menu_slug}", menu_slug, "read"),
-                (f"{menu_slug}.update", f"Update {menu_slug}", menu_slug, "update"),
-                (f"{menu_slug}.delete", f"Delete {menu_slug}", menu_slug, "delete")
-            ])
-        permissions.extend([
-            ("reports.read", "View reports", "reports", "read"),
-            ("system.admin", "System administration", "system", "admin")
-        ])
-        for name, description, module, action in permissions:
+            # Create one permission per action menu with all CRUD flags
+            permissions.append((
+                f"{menu_slug}.all",
+                f"Full access to {menu_slug}",
+                True, True, True, True  # can_create, can_read, can_update, can_delete
+            ))
+        # Add system-wide permissions
+        permissions.append(("reports.view", "View reports", False, True, False, False))
+        permissions.append(("system.admin", "System administration", True, True, True, True))
+        
+        for name, description, can_create, can_read, can_update, can_delete in permissions:
             db.execute(text("""
-                INSERT INTO permissions (name, description, module, action, created_at)
-                VALUES (:name, :description, :module, :action, CURRENT_TIMESTAMP)
+                INSERT INTO permissions (name, description, can_create, can_read, can_update, can_delete, created_at, updated_at)
+                VALUES (:name, :description, :can_create, :can_read, :can_update, :can_delete, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 ON CONFLICT (name) DO NOTHING
-            """), {"name": name, "description": description, "module": module, "action": action})
+            """), {
+                "name": name,
+                "description": description,
+                "can_create": can_create,
+                "can_read": can_read,
+                "can_update": can_update,
+                "can_delete": can_delete
+            })
         # Ensure role_permissions table exists
         db.execute(text("""
             CREATE TABLE IF NOT EXISTS role_permissions (

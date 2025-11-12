@@ -1,17 +1,17 @@
-from typing import List, Optional
 from datetime import datetime
+from typing import List, Optional
 from sqlmodel import Session, select
 from src.app.utils.config import get_db
 from src.app.service.job import JobService
 from src.app.database.templating import Templating
 from src.app.interface.generated_schemas import (
-    Job, Fab, JobTechnicianWorkflow, FinalProgramming, CutList,
-    WorkStation, SalesCT, SlabSmith, Drafting, PlanningSection
+    JobTechnicianWorkflow, FinalProgramming, CutList,
+    WorkStation, SalesCT, SlabSmith, Drafting, PlanningSection,
 )
-from src.app.service.templating import TemplatingService
 from src.app.service.drafting import DraftingService
-from fastapi import APIRouter, Depends, HTTPException, Query, Form, UploadFile, File as FastAPIFile
+from src.app.service.templating import TemplatingService
 from src.app.utils.helpers import success_response, error_response
+from fastapi import APIRouter, Depends, HTTPException, Query, Form, UploadFile, File as FastAPIFile
 
 router = APIRouter()
 

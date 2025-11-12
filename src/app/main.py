@@ -21,16 +21,17 @@ from src.app.routers.file import router as file_router
 from src.app.utils.config import load_dotenv, STATIC_DIR
 from src.app.routers.health import router as health_router
 from src.app.routers.department import router as department_router 
-from src.app.routers.action_menu import action_menu_router, permission_router
+from src.app.routers.action_menu import action_menu_router, permission_router 
 
 # Import new business API routers
 from src.app.routers import jobs
-from src.app.routers import accounts
-from src.app.routers import stone_thickness
-from src.app.routers import stone_colors
 from src.app.routers import edges
-from src.app.routers import fab_types
 from src.app.routers import fabs 
+from src.app.routers import accounts
+from src.app.routers import fab_types
+from src.app.routers import stone_types
+from src.app.routers import stone_colors
+from src.app.routers import stone_thickness  
 
 # Load environment variables
 load_dotenv()
@@ -104,6 +105,7 @@ app.include_router(jobs.router, prefix="/api/v1", tags=["Jobs"])
 app.include_router(accounts.router, prefix="/api/v1", tags=["Accounts"])
 app.include_router(stone_thickness.router, prefix="/api/v1", tags=["Stone Thickness"])
 app.include_router(stone_colors.router, prefix="/api/v1", tags=["Stone Colors"])
+app.include_router(stone_types.router, prefix="/api/v1", tags=["Stone Types"])
 app.include_router(edges.router, prefix="/api/v1", tags=["Edges"])
 app.include_router(fab_types.router, prefix="/api/v1", tags=["Fab Types"])
 app.include_router(fabs.router, prefix="/api/v1", tags=["Fabs"])

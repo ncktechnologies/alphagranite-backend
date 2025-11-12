@@ -1,5 +1,5 @@
-from datetime import datetime
 from typing import Optional
+from datetime import datetime
 from pydantic import BaseModel, Field
 
 
@@ -149,6 +149,29 @@ class EdgeResponse(BaseModel):
     id: int
     name: str
     edge_type: str
+    description: Optional[str]
+    status_id: int
+    created_at: datetime
+    created_by: int
+    updated_at: Optional[datetime]
+    updated_by: Optional[int]
+
+
+# Stone Type Schemas
+class StoneTypeCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+
+
+class StoneTypeUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    description: Optional[str] = None
+    status_id: Optional[int] = None
+
+
+class StoneTypeResponse(BaseModel):
+    id: int
+    name: str
     description: Optional[str]
     status_id: int
     created_at: datetime

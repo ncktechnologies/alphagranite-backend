@@ -4,16 +4,8 @@ from typing import Optional, List
 from sqlmodel import SQLModel, Field
 
 # --- Jobs ---
-class Job(SQLModel, table=True):
-    __tablename__ = "jobs"
-    id: Optional[int] = Field(default=None, primary_key=True)
-    name: str = Field()
-    account_id: int = Field()
-    status_id: int = Field()
-    created_by: int = Field()
-    updated_by: Optional[int] = Field(default=None)
-    created_at: datetime = Field()
-    updated_at: Optional[datetime] = Field(default=None)
+# Note: Job model removed to avoid conflict with src.app.database.job
+# Import Job from src.app.database.job if needed
 
 # --- Templatings ---
 class Templating(SQLModel, table=True):
@@ -86,66 +78,13 @@ class WorkStation(SQLModel, table=True):
 
 
 # --- Fabs ---
-class Fab(SQLModel, table=True):
-    __tablename__ = "fabs"
-    id: Optional[int] = Field(default=None, primary_key=True)
-    fab_type: str = Field()
-    stone_colour: str = Field()
-    stone_thickness: str = Field()
-    edges: str = Field()
-    input_area: str = Field()
-    totl_sqft: str = Field()
-    notes: Optional[str] = Field(default=None)
-    sales_person_id: int = Field()
-    job_id: int = Field()
-    template_needed: bool = Field()
-    drafting_needed: bool = Field()
-    slab_smith_needed_ag: bool = Field()
-    slab_smith_needed_cust: bool = Field()
-    sct_needed: bool = Field(default=True)
-    final_programming_needed: bool = Field()
-    status_id: int = Field()
-    created_by: int = Field()
-    updated_by: Optional[int] = Field(default=None)
     created_at: datetime = Field()
     updated_at: Optional[datetime] = Field(default=None)
     curremt_stage: str = Field(description="equivalent to the table name of the process e.g templatings")
 
 # --- Stone Types ---
-class StoneType(SQLModel, table=True):
-    __tablename__ = "stone_types"
-    id: Optional[int] = Field(default=None, primary_key=True)
-    name: str = Field()
-    descripition: Optional[str] = Field(default=None)
-    status_id: int = Field()
-    created_by: int = Field()
-    updated_by: Optional[int] = Field(default=None)
-    created_at: datetime = Field()
-    updated_at: Optional[datetime] = Field(default=None)
 
 # --- Accounts ---
-class Account(SQLModel, table=True):
-    __tablename__ = "accounts"
-    id: Optional[int] = Field(default=None, primary_key=True)
-    name: str = Field()
-    account_id: int = Field()
-    descripition: Optional[str] = Field(default=None)
-    status_id: int = Field()
-    created_by: int = Field()
-    updated_by: Optional[int] = Field(default=None)
-    created_at: datetime = Field()
-    updated_at: Optional[datetime] = Field(default=None)
-    redraft_notes: Optional[str] = Field(default=None)
-    schedule_start_date: Optional[datetime] = Field(default=None)
-    technician_id: Optional[int] = Field(default=None)
-    schedule_due_date: Optional[datetime] = Field(default=None)
-    total_sqft: Optional[str] = Field(default=None)
-    technician_start_date: Optional[datetime] = Field(default=None)
-    technician_end_date: Optional[datetime] = Field(default=None)
-    status_id: Optional[int] = Field(default=None)
-    created_at: datetime = Field()
-    updated_at: Optional[datetime] = Field(default=None)
-    updated_by: int = Field()
 
 # --- Draftings ---
 class Drafting(SQLModel, table=True):
