@@ -1,3 +1,4 @@
+from src.app.middleware.jwt_auth import JWTAuthMiddleware
 
 
 
@@ -42,7 +43,9 @@ cors_methods = os.getenv("CORS_ALLOW_METHODS", "GET,POST,PUT,DELETE,OPTIONS,PATC
 cors_headers = os.getenv("CORS_ALLOW_HEADERS", "*").split(",")
 cors_credentials = os.getenv("CORS_ALLOW_CREDENTIALS", "true").lower() == "true"
 
+
 app = FastAPI(title="Alpha Granite Backend API", version="1.0.0")
+app.add_middleware(JWTAuthMiddleware)
 
 
 def custom_openapi():

@@ -1,4 +1,5 @@
 
+
 from datetime import datetime
 from sqlalchemy import select
 from typing import Any, Optional
@@ -7,11 +8,18 @@ from src.app.service.auth import AuthService
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.app.service.account import AccountService
 from src.app.interface.schemas import (
+    TokenSchema, RefreshTokenRequest,
     PasswordResetConfirm, UserProfileUpdate, UserResponse,
     LoginRequest, PasswordChangeRequest, PasswordResetRequest,
 )
+
+# ...existing code...
+
+# Place the refresh token endpoint after auth_router is defined
+
 from src.app.utils.constants import *
 from src.app.utils.config import ADMIN_EMAIL
+from src.app.interface.response_wrappers import SuccessResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from src.app.service.background import send_notification, save_audit_trail
 from src.app.utils.helpers import call_service, success_response, error_response
@@ -61,6 +69,54 @@ async def get_current_user(
 
     return user
 
+# Add refresh token endpoint for Swagger/OpenAPI
+@auth_router.post(
+    "/refresh-token",
+    response_model=SuccessResponse[TokenSchema],
+    summary="Refresh JWT tokens",
+    response_description="Returns a new access and refresh token.",
+    tags=["auth"],
+)
+async def refresh_token(
+    refresh_data: RefreshTokenRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Exchange a valid refresh token for a new access token and refresh token.
+
+    - **refresh_token**: The refresh token issued during login or previous refresh.
+
+    Returns a new access token and refresh token if the provided refresh token is valid and not expired.
+    """
+    try:
+        payload = auth_service.decode_token(refresh_data.refresh_token)
+        if payload.get("type") != "refresh":
+            raise error_response("Invalid refresh token type", status.HTTP_401_UNAUTHORIZED)
+        user_id = payload.get("user_id")
+        if not user_id:
+            raise error_response("Invalid refresh token payload", status.HTTP_401_UNAUTHORIZED)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise error_response(f"Invalid refresh token: {str(e)}", status.HTTP_401_UNAUTHORIZED)
+
+    # Check user still exists and is active
+    res = await db.execute(select(User).where(User.id == user_id))
+    user = res.scalars().first()
+    if not user or getattr(user, "status", None) != 1:
+        raise error_response("User not found or inactive", status.HTTP_401_UNAUTHORIZED)
+
+    # Generate new tokens
+    token_data = {
+        "sub": user.username,
+        "user_id": user.id,
+        "role_id": user.role_id,
+        "is_super_admin": user.is_super_admin,
+    }
+    access_token = auth_service.create_access_token(token_data)
+    refresh_token = auth_service.create_refresh_token({"sub": user.username, "user_id": user.id})
+    token_obj = TokenSchema(access_token=access_token, refresh_token=refresh_token, token_type="bearer")
+    return success_response(token_obj, "Tokens refreshed successfully")
 
 @auth_router.post("/login")
 async def login(

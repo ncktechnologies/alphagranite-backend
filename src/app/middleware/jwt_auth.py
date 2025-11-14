@@ -23,7 +23,9 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             
         auth_header = request.headers.get("Authorization")
         if not auth_header:
-            return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"detail": "Missing or invalid token"})
+            # Return standardized error shape used across the app
+            content = {"success": False, "message": "Missing or invalid token", "details": None}
+            return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content=content)
 
         # Accept either "Bearer <token>" or a raw token value to be more
         # forgiving with different client behaviours (e.g. Swagger UI sends
@@ -39,7 +41,16 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             payload = self.auth_service.decode_token(token)
             request.state.user = payload
         except HTTPException as e:
-            return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
+            # If the exception detail already contains our standardized
+            # error shape (dict), return it directly; otherwise wrap the
+            # string/detail into the standardized shape so clients always
+            # receive consistent error payloads.
+            detail = e.detail
+            if isinstance(detail, dict):
+                content = detail
+            else:
+                content = {"success": False, "message": str(detail), "details": None}
+            return JSONResponse(status_code=e.status_code, content=content)
         return await call_next(request)
 
 
@@ -69,7 +80,27 @@ class JWTBearer(HTTPBearer):
 
 
 # Dependency to get the current user
-async def get_current_user(request: Request):
+from src.app.database import get_db
+from sqlalchemy.future import select
+from src.app.database.user import User
+from sqlalchemy.ext.asyncio import AsyncSession
+
+
+async def get_current_user(request: Request, db: AsyncSession = Depends(get_db)):
+    """Dependency that returns the current User instance based on the token
+
+    The previous implementation accidentally defined a nested function and
+    returned None when used as a dependency. This version directly implements
+    the dependency and raises HTTPException on any authentication problem.
+    """
     if hasattr(request.state, "user"):
-        return request.state.user
+        payload = request.state.user
+        user_id = payload.get("user_id")
+        if not user_id:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        return user
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")

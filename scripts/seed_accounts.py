@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from sqlalchemy import text
-from src.app.utils.config import get_dbt_db
+from src.app.utils.config import get_db
 
 
 async def seed_accounts():

@@ -4,11 +4,12 @@ from sqlmodel import Session, select
 from src.app.utils.config import get_db
 from fastapi import APIRouter, Depends, HTTPException, Form
 from src.app.interface.generated_schemas import WorkStation
+from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import success_response, error_response
 
 router = APIRouter()
 
-@router.post("/workstation", response_model=WorkStation)
+@router.post("/workstation", response_model=SuccessResponse[WorkStation], operation_id="create_workstation_main")
 def create_workstation(
     planning_section_id: int = Form(...),
     workstation_name: str = Form(...),
@@ -36,7 +37,7 @@ def create_workstation(
     db.refresh(ws)
     return success_response(ws, "Workstation created successfully")
 
-@router.put("/workstation/{ws_id}", response_model=WorkStation)
+@router.put("/workstation/{ws_id}", response_model=SuccessResponse[WorkStation])
 def update_workstation(
     ws_id: int,
     planning_section_id: int = Form(...),
@@ -75,14 +76,14 @@ def delete_workstation(ws_id: int, db: Session = Depends(get_db)):
     db.commit()
     return success_response(None, "Workstation deleted successfully")
 
-@router.get("/workstation/by-name/{workstation_name}", response_model=WorkStation)
+@router.get("/workstation/by-name/{workstation_name}", response_model=SuccessResponse[WorkStation])
 def get_workstation_by_name(workstation_name: str, db: Session = Depends(get_db)):
     ws = db.exec(select(WorkStation).where(WorkStation.workstation_name == workstation_name)).first()
     if not ws:
         raise error_response("Workstation not found", 404)
     return success_response(ws, "Workstation retrieved successfully")
 
-@router.get("/workstation/active", response_model=List[WorkStation])
+@router.get("/workstation/active", response_model=SuccessResponse[List[WorkStation]])
 def get_active_workstations(
     planning_section_id: Optional[int] = None,
     search: Optional[str] = None,

@@ -1,21 +1,23 @@
 from datetime import datetime
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.app.database import get_db
-from src.app.database.stone_color import StoneColor
 from src.app.database.user import User
+from src.app.database.stone_color import StoneColor
 from src.app.interface.business_schemas import (
-    StoneColorCreate, StoneColorUpdate, StoneColorResponse
+    StoneColorCreate, StoneColorUpdate, StoneColorResponse,
 )
 from src.app.middleware.jwt_auth import get_current_user
+from src.app.interface.response_wrappers import SuccessResponse
+from src.app.utils.helpers import error_response, success_response
 
 router = APIRouter()
 
 
-@router.post("/stone-colors", response_model=StoneColorResponse, status_code=201)
+@router.post("/stone-colors", response_model=SuccessResponse[StoneColorResponse], status_code=201)
 async def create_stone_color(
     color_data: StoneColorCreate,
     db: AsyncSession = Depends(get_db),
@@ -26,7 +28,7 @@ async def create_stone_color(
     # Check if color name already exists
     color_check = await db.execute(select(StoneColor).where(StoneColor.name == color_data.name))
     if color_check.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Stone color already exists")
+        raise error_response("Stone color already exists", 400)
     
     # Create stone color
     stone_color = StoneColor(
@@ -41,11 +43,11 @@ async def create_stone_color(
     db.add(stone_color)
     await db.commit()
     await db.refresh(stone_color)
-    
-    return stone_color
+
+    return success_response(stone_color, "Stone color created successfully")
 
 
-@router.get("/stone-colors", response_model=List[StoneColorResponse])
+@router.get("/stone-colors", response_model=SuccessResponse[List[StoneColorResponse]])
 async def get_stone_colors(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
@@ -59,7 +61,8 @@ async def get_stone_colors(
     query = select(StoneColor)
     
     # Apply filters
-    if status_id:
+    # Use explicit None check so a provided 0 (invalid) won't be treated as "no filter".
+    if status_id is not None:
         query = query.where(StoneColor.status_id == status_id)
     
     if search:
@@ -71,11 +74,11 @@ async def get_stone_colors(
     
     result = await db.execute(query)
     colors = result.scalars().all()
-    
-    return colors
+
+    return success_response(colors, "Stone colors fetched successfully")
 
 
-@router.get("/stone-colors/{color_id}", response_model=StoneColorResponse)
+@router.get("/stone-colors/{color_id}", response_model=SuccessResponse[StoneColorResponse])
 async def get_stone_color(
     color_id: int,
     db: AsyncSession = Depends(get_db),
@@ -87,12 +90,12 @@ async def get_stone_color(
     stone_color = result.scalar_one_or_none()
     
     if not stone_color:
-        raise HTTPException(status_code=404, detail="Stone color not found")
-    
-    return stone_color
+        raise error_response("Stone color not found", 404)
+
+    return success_response(stone_color, "Stone color fetched successfully")
 
 
-@router.put("/stone-colors/{color_id}", response_model=StoneColorResponse)
+@router.put("/stone-colors/{color_id}", response_model=SuccessResponse[StoneColorResponse])
 async def update_stone_color(
     color_id: int,
     color_data: StoneColorUpdate,
@@ -106,16 +109,30 @@ async def update_stone_color(
     stone_color = result.scalar_one_or_none()
     
     if not stone_color:
-        raise HTTPException(status_code=404, detail="Stone color not found")
+        raise error_response("Stone color not found", 404)
     
     # Check name uniqueness if being updated
     if color_data.name and color_data.name != stone_color.name:
         color_check = await db.execute(select(StoneColor).where(StoneColor.name == color_data.name))
         if color_check.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="Stone color already exists")
+            raise error_response("Stone color already exists", 400)
     
     # Update fields
     update_data = color_data.model_dump(exclude_unset=True)
+
+    # Validate provided status_id to avoid DB foreign key violations
+    if "status_id" in update_data:
+        status_val = update_data.get("status_id")
+        if status_val is None or status_val == 0:
+            raise error_response("Missing or invalid 'status_id'", 400)
+
+        # Lazily import Status to avoid circular imports
+        from src.app.database.status import Status
+
+        status_result = await db.execute(select(Status).where(Status.id == status_val))
+        if not status_result.scalar_one_or_none():
+            raise error_response("Provided 'status_id' does not exist", 400)
+
     for field, value in update_data.items():
         setattr(stone_color, field, value)
     
@@ -124,29 +141,25 @@ async def update_stone_color(
     
     await db.commit()
     await db.refresh(stone_color)
-    
-    return stone_color
+
+    return success_response(stone_color, "Stone color updated successfully")
 
 
-@router.delete("/stone-colors/{color_id}", status_code=204)
+@router.delete("/stone-colors/{color_id}", response_model=SuccessResponse[None], status_code=200)
 async def delete_stone_color(
     color_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
 ):
     """Delete a stone color (soft delete by setting status to deleted)"""
-    
+
     result = await db.execute(select(StoneColor).where(StoneColor.id == color_id))
     stone_color = result.scalar_one_or_none()
-    
+
     if not stone_color:
-        raise HTTPException(status_code=404, detail="Stone color not found")
-    
-    # Soft delete by setting status to deleted (assuming status_id 3 is deleted)
-    stone_color.status_id = 3  # Deleted status
-    stone_color.updated_at = datetime.now()
-    stone_color.updated_by = current_user.id
-    
+        raise error_response("Stone color not found", 404)
+
+    # Perform a hard delete (remove the record)
+    await db.delete(stone_color)
     await db.commit()
-    
-    return None
+
+    return success_response(None, "Stone color deleted successfully")

@@ -1,21 +1,23 @@
 from datetime import datetime
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.database import get_db
 from src.app.database.edge import Edge
 from src.app.database.user import User
 from src.app.interface.business_schemas import (
-    EdgeCreate, EdgeUpdate, EdgeResponse
+    EdgeCreate, EdgeUpdate, EdgeResponse,
 )
 from src.app.middleware.jwt_auth import get_current_user
+from src.app.interface.response_wrappers import SuccessResponse
+from src.app.utils.helpers import error_response, success_response
 
 router = APIRouter()
 
 
-@router.post("/edges", response_model=EdgeResponse, status_code=201)
+@router.post("/edges", response_model=SuccessResponse[EdgeResponse], status_code=201)
 async def create_edge(
     edge_data: EdgeCreate,
     db: AsyncSession = Depends(get_db),
@@ -26,7 +28,7 @@ async def create_edge(
     # Check if edge name already exists
     edge_check = await db.execute(select(Edge).where(Edge.name == edge_data.name))
     if edge_check.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Edge already exists")
+        raise error_response("Edge already exists", 400)
     
     # Create edge
     edge = Edge(
@@ -42,10 +44,10 @@ async def create_edge(
     await db.commit()
     await db.refresh(edge)
     
-    return edge
+    return success_response(edge, "Edge created successfully")
 
 
-@router.get("/edges", response_model=List[EdgeResponse])
+@router.get("/edges", response_model=SuccessResponse[List[EdgeResponse]])
 async def get_edges(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
@@ -60,7 +62,8 @@ async def get_edges(
     query = select(Edge)
     
     # Apply filters
-    if status_id:
+    # Use explicit None check so a provided 0 (invalid) won't be treated as "no filter".
+    if status_id is not None:
         query = query.where(Edge.status_id == status_id)
     
     if edge_type:
@@ -76,10 +79,10 @@ async def get_edges(
     result = await db.execute(query)
     edges = result.scalars().all()
     
-    return edges
+    return success_response(edges, "Edges fetched successfully")
 
 
-@router.get("/edges/{edge_id}", response_model=EdgeResponse)
+@router.get("/edges/{edge_id}", response_model=SuccessResponse[EdgeResponse])
 async def get_edge(
     edge_id: int,
     db: AsyncSession = Depends(get_db),
@@ -91,12 +94,12 @@ async def get_edge(
     edge = result.scalar_one_or_none()
     
     if not edge:
-        raise HTTPException(status_code=404, detail="Edge not found")
-    
-    return edge
+        raise error_response("Edge not found", 404)
+
+    return success_response(edge, "Edge fetched successfully")
 
 
-@router.put("/edges/{edge_id}", response_model=EdgeResponse)
+@router.put("/edges/{edge_id}", response_model=SuccessResponse[EdgeResponse])
 async def update_edge(
     edge_id: int,
     edge_data: EdgeUpdate,
@@ -110,16 +113,30 @@ async def update_edge(
     edge = result.scalar_one_or_none()
     
     if not edge:
-        raise HTTPException(status_code=404, detail="Edge not found")
-    
+        raise error_response("Edge not found", 404)
+
     # Check name uniqueness if being updated
     if edge_data.name and edge_data.name != edge.name:
         edge_check = await db.execute(select(Edge).where(Edge.name == edge_data.name))
         if edge_check.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="Edge already exists")
+            raise error_response("Edge already exists", 400)
     
     # Update fields
     update_data = edge_data.model_dump(exclude_unset=True)
+
+    # Validate provided status_id to avoid DB foreign key violations
+    if "status_id" in update_data:
+        status_val = update_data.get("status_id")
+        if status_val is None or status_val == 0:
+            raise error_response("Missing or invalid 'status_id'", 400)
+
+        # Lazily import Status to avoid circular imports
+        from src.app.database.status import Status
+
+        status_result = await db.execute(select(Status).where(Status.id == status_val))
+        if not status_result.scalar_one_or_none():
+            raise error_response("Provided 'status_id' does not exist", 400)
+
     for field, value in update_data.items():
         setattr(edge, field, value)
     
@@ -128,15 +145,15 @@ async def update_edge(
     
     await db.commit()
     await db.refresh(edge)
-    
-    return edge
+
+    return success_response(edge, "Edge updated successfully")
 
 
-@router.delete("/edges/{edge_id}", status_code=204)
+@router.delete("/edges/{edge_id}", response_model=SuccessResponse[None], status_code=200)
 async def delete_edge(
     edge_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+  
 ):
     """Delete an edge (soft delete by setting status to deleted)"""
     
@@ -144,13 +161,9 @@ async def delete_edge(
     edge = result.scalar_one_or_none()
     
     if not edge:
-        raise HTTPException(status_code=404, detail="Edge not found")
+        raise error_response("Edge not found", 404)
     
-    # Soft delete by setting status to deleted (assuming status_id 3 is deleted)
-    edge.status_id = 3  # Deleted status
-    edge.updated_at = datetime.now()
-    edge.updated_by = current_user.id
-    
+    await db.delete(edge)
     await db.commit()
     
-    return None
+    return success_response(None, "Edge deleted successfully")

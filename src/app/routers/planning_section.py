@@ -4,11 +4,12 @@ from sqlmodel import Session, select
 from src.app.utils.config import get_db
 from fastapi import APIRouter, Depends, HTTPException, Form
 from src.app.interface.generated_schemas import PlanningSection
+from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import success_response, error_response
 
 router = APIRouter()
 
-@router.post("/planning-section", response_model=PlanningSection)
+@router.post("/planning-section", response_model=SuccessResponse[PlanningSection])
 def create_planning_section(
     plan_name: str = Form(...),
     plan_description: str = Form(...),
@@ -25,7 +26,7 @@ def create_planning_section(
     db.refresh(section)
     return success_response(section, "Planning section created successfully")
 
-@router.put("/planning-section/{section_id}", response_model=PlanningSection)
+@router.put("/planning-section/{section_id}", response_model=SuccessResponse[PlanningSection])
 def update_planning_section(
     section_id: int,
     plan_name: str = Form(...),
@@ -58,14 +59,14 @@ def delete_planning_section(section_id: int, db: Session = Depends(get_db)):
     db.commit()
     return success_response(None, "Planning section deleted successfully")
 
-@router.get("/planning-section/by-name/{plan_name}", response_model=PlanningSection)
+@router.get("/planning-section/by-name/{plan_name}", response_model=SuccessResponse[PlanningSection])
 def get_planning_section_by_name(plan_name: str, db: Session = Depends(get_db)):
     section = db.exec(select(PlanningSection).where(PlanningSection.plan_name == plan_name)).first()
     if not section:
         raise error_response("Planning section not found", 404)
     return success_response(section, "Planning section retrieved successfully")
 
-@router.get("/planning-section/active", response_model=List[PlanningSection])
+@router.get("/planning-section/active", response_model=SuccessResponse[List[PlanningSection]])
 def get_active_planning_sections(db: Session = Depends(get_db)):
     sections = db.exec(select(PlanningSection).where(PlanningSection.status == "active")).all()
     return success_response(sections, "Active planning sections retrieved successfully")

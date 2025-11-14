@@ -1,17 +1,19 @@
 from datetime import datetime
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
+from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.app.database import get_db
 from src.app.database.job import Job
-from src.app.database.account import Account
 from src.app.database.user import User
+from src.app.database.account import Account
 from src.app.interface.business_schemas import (
-    JobCreate, JobUpdate, JobResponse
+    JobCreate, JobUpdate, JobResponse,
 )
+from src.app.utils.helpers import error_response
+from src.app.utils.permissions import PermissionChecker
 from src.app.middleware.jwt_auth import get_current_user
 
 router = APIRouter()
@@ -21,7 +23,7 @@ router = APIRouter()
 async def create_job(
     job_data: JobCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(PermissionChecker("jobs", "create"))
 ):
     """Create a new job"""
     
@@ -29,12 +31,12 @@ async def create_job(
     account_result = await db.execute(select(Account).where(Account.id == job_data.account_id))
     account = account_result.scalar_one_or_none()
     if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
+        raise error_response("Account not found", 404)
     
     # Check if job number already exists
     job_check = await db.execute(select(Job).where(Job.job_number == job_data.job_number))
     if job_check.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Job number already exists")
+        raise error_response("Job number already exists", 400)
     
     # Create job
     job = Job(
@@ -65,16 +67,17 @@ async def get_jobs(
     status_id: Optional[int] = Query(None, description="Filter by status ID"),
     priority: Optional[str] = Query(None, description="Filter by priority"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(PermissionChecker("jobs", "read"))
 ):
     """Get list of jobs with optional filtering"""
     
     query = select(Job)
     
     # Apply filters
-    if account_id:
+    # Use explicit None checks so provided 0 values are handled explicitly
+    if account_id is not None:
         query = query.where(Job.account_id == account_id)
-    if status_id:
+    if status_id is not None:
         query = query.where(Job.status_id == status_id)
     if priority:
         query = query.where(Job.priority == priority)
@@ -100,7 +103,7 @@ async def get_job(
     job = result.scalar_one_or_none()
     
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise error_response("Job not found", 404)
     
     return job
 
@@ -119,19 +122,19 @@ async def update_job(
     job = result.scalar_one_or_none()
     
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise error_response("Job not found", 404)
     
     # Check account exists if being updated
     if job_data.account_id:
         account_result = await db.execute(select(Account).where(Account.id == job_data.account_id))
         if not account_result.scalar_one_or_none():
-            raise HTTPException(status_code=404, detail="Account not found")
+            raise error_response("Account not found", 404)
     
     # Check job number uniqueness if being updated
     if job_data.job_number and job_data.job_number != job.job_number:
         job_check = await db.execute(select(Job).where(Job.job_number == job_data.job_number))
         if job_check.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="Job number already exists")
+            raise error_response("Job number already exists", 400)
     
     # Update fields
     update_data = job_data.model_dump(exclude_unset=True)
@@ -159,7 +162,7 @@ async def delete_job(
     job = result.scalar_one_or_none()
     
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise error_response("Job not found", 404)
     
     # Soft delete by setting status to deleted (assuming status_id 3 is deleted)
     job.status_id = 3  # Deleted status
@@ -167,5 +170,5 @@ async def delete_job(
     job.updated_by = current_user.id
     
     await db.commit()
-    
+
     return None

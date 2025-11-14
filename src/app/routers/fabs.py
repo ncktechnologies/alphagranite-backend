@@ -1,19 +1,19 @@
 from datetime import datetime
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.app.database import get_db
 from src.app.database.fab import Fab
 from src.app.database.job import Job
 from src.app.database.user import User
+from src.app.database.edge import Edge
 from src.app.database.stone_type import StoneType
 from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness
-from src.app.database.edge import Edge
 from src.app.interface.business_schemas import (
-    FabCreate, FabUpdate, FabResponse
+    FabCreate, FabUpdate, FabResponse,
 )
 from src.app.middleware.jwt_auth import get_current_user
 
@@ -107,13 +107,14 @@ async def get_fabs(
     query = select(Fab)
     
     # Apply filters
-    if job_id:
+    # Use explicit None checks so provided falsy values are handled explicitly
+    if job_id is not None:
         query = query.where(Fab.job_id == job_id)
     if fab_type:
         query = query.where(Fab.fab_type.ilike(f"%{fab_type}%"))
-    if sales_person_id:
+    if sales_person_id is not None:
         query = query.where(Fab.sales_person_id == sales_person_id)
-    if status_id:
+    if status_id is not None:
         query = query.where(Fab.status_id == status_id)
     if current_stage:
         query = query.where(Fab.current_stage == current_stage)

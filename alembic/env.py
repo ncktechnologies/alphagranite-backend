@@ -31,8 +31,8 @@ from src.app.database.action_menu import ActionMenu
 from src.app.database.role_permission import RolePermission
 # Import business models from generated schemas to avoid duplicates
 from src.app.interface.generated_schemas import (
-    Job, Templating, SlabSmith, ShopPlanning, 
-    PlanningSection, WorkStation
+    PlanningSection, WorkStation,
+     Templating, SlabSmith, ShopPlanning, 
 )
 # Import any additional models here as needed
 

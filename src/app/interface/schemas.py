@@ -26,10 +26,14 @@ class LoginRequest(BaseModel):
     #             return v_bytes[:72].decode('utf-8', errors='ignore')
     #     return v
 
+
 class TokenSchema(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
     
 class TokenPayload(BaseModel):
     sub: str

@@ -447,7 +447,7 @@ def submit_draft_for_review(
     )
     return success_response(result, "Draft submitted for review successfully")
 
-@router.post("/workstation")
+@router.post("/workstation", operation_id="create_workstation_job_extras")
 def create_workstation(
     planning_section_id: int = Form(...),
     workstation_name: str = Form(...),
