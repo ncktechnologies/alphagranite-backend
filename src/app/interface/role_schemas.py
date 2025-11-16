@@ -40,6 +40,7 @@ class RoleUpdate(BaseModel):
     action_menu_permissions: Optional[List[ActionMenuPermission]] = Field(None, description="List of action menus with their CRUD permissions")
     user_ids: Optional[List[int]] = Field(None, description="List of user IDs to assign to this role")
     status: Optional[int] = Field(None, description="Role status (1=Active, 2=Inactive)")
+    permission_ids: Optional[List[int]] = Field(None, description="List of permission IDs to assign to this role")
 
 class RoleStatusUpdate(BaseModel):
     """Schema for updating role status"""
