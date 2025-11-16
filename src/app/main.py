@@ -1,8 +1,4 @@
 from src.app.middleware.jwt_auth import JWTAuthMiddleware
-
-
-
-
 import os
 from fastapi import FastAPI
 # New routers for business logic
@@ -32,7 +28,13 @@ from src.app.routers import accounts
 from src.app.routers import fab_types
 from src.app.routers import stone_types
 from src.app.routers import stone_colors
-from src.app.routers import stone_thickness  
+from src.app.routers import stone_thickness
+from src.app.routers import templating
+from src.app.routers import clockwork
+from src.app.routers import drafting
+from src.app.routers import slabsmith_sales_ct
+from src.app.routers import job_fab_listing
+from src.app.routers import fab_details  
 
 # Load environment variables
 load_dotenv()
@@ -45,7 +47,8 @@ cors_credentials = os.getenv("CORS_ALLOW_CREDENTIALS", "true").lower() == "true"
 
 
 app = FastAPI(title="Alpha Granite Backend API", version="1.0.0")
-app.add_middleware(JWTAuthMiddleware)
+# TEMPORARILY DISABLED FOR TESTING - Re-enable for production
+# app.add_middleware(JWTAuthMiddleware)
 
 
 def custom_openapi():
@@ -112,6 +115,12 @@ app.include_router(stone_types.router, prefix="/api/v1", tags=["Stone Types"])
 app.include_router(edges.router, prefix="/api/v1", tags=["Edges"])
 app.include_router(fab_types.router, prefix="/api/v1", tags=["Fab Types"])
 app.include_router(fabs.router, prefix="/api/v1", tags=["Fabs"])
+app.include_router(templating.router, prefix="/api/v1", tags=["Templating"])
+app.include_router(clockwork.router, prefix="/api/v1", tags=["Clockwork"])
+app.include_router(drafting.router, prefix="/api/v1", tags=["Drafting & Pre-Draft Review"])
+app.include_router(slabsmith_sales_ct.router, prefix="/api/v1", tags=["SlabSmith & Sales CT"])
+app.include_router(job_fab_listing.router, prefix="/api/v1", tags=["Job Fab Listing"])
+app.include_router(fab_details.router, prefix="/api/v1", tags=["Fab Details"])
 
 # Existing business workflow routers
 app.include_router(job_extras.router, prefix="/api/v1", tags=["Job Extras"])

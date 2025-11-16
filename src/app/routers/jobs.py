@@ -1,7 +1,6 @@
 from datetime import datetime
 from typing import List, Optional
 from sqlalchemy.future import select
-from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -12,7 +11,7 @@ from src.app.database.account import Account
 from src.app.interface.business_schemas import (
     JobCreate, JobUpdate, JobResponse,
 )
-from src.app.utils.helpers import error_response
+from src.app.utils.helpers import error_response, success_response
 from src.app.utils.permissions import PermissionChecker
 from src.app.middleware.jwt_auth import get_current_user
 
@@ -25,7 +24,7 @@ async def create_job(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(PermissionChecker("jobs", "create"))
 ):
-    """Create a new job"""
+    """Create a new job with job name, job number, and account_id"""
     
     # Check if account exists
     account_result = await db.execute(select(Account).where(Account.id == job_data.account_id))
@@ -74,7 +73,6 @@ async def get_jobs(
     query = select(Job)
     
     # Apply filters
-    # Use explicit None checks so provided 0 values are handled explicitly
     if account_id is not None:
         query = query.where(Job.account_id == account_id)
     if status_id is not None:

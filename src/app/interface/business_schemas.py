@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 from pydantic import BaseModel, Field
 
@@ -250,3 +250,254 @@ class FabResponse(BaseModel):
     created_by: int
     updated_at: Optional[datetime]
     updated_by: Optional[int]
+
+
+# Templating Schemas
+class TemplatingScheduleCreate(BaseModel):
+    fab_id: int = Field(..., gt=0)
+    technician_id: int = Field(..., gt=0)
+    schedule_start_date: datetime
+    schedule_due_date: datetime
+    total_sqft: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class TemplatingScheduleUpdate(BaseModel):
+    technician_id: Optional[int] = Field(None, gt=0)
+    schedule_start_date: Optional[datetime] = None
+    schedule_due_date: Optional[datetime] = None
+    total_sqft: Optional[str] = None
+    notes: Optional[str] = None
+    status_id: Optional[int] = None
+
+
+class TemplatingResponse(BaseModel):
+    id: int
+    fab_id: int
+    technician_id: Optional[int]
+    schedule_start_date: Optional[datetime]
+    schedule_due_date: Optional[datetime]
+    total_sqft: Optional[str]
+    notes: Optional[str]
+    is_templating_schedule: bool
+    status_id: int
+    created_at: datetime
+    updated_at: Optional[datetime]
+    updated_by: Optional[int]
+
+
+# Clockwork Schemas
+class ClockworkCreate(BaseModel):
+    fab_id: int = Field(..., gt=0)
+    technician_id: int = Field(..., gt=0)
+    table_name: str = Field(..., min_length=1, description="e.g., 'templatings' or 'draftings'")
+    table_id: int = Field(..., gt=0, description="ID of the related record in table_name")
+    started_at: datetime
+    completed_at: datetime
+    total_sqft_done: str
+    notes: Optional[str] = None
+    pause_reason: Optional[str] = None
+
+
+class ClockworkUpdate(BaseModel):
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    total_sqft_done: Optional[str] = None
+    notes: Optional[str] = None
+    pause_reason: Optional[str] = None
+
+
+class ClockworkResponse(BaseModel):
+    id: int
+    fab_id: int
+    technician_id: int
+    table_name: str
+    table_id: int
+    started_at: datetime
+    completed_at: datetime
+    total_sqft_done: str
+    notes: Optional[str]
+    pause_reason: Optional[str]
+    created_at: datetime
+    created_by: int
+
+
+# Drafting Schemas
+class DraftingCreate(BaseModel):
+    fab_id: int = Field(..., gt=0)
+    drafter_id: int = Field(..., gt=0)
+    scheduled_start_date: datetime
+    scheduled_end_date: datetime
+    total_sqft_required_to_draft: str
+
+
+class DraftingUpdate(BaseModel):
+    drafter_start_date: Optional[datetime] = None
+    drafter_end_date: Optional[datetime] = None
+    total_sqft_drafted: Optional[str] = None
+    no_of_piece_drafted: Optional[str] = None
+    draft_note: Optional[str] = None
+    mentions: Optional[str] = None
+    status_id: Optional[int] = None
+
+
+class DraftingSubmitUpdate(BaseModel):
+    total_sqft_drafted: str = Field(..., description="Total square feet completed")
+    no_of_piece_drafted: str = Field(..., description="Number of pieces drafted")
+    draft_note: Optional[str] = Field(None, description="Draft notes")
+    is_drafting_completed: bool = Field(default=False, description="Is drafting completed")
+    mentions: Optional[str] = Field(None, description="Comma-separated list of user IDs to notify")
+
+
+class DraftingResponse(BaseModel):
+    id: int
+    fab_id: int
+    drafter_id: int
+    scheduled_start_date: datetime
+    scheduled_end_date: datetime
+    drafter_start_date: Optional[datetime]
+    drafter_end_date: Optional[datetime]
+    total_sqft_required_to_draft: str
+    total_sqft_drafted: Optional[str]
+    no_of_piece_drafted: Optional[str]
+    draft_note: Optional[str]
+    mentions: Optional[str]
+    file_ids: Optional[str]
+    is_redrafting: bool
+    status_id: int
+    created_at: datetime
+    updated_at: Optional[datetime]
+    updated_by: Optional[int]
+
+
+# Pre Draft Review Schemas
+class PreDraftReviewCreate(BaseModel):
+    fab_id: int = Field(..., gt=0)
+    is_completed: bool = Field(default=False)
+    draft_notes: Optional[str] = None
+
+
+class PreDraftReviewUpdate(BaseModel):
+    is_completed: Optional[bool] = None
+    draft_notes: Optional[str] = None
+    is_redrafting_needed: Optional[bool] = None
+    redraft_notes: Optional[str] = None
+
+
+class PreDraftReviewResponse(BaseModel):
+    id: int
+    fab_id: int
+    draft_notes: Optional[str]
+    is_redrafting_needed: Optional[bool]
+    status_id: Optional[int]
+    created_at: datetime
+    updated_at: datetime
+    updated_by: int
+
+
+# SlabSmith Schemas
+class SlabSmithCreate(BaseModel):
+    fab_id: int = Field(..., gt=0)
+    slab_smith_type: str = Field(..., min_length=1)
+    drafter_id: int = Field(..., gt=0)
+    start_date: datetime
+    end_date: Optional[datetime] = None
+    total_sqft_completed: Optional[str] = None
+
+
+class SlabSmithUpdate(BaseModel):
+    end_date: Optional[datetime] = None
+    total_sqft_completed: Optional[str] = None
+    status_id: Optional[int] = None
+
+
+class SlabSmithResponse(BaseModel):
+    id: int
+    fab_id: int
+    slab_smith_type: str
+    drafter_id: int
+    start_date: datetime
+    end_date: Optional[datetime]
+    total_sqft_completed: Optional[str]
+    file_ids: Optional[str]
+    status_id: int
+    created_at: datetime
+    updated_at: Optional[datetime]
+    updated_by: Optional[int]
+
+
+# Sales CT / Review Schemas
+class SalesCTCreate(BaseModel):
+    fab_id: int = Field(..., gt=0)
+    is_revision_needed: bool = Field(default=False)
+
+
+class SalesCTUpdate(BaseModel):
+    is_revision_needed: Optional[bool] = None
+    is_revision_completed: Optional[bool] = None
+    revenue: Optional[float] = None
+    status_id: Optional[int] = None
+
+
+class SalesCTRevisionCreate(BaseModel):
+    fab_id: int = Field(..., gt=0)
+    revision_reason: str
+    revision_type: Optional[str] = None
+    file_ids: Optional[str] = Field(None, description="Comma-separated file IDs")
+
+
+class SalesCTRevisionUpdate(BaseModel):
+    is_revision_completed: bool = Field(default=False)
+    draft_note: Optional[str] = None
+    revision_type: Optional[str] = None
+
+
+class SalesCTResponse(BaseModel):
+    id: int
+    fab_id: int
+    is_revision_needed: bool
+    is_revision_completed: Optional[bool]
+    no_of_revisions: Optional[str]
+    current_revision_count: Optional[str]
+    status_id: int
+    created_at: datetime
+    updated_at: Optional[datetime]
+    updated_by: Optional[int]
+
+
+# File Management Schemas
+class FileAttachCreate(BaseModel):
+    entity_type: str = Field(..., description="e.g., 'drafting', 'slabsmith'")
+    entity_id: int = Field(..., gt=0)
+    file_id: int = Field(..., gt=0)
+
+
+class FileAttachResponse(BaseModel):
+    success: bool
+    message: str
+
+
+# Job with Fabs Response
+class FabDetailResponse(FabResponse):
+    stone_type_name: Optional[str] = None
+    stone_color_name: Optional[str] = None
+    stone_thickness_value: Optional[str] = None
+    edge_name: Optional[str] = None
+    sales_person_name: Optional[str] = None
+
+
+class JobWithFabsResponse(BaseModel):
+    id: int
+    name: str
+    job_number: str
+    account_id: int
+    account_name: Optional[str] = None
+    priority: Optional[str]
+    status_id: int
+    created_at: datetime
+    fabs: List[FabDetailResponse] = []
+
+
+# Table Names Response
+class TableNamesResponse(BaseModel):
+    table_names: List[str]
