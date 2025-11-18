@@ -91,7 +91,7 @@ async def schedule_templating(
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
         status_id=templating.status_id,
-        status_name=status.value_name if status else None,
+        status_name=status.name if status else None,
         created_at=templating.created_at,
         updated_at=templating.updated_at,
         updated_by=templating.updated_by
@@ -175,7 +175,7 @@ async def update_templating(
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
         status_id=templating.status_id,
-        status_name=status.value_name if status else None,
+        status_name=status.name if status else None,
         created_at=templating.created_at,
         updated_at=templating.updated_at,
         updated_by=templating.updated_by
@@ -253,7 +253,7 @@ async def get_templating(
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
         status_id=templating.status_id,
-        status_name=status.value_name if status else None,
+        status_name=status.name if status else None,
         created_at=templating.created_at,
         updated_at=templating.updated_at,
         updated_by=templating.updated_by
@@ -292,7 +292,7 @@ async def get_templating_by_fab(
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
         status_id=templating.status_id,
-        status_name=status.value_name if status else None,
+        status_name=status.name if status else None,
         created_at=templating.created_at,
         updated_at=templating.updated_at,
         updated_by=templating.updated_by
