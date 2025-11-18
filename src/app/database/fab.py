@@ -27,6 +27,7 @@ class Fab(SQLModel, table=True):
     final_programming_needed: bool = Field(default=True)
     
     current_stage: Optional[str] = Field(max_length=255, default=None)
+    next_stage: Optional[str] = Field(max_length=255, default=None)
     status_id: int = Field(foreign_key="status.value_id")
     created_at: datetime = Field(default_factory=datetime.now)
     created_by: int = Field(foreign_key="users.id")

@@ -223,6 +223,7 @@ class FabUpdate(BaseModel):
     sct_needed: Optional[bool] = None
     final_programming_needed: Optional[bool] = None
     current_stage: Optional[str] = None
+    next_stage: Optional[str] = None
     status_id: Optional[int] = None
 
 
@@ -250,6 +251,7 @@ class FabResponse(BaseModel):
     sct_needed: bool
     final_programming_needed: bool
     current_stage: Optional[str]
+    next_stage: Optional[str]
     status_id: int
     created_at: datetime
     created_by: int

@@ -117,11 +117,12 @@ async def mark_slabsmith_completed(
     slabsmith.updated_at = datetime.now()
     slabsmith.updated_by = current_user.id
     
-    # Update fab stage to next step (sales CT)
+    # Update fab stage to next step (sales check)
     fab_result = await db.execute(select(Fab).where(Fab.id == slabsmith.fab_id))
     fab = fab_result.scalar_one_or_none()
     if fab:
-        fab.current_stage = "sales_cts"
+        fab.current_stage = "sales_check"
+        fab.next_stage = "cut_list"  # Will be cut_list or revision based on review
         fab.updated_at = datetime.now()
         fab.updated_by = current_user.id
     
@@ -274,11 +275,12 @@ async def set_review_needed_no(
     sales_ct.updated_at = datetime.now()
     sales_ct.updated_by = current_user.id
     
-    # Update fab to next stage
+    # Update fab to next stage (cut list)
     fab_result = await db.execute(select(Fab).where(Fab.id == sales_ct.fab_id))
     fab = fab_result.scalar_one_or_none()
     if fab:
         fab.current_stage = "cut_list"
+        fab.next_stage = "final_programming"
         fab.updated_at = datetime.now()
         fab.updated_by = current_user.id
     
@@ -346,11 +348,12 @@ async def update_revision_type(
         sales_ct.is_revision_completed = True
         sales_ct.status_id = 3  # Completed
         
-        # Update fab to next stage
+        # Update fab to revision stage (will loop back to sales_check)
         fab_result = await db.execute(select(Fab).where(Fab.id == sales_ct.fab_id))
         fab = fab_result.scalar_one_or_none()
         if fab:
-            fab.current_stage = "cut_list"
+            fab.current_stage = "revision"
+            fab.next_stage = "sales_check"  # Revision loops back to sales check
             fab.updated_at = datetime.now()
             fab.updated_by = current_user.id
     

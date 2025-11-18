@@ -113,6 +113,7 @@ async def create_fab(
     fab = Fab(
         **fab_dict,
         current_stage="fab_created",
+        next_stage="templating",  # Next stage after creation
         status_id=1,  # Active/Created status
         created_by=current_user.id,
         created_at=datetime.now()

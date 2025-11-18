@@ -139,7 +139,8 @@ async def submit_draft_for_review(
         fab_result = await db.execute(select(Fab).where(Fab.id == drafting.fab_id))
         fab = fab_result.scalar_one_or_none()
         if fab:
-            fab.current_stage = "slab_smiths"  # Move to next stage
+            fab.current_stage = "sales_check"  # Move to sales check after drafting
+            fab.next_stage = "cut_list"  # Next will be cut_list (or revision if needed)
             fab.updated_at = datetime.now()
             fab.updated_by = current_user.id
     
@@ -313,6 +314,7 @@ async def mark_predraft_review_completed(
         
         # Move fab to drafting stage
         fab.current_stage = "drafting"
+        fab.next_stage = "sales_check"
         fab.updated_at = datetime.now()
         fab.updated_by = current_user.id
     
@@ -357,6 +359,7 @@ async def set_predraft_to_redraft(
     
     if fab:
         fab.current_stage = "templating"
+        fab.next_stage = "pre_draft_review"
         fab.updated_at = datetime.now()
         fab.updated_by = current_user.id
     

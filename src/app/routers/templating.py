@@ -64,8 +64,9 @@ async def schedule_templating(
         updated_by=None
     )
     
-    # Update fab current stage to templating
+    # Update fab: move to templating stage and set next stage to pre_draft_review
     fab.current_stage = "templating"
+    fab.next_stage = "pre_draft_review"
     fab.updated_at = datetime.now()
     fab.updated_by = current_user.id
     
@@ -95,10 +96,12 @@ async def unschedule_templating(
     templating.updated_at = datetime.now()
     templating.updated_by = current_user.id
     
-    # Update fab stage
+    # Reset fab stage back to fab_created with next_stage as templating
     fab_result = await db.execute(select(Fab).where(Fab.id == templating.fab_id))
     fab = fab_result.scalar_one_or_none()
     if fab and fab.current_stage == "templating":
+        fab.current_stage = "fab_created"
+        fab.next_stage = "templating"
         fab.updated_at = datetime.now()
         fab.updated_by = current_user.id
     
@@ -164,8 +167,9 @@ async def mark_templating_received(
     templating.updated_at = datetime.now()
     templating.updated_by = current_user.id
     
-    # Move fab to predraft review stage
+    # Move fab to predraft review stage and set next stage to drafting
     fab.current_stage = "pre_draft_review"
+    fab.next_stage = "drafting"
     fab.updated_at = datetime.now()
     fab.updated_by = current_user.id
     
