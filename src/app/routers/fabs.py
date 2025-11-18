@@ -60,8 +60,8 @@ def get_next_stage(current_stage: str) -> Optional[str]:
         
         return None  # Last stage, no next stage
     except ValueError:
-        # Current stage not in list, default to templating
-        return "templating"
+        # Current stage not in list, default to fab_created
+        return "fab_created"
 
 
 @router.post("/fabs", response_model=SuccessResponse[FabResponse], status_code=201)
@@ -103,7 +103,7 @@ async def create_fab(
     if not edge:
         raise error_response("Edge not found", 404)
     
-    # Create the fab and move directly to templating
+    # Create the fab and let it be on fab_created stage
     fab_dict = fab_data.model_dump()
     
     # Set default total_sqft to 1 if not provided (as per client requirement)
@@ -112,7 +112,7 @@ async def create_fab(
     
     fab = Fab(
         **fab_dict,
-        current_stage="fab_created",  # FAB goes directly to templating queue
+        current_stage="fab_created",
         status_id=1,  # Active/Created status
         created_by=current_user.id,
         created_at=datetime.now()
@@ -259,8 +259,8 @@ async def get_fab(
     # Determine success message based on stage
     message = "Fab fetched successfully"
     if fab_dict.get("current_stage") == "fab_created" and fab_dict.get("updated_at") is None:
-        # Just created (no updates yet), in templating queue
-        message = f"FAB {fab_dict['id']} submitted successfully for templating review!"
+        # Just created (no updates yet)
+        message = f"FAB {fab_dict['id']} submitted successfully for review!"
     
     return success_response(fab_dict, message)
 

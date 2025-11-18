@@ -21,6 +21,7 @@ if [ ! -f .env ]; then
     echo "Copying .env.example to .env..."
     cp .env.example .env
     echo -e "${RED}✗ Please update .env file with your production values before continuing!${NC}"
+    echo "Important: Update DATABASE_HOST with your AWS RDS endpoint"
     echo "Edit .env file and run this script again."
     exit 1
 fi
@@ -47,7 +48,7 @@ echo -e "${GREEN}✓ Docker Compose is installed${NC}"
 
 # Create necessary directories
 echo "Creating necessary directories..."
-mkdir -p static/uploads static/defaults logs nginx/ssl
+mkdir -p static/uploads static/defaults logs
 
 echo -e "${GREEN}✓ Directories created${NC}"
 
@@ -105,17 +106,16 @@ echo "=========================================="
 echo ""
 echo "Application is running at:"
 echo "  - API: http://localhost:8000"
-echo "  - Nginx: http://localhost (if enabled)"
+echo "  - API Docs: http://localhost:8000/docs"
 echo "  - Health Check: http://localhost:8000/health"
 echo ""
 echo "Useful commands:"
-echo "  - View logs: docker-compose logs -f web"
-echo "  - Stop: docker-compose down"
-echo "  - Restart: docker-compose restart"
-echo "  - Rebuild: docker-compose up -d --build"
+echo "  - View logs: make logs"
+echo "  - Stop: make stop"
+echo "  - Restart: make restart"
+echo "  - Rebuild: make build && make start"
+echo "  - Health check: make health"
 echo ""
-echo "Database is running at:"
-echo "  - Host: localhost"
-echo "  - Port: 5432"
-echo "  - Database: alpha_granite"
+echo "Database: Connected to AWS RDS"
 echo ""
+

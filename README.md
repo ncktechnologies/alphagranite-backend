@@ -15,6 +15,7 @@ cp .env.example .env
 ```
 
 That's it! The application will:
+
 - ✅ Automatically create/update database tables (Django-like migrations)
 - ✅ Remove orphaned tables not in models
 - ✅ Start all services with health checks
@@ -114,6 +115,7 @@ uvicorn src.app.main:app --reload
 ```
 
 The API will be available at:
+
 - Main API: http://localhost:8000
 - Health check: http://localhost:8000/health
 - API docs: http://localhost:8000/docs
@@ -147,14 +149,17 @@ The API will be available at:
 ## 📋 API Endpoints
 
 ### Authentication
+
 - `POST /auth/login` - User login
 - `POST /auth/register` - User registration
 - `POST /auth/refresh` - Refresh token
 
 ### Health
+
 - `GET /health` - System health check
 
 ### Business Operations
+
 - Jobs, FABs, Employees, Departments, etc.
 - See `/docs` for full API documentation
 - `DELETE /api/v1/items/{id}` - Delete item
@@ -183,6 +188,8 @@ ALLOWED_ORIGINS=*
 SECRET_KEY=your-secret-key
 ACCESS_TOKEN_EXPIRE_MINUTES=30
 ```
+
 <!-- database upgrade command -->
+
 alembic revision --autogenerate -m "Update user model"
 alembic upgrade head

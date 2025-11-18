@@ -27,16 +27,6 @@ else
     ERRORS=$((ERRORS + 1))
 fi
 
-# Check database connectivity
-echo ""
-echo "Checking database connectivity..."
-if docker-compose exec -T db pg_isready -U admin > /dev/null 2>&1; then
-    echo -e "${GREEN}✓ Database is accessible${NC}"
-else
-    echo -e "${RED}✗ Database is not accessible${NC}"
-    ERRORS=$((ERRORS + 1))
-fi
-
 # Check API health endpoint
 echo ""
 echo "Checking API health endpoint..."
@@ -55,7 +45,7 @@ echo "Checking migration logs..."
 if docker-compose logs web 2>/dev/null | grep -q "Auto Migration Completed Successfully"; then
     echo -e "${GREEN}✓ Migrations completed successfully${NC}"
 else
-    echo -e "${YELLOW}⚠ Migration status unclear - check logs${NC}"
+    echo -e "${YELLOW}⚠ Migration status unclear - check logs with: make logs${NC}"
 fi
 
 # Check disk space
@@ -91,6 +81,6 @@ else
     echo -e "${RED}✗ $ERRORS check(s) failed${NC}"
     echo "=========================================="
     echo ""
-    echo "Run 'docker-compose logs' to see detailed logs"
+    echo "Run 'make logs' to see detailed logs"
     exit 1
 fi

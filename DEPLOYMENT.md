@@ -3,6 +3,7 @@
 ## 🚀 Quick Start Deployment
 
 ### Prerequisites
+
 - Docker installed on your server
 - Docker Compose installed
 - Git installed
@@ -10,6 +11,7 @@
 ### Deployment Steps
 
 1. **Clone or pull the repository:**
+
    ```bash
    git clone https://github.com/segunisreal/alpha-granit.git
    cd alpha-granit
@@ -18,12 +20,14 @@
    ```
 
 2. **Create/Update .env file:**
+
    ```bash
    cp .env.example .env
    nano .env  # or vim .env
    ```
-   
+
    Update these critical values:
+
    - `DATABASE_PASSWORD` - Strong database password
    - `SECRET_KEY` - Random 32+ character string
    - `JWT_SECRET_KEY` - Random 32+ character string
@@ -37,6 +41,7 @@
    ```
 
 That's it! The application will:
+
 - ✅ Automatically create/update database tables
 - ✅ Remove tables not in models
 - ✅ Start all services
@@ -65,6 +70,7 @@ docker-compose restart web
 The Django-like migration system runs automatically on startup:
 
 ### What it does:
+
 1. **Creates missing tables** - Any new models are automatically created
 2. **Removes orphaned tables** - Tables not in models are dropped
 3. **Waits for database** - Ensures PostgreSQL is ready before starting
@@ -75,6 +81,7 @@ The Django-like migration system runs automatically on startup:
 This runs before the application starts every time.
 
 ### Manual Migration:
+
 ```bash
 # Run migration manually
 docker-compose exec web python scripts/auto_migrate.py
@@ -112,12 +119,14 @@ python scripts/auto_migrate.py
 ### Environment Variables (.env)
 
 **Required:**
+
 - `DATABASE_PASSWORD` - PostgreSQL password
 - `SECRET_KEY` - Application secret key
 - `JWT_SECRET_KEY` - JWT token secret
 - `ADMIN_PASSWORD` - Initial admin password
 
 **Optional:**
+
 - `APP_PORT` - API port (default: 8000)
 - `DATABASE_HOST` - DB host (default: db)
 - `CORS_ORIGINS` - Allowed origins
@@ -180,15 +189,17 @@ docker stats
 ## 🔐 SSL/HTTPS Setup (Production)
 
 1. **Get SSL certificate** (Let's Encrypt recommended):
+
    ```bash
    # Install certbot
    sudo apt-get install certbot
-   
+
    # Get certificate
    sudo certbot certonly --standalone -d yourdomain.com
    ```
 
 2. **Copy certificates:**
+
    ```bash
    sudo cp /etc/letsencrypt/live/yourdomain.com/fullchain.pem nginx/ssl/
    sudo cp /etc/letsencrypt/live/yourdomain.com/privkey.pem nginx/ssl/
@@ -271,6 +282,7 @@ docker-compose up -d --build web
 ### Port Conflicts
 
 If ports are already in use, update in `.env`:
+
 ```env
 APP_PORT=8001
 DATABASE_PORT=5433
@@ -322,6 +334,7 @@ docker system prune -a
 ## 📞 Support
 
 For issues or questions:
+
 - Check logs first: `docker-compose logs -f`
 - Review this documentation
 - Check Docker/FastAPI documentation

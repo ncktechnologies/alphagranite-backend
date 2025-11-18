@@ -3,18 +3,21 @@
 ## For Server Deployment:
 
 ### Step 1: Clone Repository
+
 ```bash
 git clone https://github.com/segunisreal/alpha-granit.git
 cd alpha-granit
 ```
 
 ### Step 2: Configure Environment
+
 ```bash
 cp .env.example .env
 nano .env
 ```
 
 **Update these critical values:**
+
 ```env
 DATABASE_PASSWORD=your_secure_password_here
 SECRET_KEY=your-32-char-secret-key-here
@@ -24,6 +27,7 @@ CORS_ORIGINS=https://yourfrontend.com
 ```
 
 ### Step 3: Deploy!
+
 ```bash
 chmod +x deploy.sh
 ./deploy.sh
@@ -32,6 +36,7 @@ chmod +x deploy.sh
 **That's it!** ✅
 
 The application will:
+
 - Build Docker images
 - Start PostgreSQL database
 - Run auto-migrations (create all tables)
@@ -80,11 +85,13 @@ curl http://localhost:8000/health
 ## Auto-Migration:
 
 ✅ **Runs automatically on startup**
+
 - Creates missing tables
 - Removes orphaned tables
 - No manual SQL needed!
 
 See migration logs:
+
 ```bash
 docker-compose logs web | grep -i migration
 ```
@@ -94,6 +101,7 @@ docker-compose logs web | grep -i migration
 ## Troubleshooting:
 
 **If something fails:**
+
 ```bash
 # Check logs
 docker-compose logs
