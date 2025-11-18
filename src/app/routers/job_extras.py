@@ -33,51 +33,54 @@ def list_jobs_with_fabs(
         result.append({"job": job, "fabs": fabs})
     return success_response(result, "Jobs with FABs retrieved successfully")
 
-@router.post("/templating/schedule")
-def schedule_templating(
-    fab_id: int,
-    technician_id: int,
-    schedule_start_date: str,
-    schedule_due_date: str,
-    total_sqft: str,
-    notes: Optional[str] = None,
-    db: Session = Depends(get_db),
-    created_by: int = 1
-):
-    service = TemplatingService(db)
-    result = service.schedule_template(
-        fab_id=fab_id,
-        technician_id=technician_id,
-        schedule_start_date=schedule_start_date,
-        schedule_due_date=schedule_due_date,
-        total_sqft=total_sqft,
-        notes=notes,
-        created_by=created_by
-    )
-    return success_response(result, "Templating scheduled successfully")
+# OLD ENDPOINT - DEPRECATED - Use the one in templating.py instead
+# @router.post("/templating/schedule")
+# def schedule_templating(
+#     fab_id: int,
+#     technician_id: int,
+#     schedule_start_date: str,
+#     schedule_due_date: str,
+#     total_sqft: str,
+#     notes: Optional[str] = None,
+#     db: Session = Depends(get_db),
+#     created_by: int = 1
+# ):
+#     service = TemplatingService(db)
+#     result = service.schedule_template(
+#         fab_id=fab_id,
+#         technician_id=technician_id,
+#         schedule_start_date=schedule_start_date,
+#         schedule_due_date=schedule_due_date,
+#         total_sqft=total_sqft,
+#         notes=notes,
+#         created_by=created_by
+#     )
+#     return success_response(result, "Templating scheduled successfully")
 
-@router.post("/templating/unschedule")
-def unschedule_templating(
-    templating_id: int,
-    db: Session = Depends(get_db),
-    updated_by: int = 1
-):
-    templating = db.get(Templating, templating_id)
-    if not templating:
-        raise error_response("Templating not found", 404)
-    templating.is_templating_schedule = False
-    templating.updated_by = updated_by
-    db.commit()
-    db.refresh(templating)
-    return success_response(templating, "Templating unscheduled successfully")
+# OLD ENDPOINT - DEPRECATED
+# @router.post("/templating/unschedule")
+# def unschedule_templating(
+#     templating_id: int,
+#     db: Session = Depends(get_db),
+#     updated_by: int = 1
+# ):
+#     templating = db.get(Templating, templating_id)
+#     if not templating:
+#         raise error_response("Templating not found", 404)
+#     templating.is_templating_schedule = False
+#     templating.updated_by = updated_by
+#     db.commit()
+#     db.refresh(templating)
+#     return success_response(templating, "Templating unscheduled successfully")
 
-@router.post("/templating/mark-received")
-def mark_templated_received(fab_id: int, db: Session = Depends(get_db), updated_by: int = 1):
-    service = TemplatingService(db)
-    result = service.mark_templated_received_and_move_to_predraft(fab_id, updated_by)
-    if not result:
-        raise error_response("Templating or FAB not found", 404)
-    return success_response(result, "Templating marked as received successfully")
+# OLD ENDPOINT - DEPRECATED
+# @router.post("/templating/mark-received")
+# def mark_templated_received(fab_id: int, db: Session = Depends(get_db), updated_by: int = 1):
+#     service = TemplatingService(db)
+#     result = service.mark_templated_received_and_move_to_predraft(fab_id, updated_by)
+#     if not result:
+#         raise error_response("Templating or FAB not found", 404)
+#     return success_response(result, "Templating marked as received successfully")
 
 @router.post("/predraft/complete")
 def set_predraft_completed(fab_id: int, completed: bool, notes: Optional[str] = None, db: Session = Depends(get_db), updated_by: int = 1):

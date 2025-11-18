@@ -34,7 +34,9 @@ from src.app.routers import users
 from src.app.routers import fab_types
 from src.app.routers import stone_types
 from src.app.routers import stone_colors
-from src.app.routers import stone_thickness  
+from src.app.routers import stone_thickness
+from src.app.routers import templating
+from src.app.routers import drafting  
 
 # Load environment variables
 load_dotenv()
@@ -120,6 +122,10 @@ app.include_router(stone_types.router, prefix="/api/v1", tags=["Stone Types"])
 app.include_router(edges.router, prefix="/api/v1", tags=["Edges"])
 app.include_router(fab_types.router, prefix="/api/v1", tags=["Fab Types"])
 app.include_router(fabs.router, prefix="/api/v1", tags=["Fabs"])
+
+# Workflow routers (templating, drafting, etc.)
+app.include_router(templating.router, prefix="/api/v1", tags=["Templating"])
+app.include_router(drafting.router, prefix="/api/v1", tags=["Drafting"])
 
 # Existing business workflow routers
 app.include_router(job_extras.router, prefix="/api/v1", tags=["Job Extras"])
