@@ -1,6 +1,7 @@
 from datetime import datetime
-from typing import Optional
-from sqlmodel import SQLModel, Field
+from typing import Optional, List
+from sqlmodel import SQLModel, Field, Column
+from sqlalchemy.dialects.postgresql import JSONB
 
 
 class Fab(SQLModel, table=True):
@@ -16,7 +17,7 @@ class Fab(SQLModel, table=True):
     edge_id: int = Field(foreign_key="edges.id")
     input_area: str = Field(max_length=255)
     total_sqft: float
-    notes: Optional[str] = None
+    notes: Optional[List[str]] = Field(default=None, sa_column=Column(JSONB))
     
     # Process steps flags
     template_needed: bool = Field(default=True)

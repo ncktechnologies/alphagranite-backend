@@ -13,6 +13,7 @@ from src.app.database.edge import Edge
 from src.app.database.stone_type import StoneType
 from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness
+from src.app.database.templating import Templating
 from src.app.interface.business_schemas import (
     FabCreate, FabUpdate, FabResponse,
 )
@@ -141,7 +142,11 @@ async def get_fabs(
 ):
     """Get list of fabs with optional filtering"""
     
-    # Build query with joins to get related data
+    # Use aliased User for sales_person and technician to avoid conflicts
+    from sqlalchemy.orm import aliased
+    TechnicianUser = aliased(User)
+    
+    # Build query with joins to get related data including templating
     query = select(
         Fab,
         User.first_name.label("sales_person_first_name"),
@@ -149,7 +154,12 @@ async def get_fabs(
         StoneType.name.label("stone_type_name"),
         StoneColor.name.label("stone_color_name"),
         StoneThickness.thickness.label("stone_thickness_value"),
-        Edge.name.label("edge_name")
+        Edge.name.label("edge_name"),
+        Templating.schedule_start_date.label("templating_schedule_start_date"),
+        Templating.schedule_due_date.label("templating_schedule_due_date"),
+        Templating.notes.label("templating_notes"),
+        TechnicianUser.first_name.label("technician_first_name"),
+        TechnicianUser.last_name.label("technician_last_name")
     ).select_from(Fab)
     
     # Join with related tables
@@ -158,6 +168,8 @@ async def get_fabs(
     query = query.join(StoneColor, Fab.stone_color_id == StoneColor.id, isouter=True)
     query = query.join(StoneThickness, Fab.stone_thickness_id == StoneThickness.id, isouter=True)
     query = query.join(Edge, Fab.edge_id == Edge.id, isouter=True)
+    query = query.join(Templating, Fab.id == Templating.fab_id, isouter=True)
+    query = query.join(TechnicianUser, Templating.technician_id == TechnicianUser.id, isouter=True)
     
     # Apply filters
     if job_id is not None:
@@ -187,6 +199,11 @@ async def get_fabs(
         stone_color_name = row[4]
         stone_thickness_value = row[5]
         edge_name = row[6]
+        templating_schedule_start_date = row[7]
+        templating_schedule_due_date = row[8]
+        templating_notes = row[9]
+        technician_first_name = row[10]
+        technician_last_name = row[11]
         
         # Convert to dict and serialize datetime objects
         fab_dict = {k: v.isoformat() if isinstance(v, datetime) else v 
@@ -196,6 +213,12 @@ async def get_fabs(
         fab_dict["stone_color_name"] = stone_color_name
         fab_dict["stone_thickness_value"] = stone_thickness_value
         fab_dict["edge_name"] = edge_name
+        
+        # Add templating data
+        fab_dict["templating_schedule_start_date"] = templating_schedule_start_date.isoformat() if templating_schedule_start_date else None
+        fab_dict["templating_schedule_due_date"] = templating_schedule_due_date.isoformat() if templating_schedule_due_date else None
+        fab_dict["templating_notes"] = templating_notes
+        fab_dict["technician_name"] = f"{technician_first_name} {technician_last_name}" if technician_first_name else None
         
         # Add next stage
         fab_dict["next_stage"] = get_next_stage(fab_dict.get("current_stage"))
@@ -213,6 +236,10 @@ async def get_fab(
 ):
     """Get a specific fab by ID with related data"""
     # Use a join query to get all related data in one go
+    # Use aliased User for sales_person and technician to avoid conflicts
+    from sqlalchemy.orm import aliased
+    TechnicianUser = aliased(User)
+    
     query = select(
         Fab,
         User.first_name.label("sales_person_first_name"),
@@ -220,7 +247,12 @@ async def get_fab(
         StoneType.name.label("stone_type_name"),
         StoneColor.name.label("stone_color_name"),
         StoneThickness.thickness.label("stone_thickness_value"),
-        Edge.name.label("edge_name")
+        Edge.name.label("edge_name"),
+        Templating.schedule_start_date.label("templating_schedule_start_date"),
+        Templating.schedule_due_date.label("templating_schedule_due_date"),
+        Templating.notes.label("templating_notes"),
+        TechnicianUser.first_name.label("technician_first_name"),
+        TechnicianUser.last_name.label("technician_last_name")
     ).select_from(Fab).where(Fab.id == fab_id)
     
     # Join with related tables
@@ -229,6 +261,8 @@ async def get_fab(
     query = query.join(StoneColor, Fab.stone_color_id == StoneColor.id, isouter=True)
     query = query.join(StoneThickness, Fab.stone_thickness_id == StoneThickness.id, isouter=True)
     query = query.join(Edge, Fab.edge_id == Edge.id, isouter=True)
+    query = query.join(Templating, Fab.id == Templating.fab_id, isouter=True)
+    query = query.join(TechnicianUser, Templating.technician_id == TechnicianUser.id, isouter=True)
     
     result = await db.execute(query)
     row = result.first()
@@ -244,6 +278,11 @@ async def get_fab(
     stone_color_name = row[4]
     stone_thickness_value = row[5]
     edge_name = row[6]
+    templating_schedule_start_date = row[7]
+    templating_schedule_due_date = row[8]
+    templating_notes = row[9]
+    technician_first_name = row[10]
+    technician_last_name = row[11]
     
     # Convert to dict and add related names
     fab_dict = {k: v.isoformat() if isinstance(v, datetime) else v 
@@ -253,6 +292,12 @@ async def get_fab(
     fab_dict["stone_color_name"] = stone_color_name
     fab_dict["stone_thickness_value"] = stone_thickness_value
     fab_dict["edge_name"] = edge_name
+    
+    # Add templating data
+    fab_dict["templating_schedule_start_date"] = templating_schedule_start_date.isoformat() if templating_schedule_start_date else None
+    fab_dict["templating_schedule_due_date"] = templating_schedule_due_date.isoformat() if templating_schedule_due_date else None
+    fab_dict["templating_notes"] = templating_notes
+    fab_dict["technician_name"] = f"{technician_first_name} {technician_last_name}" if technician_first_name else None
     
     # Add next stage to response
     fab_dict["next_stage"] = get_next_stage(fab_dict.get("current_stage"))

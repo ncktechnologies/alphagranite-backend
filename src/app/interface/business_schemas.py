@@ -243,7 +243,7 @@ class FabResponse(BaseModel):
     edge_name: Optional[str] = None
     input_area: str
     total_sqft: float
-    notes: Optional[str]
+    notes: Optional[List[str]] = None
     template_needed: bool
     drafting_needed: bool
     slab_smith_cust_needed: bool
@@ -257,6 +257,11 @@ class FabResponse(BaseModel):
     created_by: int
     updated_at: Optional[datetime]
     updated_by: Optional[int]
+    # Templating-related fields
+    templating_schedule_start_date: Optional[datetime] = None
+    templating_schedule_due_date: Optional[datetime] = None
+    templating_notes: Optional[List[str]] = None
+    technician_name: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -269,7 +274,7 @@ class TemplatingScheduleCreate(BaseModel):
     schedule_start_date: datetime = Field(..., description="Scheduled start date")
     schedule_due_date: datetime = Field(..., description="Scheduled due date")
     total_sqft: Optional[str] = Field(None, description="Total square feet")
-    notes: Optional[str] = Field(None, description="Additional notes")
+    notes: Optional[List[str]] = Field(None, description="Additional notes as array")
 
 
 class TemplatingScheduleUpdate(BaseModel):
@@ -277,7 +282,7 @@ class TemplatingScheduleUpdate(BaseModel):
     schedule_start_date: Optional[datetime] = None
     schedule_due_date: Optional[datetime] = None
     total_sqft: Optional[str] = None
-    notes: Optional[str] = None
+    notes: Optional[List[str]] = None
     status_id: Optional[int] = None
 
 
@@ -289,7 +294,7 @@ class TemplatingResponse(BaseModel):
     schedule_start_date: Optional[datetime]
     schedule_due_date: Optional[datetime]
     total_sqft: Optional[str]
-    notes: Optional[str]
+    notes: Optional[List[str]]
     is_templating_schedule: bool
     status_id: int
     status_name: Optional[str] = None  # Status description

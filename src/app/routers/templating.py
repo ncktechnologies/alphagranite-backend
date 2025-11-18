@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends, HTTPException, status, Body
@@ -182,6 +182,66 @@ async def update_templating(
     )
     
     return success_response(response_data, "Templating updated successfully")
+
+
+@router.post("/templating/{templating_id}/complete", response_model=SuccessResponse[TemplatingResponse])
+async def complete_templating(
+    templating_id: int,
+    actual_sqft: Optional[str] = None,
+    notes: Optional[List[str]] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Technician marks templating as complete.
+    Updates: actual square footage, notes (appends new notes to existing), status to completed.
+    """
+    
+    # Get templating record
+    result = await db.execute(select(Templating).where(Templating.id == templating_id))
+    templating = result.scalar_one_or_none()
+    if not templating:
+        raise error_response("Templating not found", 404)
+    
+    # Update templating record
+    if actual_sqft:
+        templating.total_sqft = actual_sqft
+    if notes:
+        # Append new notes to existing notes array
+        existing_notes = templating.notes or []
+        templating.notes = existing_notes + notes
+    
+    # Mark as completed (status_id = 2 for completed, adjust based on your status table)
+    templating.status_id = 2
+    templating.updated_at = datetime.now()
+    templating.updated_by = current_user.id
+    
+    await db.commit()
+    await db.refresh(templating)
+    
+    # Fetch technician and status details for enriched response
+    technician = await db.get(User, templating.technician_id) if templating.technician_id else None
+    status = await db.get(Status, templating.status_id)
+    
+    # Build enriched response
+    response_data = TemplatingResponse(
+        id=templating.id,
+        fab_id=templating.fab_id,
+        technician_id=templating.technician_id,
+        technician_name=f"{technician.first_name} {technician.last_name}" if technician else None,
+        schedule_start_date=templating.schedule_start_date,
+        schedule_due_date=templating.schedule_due_date,
+        total_sqft=templating.total_sqft,
+        notes=templating.notes,
+        is_templating_schedule=templating.is_templating_schedule,
+        status_id=templating.status_id,
+        status_name=status.name if status else None,
+        created_at=templating.created_at,
+        updated_at=templating.updated_at,
+        updated_by=templating.updated_by
+    )
+    
+    return success_response(response_data, "Templating marked as complete")
 
 
 @router.post("/templating/{templating_id}/mark-received", response_model=SuccessResponse[None])

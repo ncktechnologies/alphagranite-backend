@@ -1,7 +1,8 @@
 
 from datetime import datetime
 from typing import Optional, List
-from sqlmodel import SQLModel, Field
+from sqlmodel import SQLModel, Field, Column
+from sqlalchemy.dialects.postgresql import JSONB
 
 # --- Jobs ---
 # Note: Job model removed to avoid conflict with src.app.database.job
@@ -16,7 +17,7 @@ class Templating(SQLModel, table=True):
     schedule_start_date: Optional[datetime] = Field(default=None)
     schedule_due_date: Optional[datetime] = Field(default=None)
     total_sqft: Optional[str] = Field(default=None)
-    notes: Optional[str] = Field(default=None)
+    notes: Optional[List[str]] = Field(default=None, sa_column=Column(JSONB))
     is_templating_schedule: bool = Field(default=False)
     status_id: int = Field()
     created_at: datetime = Field()
@@ -167,7 +168,7 @@ class JobTechnicianWorkflow(SQLModel, table=True):
     fab_id: int = Field()
     technician_id: int = Field()
     table_name: str = Field(description="templating")
-    notes: Optional[str] = Field(default=None)
+    notes: Optional[List[str]] = Field(default=None, sa_column=Column(JSONB))
     pause_reason: Optional[str] = Field(default=None)
     total_sqft_done: str = Field()
     started_at: datetime = Field()
@@ -194,7 +195,7 @@ class FinalProgramming(SQLModel, table=True):
     no_of_piece_drafted: Optional[str] = Field(default=None)
     total_sqft_required_to_draft: str = Field()
     total_sqft_drafted: Optional[str] = Field(default=None)
-    notes: Optional[str] = Field(default=None)
+    notes: Optional[List[str]] = Field(default=None, sa_column=Column(JSONB))
 
 # --- Shop Planning Sections ---
 class ShopPlanningSection(SQLModel, table=True):
@@ -221,7 +222,7 @@ class OperationWorkflow(SQLModel, table=True):
     finished_at: datetime = Field()
     total_sqft_done: str = Field()
     reason_for_pause: str = Field()
-    notes: Optional[str] = Field(default=None)
+    notes: Optional[List[str]] = Field(default=None, sa_column=Column(JSONB))
     created_at: datetime = Field()
     updated_at: Optional[datetime] = Field(default=None)
     updated_by: Optional[int] = Field(default=None)
