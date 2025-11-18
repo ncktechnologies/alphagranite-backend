@@ -86,7 +86,7 @@ async def get_fab_detail_by_stage(
     # Add stage-specific data based on current_stage
     stage_data = None
     
-    if fab.current_stage == "templatings":
+    if fab.current_stage == "templating":
         templating_result = await db.execute(select(Templating).where(Templating.fab_id == fab_id))
         templating = templating_result.scalar_one_or_none()
         if templating:
@@ -104,7 +104,7 @@ async def get_fab_detail_by_stage(
                 "updated_at": templating.updated_at,
             }
     
-    elif fab.current_stage == "draftings":
+    elif fab.current_stage == "drafting":
         drafting_result = await db.execute(select(Drafting).where(Drafting.fab_id == fab_id))
         drafting = drafting_result.scalar_one_or_none()
         if drafting:

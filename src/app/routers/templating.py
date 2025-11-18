@@ -65,7 +65,7 @@ async def schedule_templating(
     )
     
     # Update fab current stage to templating
-    fab.current_stage = "templatings"
+    fab.current_stage = "templating"
     fab.updated_at = datetime.now()
     fab.updated_by = current_user.id
     
@@ -98,8 +98,7 @@ async def unschedule_templating(
     # Update fab stage
     fab_result = await db.execute(select(Fab).where(Fab.id == templating.fab_id))
     fab = fab_result.scalar_one_or_none()
-    if fab and fab.current_stage == "templatings":
-        fab.current_stage = "initial"
+    if fab and fab.current_stage == "templating":
         fab.updated_at = datetime.now()
         fab.updated_by = current_user.id
     
@@ -166,7 +165,7 @@ async def mark_templating_received(
     templating.updated_by = current_user.id
     
     # Move fab to predraft review stage
-    fab.current_stage = "pre_draft_reviews"
+    fab.current_stage = "pre_draft_review"
     fab.updated_at = datetime.now()
     fab.updated_by = current_user.id
     

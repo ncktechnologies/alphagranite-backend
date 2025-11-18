@@ -36,12 +36,14 @@ A production-grade FastAPI backend application for granite fabrication managemen
 ### Setup Steps
 
 1. **Clone the repository**
+
 ```bash
 git clone https://github.com/segunisreal/alpha-granit.git
 cd alpha-granit
 ```
 
 2. **Create virtual environment**
+
 ```bash
 # Windows
 python -m venv .venv
@@ -53,17 +55,20 @@ source .venv/bin/activate
 ```
 
 3. **Install dependencies**
+
 ```bash
 pip install -r requirements.txt
 ```
 
 4. **Configure environment**
+
 ```bash
 cp .env.example .env
 # Edit .env with your database credentials
 ```
 
 **Local .env configuration:**
+
 ```env
 DATABASE_HOST=localhost
 DATABASE_PORT=5432
@@ -80,11 +85,13 @@ DEBUG=True
 ```
 
 5. **Run auto-migration** (creates all database tables)
+
 ```bash
 python scripts/auto_migrate.py
 ```
 
 6. **Start the application**
+
 ```bash
 uvicorn src.app.main:app --reload --port 8000
 ```
@@ -114,18 +121,21 @@ uvicorn src.app.main:app --reload --port 8000
 ### Deployment Steps
 
 1. **Clone repository**
+
 ```bash
 git clone https://github.com/segunisreal/alpha-granit.git
 cd alpha-granit
 ```
 
 2. **Configure environment**
+
 ```bash
 cp .env.example .env
 nano .env  # or vim .env
 ```
 
 **Production .env configuration:**
+
 ```env
 # AWS RDS Database
 DATABASE_HOST=your-db.xxxxx.us-east-1.rds.amazonaws.com
@@ -149,17 +159,20 @@ APP_PORT=8000
 ```
 
 3. **Deploy**
+
 ```bash
 make deploy
 ```
 
 Or using the deploy script:
+
 ```bash
 chmod +x deploy.sh
 ./deploy.sh
 ```
 
 **That's it!** ✅ The application will:
+
 - Build Docker images
 - Connect to AWS RDS
 - Run auto-migrations (create all tables)
@@ -243,14 +256,17 @@ make logs | grep -i migration
 ## 🌐 API Endpoints
 
 ### Authentication
+
 - `POST /auth/login` - User login
-- `POST /auth/register` - User registration  
+- `POST /auth/register` - User registration
 - `POST /auth/refresh` - Refresh access token
 
 ### Health
+
 - `GET /health` - System health check
 
 ### Core Business Operations
+
 - **Jobs** - `/api/v1/jobs` - Business job management
 - **FABs** - `/api/v1/fabs` - Fabrication workflow (10 stages)
 - **Employees** - `/api/v1/employees` - Employee management
@@ -259,12 +275,14 @@ make logs | grep -i migration
 - **Files** - `/api/v1/files` - File upload/management
 
 ### Fabrication Resources
+
 - **Stone Types** - `/api/v1/stone-types`
 - **Stone Colors** - `/api/v1/stone-colors`
 - **Stone Thickness** - `/api/v1/stone-thickness`
 - **Edges** - `/api/v1/edges`
 
 ### Full Documentation
+
 Visit `/docs` for complete interactive API documentation
 
 ---
@@ -299,6 +317,7 @@ make logs | grep -i migration
 ### AWS RDS Connection Issues
 
 **Checklist:**
+
 - [ ] RDS Security Group allows inbound on port 5432
 - [ ] RDS endpoint is correct in `.env`
 - [ ] Database name, user, password are correct
@@ -306,6 +325,7 @@ make logs | grep -i migration
 - [ ] Network connectivity (try `telnet endpoint 5432`)
 
 **Test connection:**
+
 ```bash
 # From local machine
 psql -h your-endpoint.rds.amazonaws.com -U postgres -d alpha_granite
@@ -401,12 +421,14 @@ alpha-granit/
 ## 📦 What Gets Deployed
 
 ### Docker Container
+
 - FastAPI application (4 Uvicorn workers)
 - Auto-migration system (runs on startup)
 - Health monitoring endpoints
 - Request logging middleware
 
 ### External Services
+
 - **Database**: AWS RDS PostgreSQL (managed separately)
 - **Reverse Proxy**: Nginx (configure separately if needed)
 
@@ -461,6 +483,7 @@ This project is proprietary software for Alpha Granite.
 ## 🆘 Support
 
 For issues or questions:
+
 1. Check logs: `make logs`
 2. Run health check: `make health`
 3. Review this README and DEPLOYMENT.md

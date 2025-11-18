@@ -312,7 +312,7 @@ async def mark_predraft_review_completed(
         review.status_id = 2  # Completed status
         
         # Move fab to drafting stage
-        fab.current_stage = "draftings"
+        fab.current_stage = "drafting"
         fab.updated_at = datetime.now()
         fab.updated_by = current_user.id
     
@@ -356,7 +356,7 @@ async def set_predraft_to_redraft(
     fab = fab_result.scalar_one_or_none()
     
     if fab:
-        fab.current_stage = "templatings"
+        fab.current_stage = "templating"
         fab.updated_at = datetime.now()
         fab.updated_by = current_user.id
     
