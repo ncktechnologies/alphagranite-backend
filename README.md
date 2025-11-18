@@ -1,6 +1,35 @@
 # Alpha Granite Backend
 
-A FastAPI backend application with proper service architecture following best practices.
+A production-grade FastAPI backend application for granite fabrication management with automated database migrations and Docker deployment.
+
+## 🚀 Quick Deployment (Production)
+
+### One-Command Deployment
+
+```bash
+git clone https://github.com/segunisreal/alpha-granit.git
+cd alpha-granit
+cp .env.example .env
+# Edit .env with your production values
+./deploy.sh
+```
+
+That's it! The application will:
+- ✅ Automatically create/update database tables (Django-like migrations)
+- ✅ Remove orphaned tables not in models
+- ✅ Start all services with health checks
+- ✅ Set up Nginx reverse proxy
+
+**See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed deployment instructions**
+
+## 🎯 Features
+
+- **Auto Migrations**: Django-like migration system - no manual SQL needed
+- **Production Ready**: Docker + Docker Compose with multi-stage builds
+- **Security**: JWT authentication, CORS, rate limiting
+- **Health Checks**: Automated service health monitoring
+- **Scalable**: Nginx reverse proxy, 4 Uvicorn workers
+- **Observable**: Comprehensive logging and request tracking
 
 ## Architecture
 
@@ -48,6 +77,17 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
+## 🛠️ Local Development
+
+### Quick Start (Windows PowerShell)
+
+1. **Create and activate virtual environment**
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
 2. **Install dependencies**
 
 ```powershell
@@ -61,7 +101,13 @@ copy .env.example .env
 # Edit .env to set your DATABASE_URL and other configurations
 ```
 
-4. **Run the application**
+4. **Run auto migration (creates/updates tables)**
+
+```powershell
+python scripts/auto_migrate.py
+```
+
+5. **Run the application**
 
 ```powershell
 uvicorn src.app.main:app --reload
@@ -71,18 +117,46 @@ The API will be available at:
 - Main API: http://localhost:8000
 - Health check: http://localhost:8000/health
 - API docs: http://localhost:8000/docs
-- Items API: http://localhost:8000/api/v1/items
+- Interactive API docs: http://localhost:8000/redoc
 
-## API Endpoints
+## 🐳 Docker Commands
+
+```bash
+# Start application
+./manage.sh start
+
+# View logs
+./manage.sh logs
+
+# Run migrations
+./manage.sh migrate
+
+# Database backup
+./manage.sh backup
+
+# Open shell in container
+./manage.sh shell
+
+# Check status
+./manage.sh status
+
+# See all commands
+./manage.sh
+```
+
+## 📋 API Endpoints
+
+### Authentication
+- `POST /auth/login` - User login
+- `POST /auth/register` - User registration
+- `POST /auth/refresh` - Refresh token
 
 ### Health
-- `GET /health` - Health check
+- `GET /health` - System health check
 
-### Items
-- `GET /api/v1/items` - List items (with pagination)
-- `POST /api/v1/items` - Create item
-- `GET /api/v1/items/{id}` - Get item by ID
-- `PUT /api/v1/items/{id}` - Update item
+### Business Operations
+- Jobs, FABs, Employees, Departments, etc.
+- See `/docs` for full API documentation
 - `DELETE /api/v1/items/{id}` - Delete item
 
 ## Environment Variables

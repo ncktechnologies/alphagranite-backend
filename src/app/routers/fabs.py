@@ -23,6 +23,7 @@ router = APIRouter()
 
 # Define the fab workflow stages in order (based on client workflow)
 FAB_STAGES = [
+    "fab_created",          # Stage 1: Fab Created
     "templating",           # Stage 2: Templating Queue
     "pre_draft_review",     # Stage 3: Pre-Draft Review
     "drafting",             # Stage 4: CAD/Drafting Department
@@ -40,7 +41,7 @@ def get_next_stage(current_stage: str) -> Optional[str]:
     Returns None if current stage is the last stage (shop_planning).
     """
     if not current_stage or current_stage == "fab_created":
-        return "templating"
+        return "fab_created"
     
     # Special case: revision always goes back to sales_check
     if current_stage == "revision":
@@ -102,7 +103,7 @@ async def create_fab(
     if not edge:
         raise error_response("Edge not found", 404)
     
-    # Create the fab with initial stage as 'fab_created'
+    # Create the fab and move directly to templating
     fab_dict = fab_data.model_dump()
     
     # Set default total_sqft to 1 if not provided (as per client requirement)
@@ -111,7 +112,7 @@ async def create_fab(
     
     fab = Fab(
         **fab_dict,
-        current_stage="fab_created",  # Initial stage when FAB is created
+        current_stage="fab_created",  # FAB goes directly to templating queue
         status_id=1,  # Active/Created status
         created_by=current_user.id,
         created_at=datetime.now()
@@ -257,8 +258,8 @@ async def get_fab(
     
     # Determine success message based on stage
     message = "Fab fetched successfully"
-    if fab_dict.get("current_stage") == "fab_created":
-        # Just created, moving to templating queue
+    if fab_dict.get("current_stage") == "fab_created" and fab_dict.get("updated_at") is None:
+        # Just created (no updates yet), in templating queue
         message = f"FAB {fab_dict['id']} submitted successfully for templating review!"
     
     return success_response(fab_dict, message)
