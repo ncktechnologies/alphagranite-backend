@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Body
 
 from src.app.database import get_db
 from src.app.database.user import User
@@ -22,7 +22,7 @@ router = APIRouter()
 
 @router.post("/templating/schedule", response_model=SuccessResponse[TemplatingResponse], status_code=201)
 async def schedule_templating(
-    templating_data: TemplatingScheduleCreate,
+    templating_data: TemplatingScheduleCreate = Body(...),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
