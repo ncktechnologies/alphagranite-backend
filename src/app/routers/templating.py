@@ -22,7 +22,8 @@ router = APIRouter()
 
 @router.post("/templating/schedule", response_model=SuccessResponse[TemplatingResponse], status_code=201)
 async def schedule_templating(
-    templating_data: TemplatingScheduleCreate = Body(...),
+    *,
+    templating_data: TemplatingScheduleCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):

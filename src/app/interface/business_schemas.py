@@ -264,12 +264,12 @@ class FabResponse(BaseModel):
 
 # Templating Schemas
 class TemplatingScheduleCreate(BaseModel):
-    fab_id: int = Field(..., gt=0)
-    technician_id: int = Field(..., gt=0)
-    schedule_start_date: datetime
-    schedule_due_date: datetime
-    total_sqft: Optional[str] = None
-    notes: Optional[str] = None
+    fab_id: int = Field(..., gt=0, description="FAB ID")
+    technician_id: int = Field(..., gt=0, description="Technician ID")
+    schedule_start_date: datetime = Field(..., description="Scheduled start date")
+    schedule_due_date: datetime = Field(..., description="Scheduled due date")
+    total_sqft: Optional[str] = Field(None, description="Total square feet")
+    notes: Optional[str] = Field(None, description="Additional notes")
 
 
 class TemplatingScheduleUpdate(BaseModel):
