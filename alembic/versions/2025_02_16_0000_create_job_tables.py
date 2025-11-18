@@ -17,6 +17,24 @@ branch_labels = None
 depends_on = None
 
 
+
+
+def table_exists(table_name):
+    """Check if a table exists in the database."""
+    conn = op.get_bind()
+    from sqlalchemy import inspect
+    inspector = inspect(conn)
+    return table_name in inspector.get_table_names()
+
+
+def create_table_if_not_exists(table_name, *args, **kwargs):
+    """Create a table only if it doesn't already exist."""
+    if not table_exists(table_name):
+        op.create_table(table_name, *args, **kwargs)
+        print(f"Created table: {table_name}")
+    else:
+        print(f"Skipped table (already exists): {table_name}")
+
 def upgrade():
     # Create enum types
     job_status = sa.Enum('draft', 'published', 'closed', 'archived', name='jobstatus')
@@ -34,7 +52,7 @@ def upgrade():
     application_status.create(op.get_bind(), checkfirst=True)
     
     # Create jobs table
-    op.create_table(
+    create_table_if_not_exists(
         'jobs',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('title', sa.String(length=255), nullable=False, index=True),
@@ -62,7 +80,7 @@ def upgrade():
     )
     
     # Create job_applications table
-    op.create_table(
+    create_table_if_not_exists(
         'job_applications',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('job_id', sa.Integer(), nullable=False, index=True),

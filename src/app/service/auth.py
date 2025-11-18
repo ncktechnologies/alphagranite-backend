@@ -7,6 +7,9 @@ import logging
 from sqlalchemy import select
 from dotenv import load_dotenv
 
+# Load environment variables from .env file
+load_dotenv()
+
     # Database models are only required for methods that query the DB.
     # Wrapping these imports avoids ImportError when importing AuthService
     # in small utility scripts that don't have DB dependencies installed.
@@ -20,7 +23,6 @@ from src.app.database.permission import Permission
 from src.app.database.action_menu import ActionMenu
 from src.app.database.role_permission import RolePermission
 
-load_dotenv()
 
 class AuthService:
     def __init__(self):
@@ -31,8 +33,8 @@ class AuthService:
     # Prefer a scheme that doesn't suffer from bcrypt's 72-byte limit.
     # pbkdf2_sha256 is a widely-supported, pure-Python scheme and will
     # avoid "password cannot be longer than 72 bytes" errors.
-    # Keep bcrypt_sha256 in the list for compatibility with existing hashes.
-        self.pwd_context = CryptContext(schemes=["pbkdf2_sha256", "bcrypt_sha256"], deprecated="auto")
+    # bcrypt must come before pbkdf2_sha256 so existing bcrypt hashes are tried first.
+        self.pwd_context = CryptContext(schemes=["bcrypt", "pbkdf2_sha256", "bcrypt_sha256"], deprecated="auto")
 
     def verify_password(self, plain_password, hashed_password):
         # Do not silently truncate passwords here — pass through to the password

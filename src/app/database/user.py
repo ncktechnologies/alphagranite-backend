@@ -6,6 +6,7 @@ from sqlmodel import SQLModel, Field, Relationship
 if TYPE_CHECKING:
     from .user_role import UserRole
     from .department import Department
+    from .job import JobApplication
 
 class User(SQLModel, table=True):
     __tablename__ = "users"
@@ -40,4 +41,5 @@ class User(SQLModel, table=True):
     department_rel: Optional["Department"] = Relationship(back_populates="users")
     # Relationship to user_roles (association table)
     roles: Optional[List["UserRole"]] = Relationship(back_populates="user")
-  
+    # Relationship to job applications
+    job_applications: Optional[List["JobApplication"]] = Relationship(back_populates="applicant")

@@ -196,7 +196,7 @@ class FabCreate(BaseModel):
     stone_thickness_id: int = Field(..., gt=0)
     edge_id: int = Field(..., gt=0)
     input_area: str = Field(..., min_length=1, max_length=255)
-    total_sqft: float = Field(..., gt=0)
+    total_sqft: Optional[float] = Field(default=1.0, gt=0)  # Default to 1 if unknown (client requirement)
     notes: Optional[str] = None
     template_needed: bool = True
     drafting_needed: bool = True
@@ -231,10 +231,15 @@ class FabResponse(BaseModel):
     job_id: int
     fab_type: str
     sales_person_id: int
+    sales_person_name: Optional[str] = None
     stone_type_id: int
+    stone_type_name: Optional[str] = None
     stone_color_id: int
+    stone_color_name: Optional[str] = None
     stone_thickness_id: int
+    stone_thickness_value: Optional[str] = None
     edge_id: int
+    edge_name: Optional[str] = None
     input_area: str
     total_sqft: float
     notes: Optional[str]
@@ -250,6 +255,9 @@ class FabResponse(BaseModel):
     created_by: int
     updated_at: Optional[datetime]
     updated_by: Optional[int]
+
+    class Config:
+        from_attributes = True
 
 
 # Templating Schemas

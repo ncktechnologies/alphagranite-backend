@@ -108,13 +108,19 @@ async def create_employee(
     logger.info(f"[ROUTER] create_employee service result: type={type(result)} repr={result!r}")
     logger.info(f"[ROUTER] profile_image_id in data: {data.profile_image_id}, passed to service: {data.profile_image_id}")
 
+    # Extract employee and password from result
+    employee = result["employee"]
+    generated_password = result["password"]
     
     # Enrich employee with profile image URL
-    enriched_employee = await enrich_employee_with_profile_image(db, result)
+    enriched_employee = await enrich_employee_with_profile_image(db, employee)
+    
+    # Add generated password to response
+    enriched_employee["password"] = generated_password
     
     return success_response(
         data=enriched_employee,
-        message="Employee created successfully"
+        message="Employee created successfully. Password has been generated and sent to employee's email."
     )
 
 @employee_router.get("/{employee_id}")

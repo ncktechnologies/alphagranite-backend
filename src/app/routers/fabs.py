@@ -2,11 +2,12 @@ from datetime import datetime
 from typing import List, Optional
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 
 from src.app.database import get_db
 from src.app.database.fab import Fab
-from src.app.database.job import Job
+from src.app.database.business_job import BusinessJob
 from src.app.database.user import User
 from src.app.database.edge import Edge
 from src.app.database.stone_type import StoneType
@@ -15,70 +16,103 @@ from src.app.database.stone_thickness import StoneThickness
 from src.app.interface.business_schemas import (
     FabCreate, FabUpdate, FabResponse,
 )
+from src.app.interface.response_wrappers import SuccessResponse, error_response, success_response
 from src.app.middleware.jwt_auth import get_current_user
 
 router = APIRouter()
 
+# Define the fab workflow stages in order (based on client workflow)
+FAB_STAGES = [
+    "templating",           # Stage 2: Templating Queue
+    "pre_draft_review",     # Stage 3: Pre-Draft Review
+    "drafting",             # Stage 4: CAD/Drafting Department
+    "sales_check",          # Stage 5: Sales Department Review
+    "revision",             # Stage 6: Revisions Queue (loops back to sales_check)
+    "cut_list",             # Stage 7: Cut List Scheduling
+    "final_programming",    # Stage 8: Final Programming
+    "shop_planning"         # Stage 9: Shop Planning (final stage)
+]
 
-@router.post("/fabs", response_model=FabResponse, status_code=201)
+def get_next_stage(current_stage: str) -> Optional[str]:
+    """
+    Get the next stage in the fab workflow.
+    Special handling for revision loop: revision -> sales_check
+    Returns None if current stage is the last stage (shop_planning).
+    """
+    if not current_stage or current_stage == "fab_created":
+        return "templating"
+    
+    # Special case: revision always goes back to sales_check
+    if current_stage == "revision":
+        return "sales_check"
+    
+    try:
+        current_index = FAB_STAGES.index(current_stage)
+        # Skip revision stage in normal flow (it's only entered from sales_check)
+        next_index = current_index + 1
+        if current_index == FAB_STAGES.index("sales_check"):
+            # From sales_check, skip revision and go to cut_list (normal approval flow)
+            next_index = FAB_STAGES.index("cut_list")
+        
+        if next_index < len(FAB_STAGES) and FAB_STAGES[next_index] != "revision":
+            return FAB_STAGES[next_index]
+        
+        return None  # Last stage, no next stage
+    except ValueError:
+        # Current stage not in list, default to templating
+        return "templating"
+
+
+@router.post("/fabs", response_model=SuccessResponse[FabResponse], status_code=201)
 async def create_fab(
     fab_data: FabCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Create a new fab"""
+    """Create a new fab with validation"""
     
-    # Validate foreign key relationships
-    # Check if job exists
-    job_result = await db.execute(select(Job).where(Job.id == fab_data.job_id))
-    if not job_result.scalar_one_or_none():
-        raise HTTPException(status_code=404, detail="Job not found")
+    # Validate all foreign key relationships
+    # Job validation
+    job = await db.get(BusinessJob, fab_data.job_id)
+    if not job:
+        raise error_response("Job not found", 404)
     
-    # Check if sales person exists
-    sales_person_result = await db.execute(select(User).where(User.id == fab_data.sales_person_id))
-    if not sales_person_result.scalar_one_or_none():
-        raise HTTPException(status_code=404, detail="Sales person not found")
+    # Sales person validation
+    sales_person = await db.get(User, fab_data.sales_person_id)
+    if not sales_person:
+        raise error_response("Sales person not found", 404)
     
-    # Check if stone type exists
-    stone_type_result = await db.execute(select(StoneType).where(StoneType.id == fab_data.stone_type_id))
-    if not stone_type_result.scalar_one_or_none():
-        raise HTTPException(status_code=404, detail="Stone type not found")
+    # Stone type validation
+    stone_type = await db.get(StoneType, fab_data.stone_type_id)
+    if not stone_type:
+        raise error_response("Stone type not found", 404)
     
-    # Check if stone color exists
-    stone_color_result = await db.execute(select(StoneColor).where(StoneColor.id == fab_data.stone_color_id))
-    if not stone_color_result.scalar_one_or_none():
-        raise HTTPException(status_code=404, detail="Stone color not found")
+    # Stone color validation
+    stone_color = await db.get(StoneColor, fab_data.stone_color_id)
+    if not stone_color:
+        raise error_response("Stone color not found", 404)
     
-    # Check if stone thickness exists
-    thickness_result = await db.execute(select(StoneThickness).where(StoneThickness.id == fab_data.stone_thickness_id))
-    if not thickness_result.scalar_one_or_none():
-        raise HTTPException(status_code=404, detail="Stone thickness not found")
+    # Stone thickness validation
+    stone_thickness = await db.get(StoneThickness, fab_data.stone_thickness_id)
+    if not stone_thickness:
+        raise error_response("Stone thickness not found", 404)
     
-    # Check if edge exists
-    edge_result = await db.execute(select(Edge).where(Edge.id == fab_data.edge_id))
-    if not edge_result.scalar_one_or_none():
-        raise HTTPException(status_code=404, detail="Edge not found")
+    # Edge validation
+    edge = await db.get(Edge, fab_data.edge_id)
+    if not edge:
+        raise error_response("Edge not found", 404)
     
-    # Create fab
+    # Create the fab with initial stage as 'fab_created'
+    fab_dict = fab_data.model_dump()
+    
+    # Set default total_sqft to 1 if not provided (as per client requirement)
+    if "total_sqft" not in fab_dict or fab_dict["total_sqft"] is None:
+        fab_dict["total_sqft"] = 1.0
+    
     fab = Fab(
-        job_id=fab_data.job_id,
-        fab_type=fab_data.fab_type,
-        sales_person_id=fab_data.sales_person_id,
-        stone_type_id=fab_data.stone_type_id,
-        stone_color_id=fab_data.stone_color_id,
-        stone_thickness_id=fab_data.stone_thickness_id,
-        edge_id=fab_data.edge_id,
-        input_area=fab_data.input_area,
-        total_sqft=fab_data.total_sqft,
-        notes=fab_data.notes,
-        template_needed=fab_data.template_needed,
-        drafting_needed=fab_data.drafting_needed,
-        slab_smith_cust_needed=fab_data.slab_smith_cust_needed,
-        slab_smith_ag_needed=fab_data.slab_smith_ag_needed,
-        sct_needed=fab_data.sct_needed,
-        final_programming_needed=fab_data.final_programming_needed,
-        current_stage="initial",  # Starting stage
-        status_id=1,  # Active status
+        **fab_dict,
+        current_stage="fab_created",  # Initial stage when FAB is created
+        status_id=1,  # Active/Created status
         created_by=current_user.id,
         created_at=datetime.now()
     )
@@ -87,7 +121,8 @@ async def create_fab(
     await db.commit()
     await db.refresh(fab)
     
-    return fab
+    # Get the created fab with related data
+    return await get_fab(fab.id, db, current_user)
 
 
 @router.get("/fabs", response_model=List[FabResponse])
@@ -104,10 +139,25 @@ async def get_fabs(
 ):
     """Get list of fabs with optional filtering"""
     
-    query = select(Fab)
+    # Build query with joins to get related data
+    query = select(
+        Fab,
+        User.first_name.label("sales_person_first_name"),
+        User.last_name.label("sales_person_last_name"),
+        StoneType.name.label("stone_type_name"),
+        StoneColor.name.label("stone_color_name"),
+        StoneThickness.thickness.label("stone_thickness_value"),
+        Edge.name.label("edge_name")
+    ).select_from(Fab)
+    
+    # Join with related tables
+    query = query.join(User, Fab.sales_person_id == User.id, isouter=True)
+    query = query.join(StoneType, Fab.stone_type_id == StoneType.id, isouter=True)
+    query = query.join(StoneColor, Fab.stone_color_id == StoneColor.id, isouter=True)
+    query = query.join(StoneThickness, Fab.stone_thickness_id == StoneThickness.id, isouter=True)
+    query = query.join(Edge, Fab.edge_id == Edge.id, isouter=True)
     
     # Apply filters
-    # Use explicit None checks so provided falsy values are handled explicitly
     if job_id is not None:
         query = query.where(Fab.job_id == job_id)
     if fab_type:
@@ -123,26 +173,95 @@ async def get_fabs(
     query = query.offset(skip).limit(limit).order_by(Fab.created_at.desc())
     
     result = await db.execute(query)
-    fabs = result.scalars().all()
+    rows = result.all()
     
-    return fabs
+    # Process the results to include related names
+    fabs = []
+    for row in rows:
+        fab = row[0]
+        sales_person_first_name = row[1]
+        sales_person_last_name = row[2]
+        stone_type_name = row[3]
+        stone_color_name = row[4]
+        stone_thickness_value = row[5]
+        edge_name = row[6]
+        
+        # Convert to dict and serialize datetime objects
+        fab_dict = {k: v.isoformat() if isinstance(v, datetime) else v 
+                    for k, v in fab.__dict__.items() if not k.startswith('_')}
+        fab_dict["sales_person_name"] = f"{sales_person_first_name} {sales_person_last_name}" if sales_person_first_name else None
+        fab_dict["stone_type_name"] = stone_type_name
+        fab_dict["stone_color_name"] = stone_color_name
+        fab_dict["stone_thickness_value"] = stone_thickness_value
+        fab_dict["edge_name"] = edge_name
+        
+        # Add next stage
+        fab_dict["next_stage"] = get_next_stage(fab_dict.get("current_stage"))
+        
+        fabs.append(fab_dict)
+    
+    return success_response(fabs, "Fabs fetched successfully")
 
 
-@router.get("/fabs/{fab_id}", response_model=FabResponse)
+@router.get("/fabs/{fab_id}", response_model=SuccessResponse[FabResponse])
 async def get_fab(
     fab_id: int,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get a specific fab by ID"""
+    """Get a specific fab by ID with related data"""
+    # Use a join query to get all related data in one go
+    query = select(
+        Fab,
+        User.first_name.label("sales_person_first_name"),
+        User.last_name.label("sales_person_last_name"),
+        StoneType.name.label("stone_type_name"),
+        StoneColor.name.label("stone_color_name"),
+        StoneThickness.thickness.label("stone_thickness_value"),
+        Edge.name.label("edge_name")
+    ).select_from(Fab).where(Fab.id == fab_id)
     
-    result = await db.execute(select(Fab).where(Fab.id == fab_id))
-    fab = result.scalar_one_or_none()
+    # Join with related tables
+    query = query.join(User, Fab.sales_person_id == User.id, isouter=True)
+    query = query.join(StoneType, Fab.stone_type_id == StoneType.id, isouter=True)
+    query = query.join(StoneColor, Fab.stone_color_id == StoneColor.id, isouter=True)
+    query = query.join(StoneThickness, Fab.stone_thickness_id == StoneThickness.id, isouter=True)
+    query = query.join(Edge, Fab.edge_id == Edge.id, isouter=True)
     
-    if not fab:
-        raise HTTPException(status_code=404, detail="Fab not found")
+    result = await db.execute(query)
+    row = result.first()
     
-    return fab
+    if not row:
+        raise error_response("Fab not found", 404)
+    
+    # Unpack the row
+    fab = row[0]
+    sales_person_first_name = row[1]
+    sales_person_last_name = row[2]
+    stone_type_name = row[3]
+    stone_color_name = row[4]
+    stone_thickness_value = row[5]
+    edge_name = row[6]
+    
+    # Convert to dict and add related names
+    fab_dict = {k: v.isoformat() if isinstance(v, datetime) else v 
+                for k, v in fab.__dict__.items() if not k.startswith('_')}
+    fab_dict["sales_person_name"] = f"{sales_person_first_name} {sales_person_last_name}" if sales_person_first_name else None
+    fab_dict["stone_type_name"] = stone_type_name
+    fab_dict["stone_color_name"] = stone_color_name
+    fab_dict["stone_thickness_value"] = stone_thickness_value
+    fab_dict["edge_name"] = edge_name
+    
+    # Add next stage to response
+    fab_dict["next_stage"] = get_next_stage(fab_dict.get("current_stage"))
+    
+    # Determine success message based on stage
+    message = "Fab fetched successfully"
+    if fab_dict.get("current_stage") == "fab_created":
+        # Just created, moving to templating queue
+        message = f"FAB {fab_dict['id']} submitted successfully for templating review!"
+    
+    return success_response(fab_dict, message)
 
 
 @router.put("/fabs/{fab_id}", response_model=FabResponse)
@@ -236,7 +355,7 @@ async def get_fabs_by_job(
     """Get all fabs for a specific job"""
     
     # Check if job exists
-    job_result = await db.execute(select(Job).where(Job.id == job_id))
+    job_result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
     if not job_result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Job not found")
     

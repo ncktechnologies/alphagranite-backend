@@ -7,7 +7,7 @@ class Fab(SQLModel, table=True):
     __tablename__ = "fabs"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    job_id: int = Field(foreign_key="jobs.id")
+    job_id: int = Field(foreign_key="business_jobs.id")
     fab_type: str = Field(max_length=255)
     sales_person_id: int = Field(foreign_key="users.id")
     stone_type_id: int = Field(foreign_key="stone_types.id")

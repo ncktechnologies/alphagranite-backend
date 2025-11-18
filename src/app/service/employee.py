@@ -141,7 +141,11 @@ class EmployeeService:
                 user_id=current_user_id
             )
 
-            return new_employee
+            # Return employee with generated password
+            return {
+                "employee": new_employee,
+                "password": password
+            }
 
         except IntegrityError as e:
             await db.rollback()
