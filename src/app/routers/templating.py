@@ -8,6 +8,7 @@ from src.app.database import get_db
 from src.app.database.user import User
 from src.app.database.fab import Fab
 from src.app.database.templating import Templating
+from src.app.database.status import Status
 from src.app.interface.business_schemas import (
     TemplatingScheduleCreate,
     TemplatingScheduleUpdate,
@@ -74,7 +75,29 @@ async def schedule_templating(
     await db.commit()
     await db.refresh(templating)
     
-    return success_response(templating, "Templating scheduled successfully")
+    # Fetch technician and status details for enriched response
+    technician = await db.get(User, templating.technician_id)
+    status = await db.get(Status, templating.status_id)
+    
+    # Build enriched response
+    response_data = TemplatingResponse(
+        id=templating.id,
+        fab_id=templating.fab_id,
+        technician_id=templating.technician_id,
+        technician_name=f"{technician.first_name} {technician.last_name}" if technician else None,
+        schedule_start_date=templating.schedule_start_date,
+        schedule_due_date=templating.schedule_due_date,
+        total_sqft=templating.total_sqft,
+        notes=templating.notes,
+        is_templating_schedule=templating.is_templating_schedule,
+        status_id=templating.status_id,
+        status_name=status.value_name if status else None,
+        created_at=templating.created_at,
+        updated_at=templating.updated_at,
+        updated_by=templating.updated_by
+    )
+    
+    return success_response(response_data, "Templating scheduled successfully")
 
 
 @router.put("/templating/{templating_id}/unschedule", response_model=SuccessResponse[None])
@@ -136,7 +159,29 @@ async def update_templating(
     await db.commit()
     await db.refresh(templating)
     
-    return success_response(templating, "Templating updated successfully")
+    # Fetch technician and status details for enriched response
+    technician = await db.get(User, templating.technician_id) if templating.technician_id else None
+    status = await db.get(Status, templating.status_id)
+    
+    # Build enriched response
+    response_data = TemplatingResponse(
+        id=templating.id,
+        fab_id=templating.fab_id,
+        technician_id=templating.technician_id,
+        technician_name=f"{technician.first_name} {technician.last_name}" if technician else None,
+        schedule_start_date=templating.schedule_start_date,
+        schedule_due_date=templating.schedule_due_date,
+        total_sqft=templating.total_sqft,
+        notes=templating.notes,
+        is_templating_schedule=templating.is_templating_schedule,
+        status_id=templating.status_id,
+        status_name=status.value_name if status else None,
+        created_at=templating.created_at,
+        updated_at=templating.updated_at,
+        updated_by=templating.updated_by
+    )
+    
+    return success_response(response_data, "Templating updated successfully")
 
 
 @router.post("/templating/{templating_id}/mark-received", response_model=SuccessResponse[None])
@@ -192,7 +237,29 @@ async def get_templating(
     if not templating:
         raise error_response("Templating not found", 404)
     
-    return success_response(templating, "Templating fetched successfully")
+    # Fetch technician and status details
+    technician = await db.get(User, templating.technician_id) if templating.technician_id else None
+    status = await db.get(Status, templating.status_id)
+    
+    # Build enriched response
+    response_data = TemplatingResponse(
+        id=templating.id,
+        fab_id=templating.fab_id,
+        technician_id=templating.technician_id,
+        technician_name=f"{technician.first_name} {technician.last_name}" if technician else None,
+        schedule_start_date=templating.schedule_start_date,
+        schedule_due_date=templating.schedule_due_date,
+        total_sqft=templating.total_sqft,
+        notes=templating.notes,
+        is_templating_schedule=templating.is_templating_schedule,
+        status_id=templating.status_id,
+        status_name=status.value_name if status else None,
+        created_at=templating.created_at,
+        updated_at=templating.updated_at,
+        updated_by=templating.updated_by
+    )
+    
+    return success_response(response_data, "Templating fetched successfully")
 
 
 @router.get("/templating/fab/{fab_id}", response_model=SuccessResponse[TemplatingResponse])
@@ -209,4 +276,26 @@ async def get_templating_by_fab(
     if not templating:
         raise error_response("Templating not found for this fab", 404)
     
-    return success_response(templating, "Templating fetched successfully")
+    # Fetch technician and status details
+    technician = await db.get(User, templating.technician_id) if templating.technician_id else None
+    status = await db.get(Status, templating.status_id)
+    
+    # Build enriched response
+    response_data = TemplatingResponse(
+        id=templating.id,
+        fab_id=templating.fab_id,
+        technician_id=templating.technician_id,
+        technician_name=f"{technician.first_name} {technician.last_name}" if technician else None,
+        schedule_start_date=templating.schedule_start_date,
+        schedule_due_date=templating.schedule_due_date,
+        total_sqft=templating.total_sqft,
+        notes=templating.notes,
+        is_templating_schedule=templating.is_templating_schedule,
+        status_id=templating.status_id,
+        status_name=status.value_name if status else None,
+        created_at=templating.created_at,
+        updated_at=templating.updated_at,
+        updated_by=templating.updated_by
+    )
+    
+    return success_response(response_data, "Templating fetched successfully")

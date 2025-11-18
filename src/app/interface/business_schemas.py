@@ -285,15 +285,20 @@ class TemplatingResponse(BaseModel):
     id: int
     fab_id: int
     technician_id: Optional[int]
+    technician_name: Optional[str] = None  # Technician full name
     schedule_start_date: Optional[datetime]
     schedule_due_date: Optional[datetime]
     total_sqft: Optional[str]
     notes: Optional[str]
     is_templating_schedule: bool
     status_id: int
+    status_name: Optional[str] = None  # Status description
     created_at: datetime
     updated_at: Optional[datetime]
     updated_by: Optional[int]
+
+    class Config:
+        from_attributes = True
 
 
 # Clockwork Schemas
