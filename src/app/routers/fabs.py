@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import List, Optional
+import sqlalchemy as sa
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -144,7 +145,17 @@ async def get_fabs(
     
     # Use aliased User for sales_person and technician to avoid conflicts
     from sqlalchemy.orm import aliased
+    from sqlalchemy import and_
     TechnicianUser = aliased(User)
+    
+    # Subquery to get the latest templating record for each FAB
+    latest_templating = (
+        select(Templating)
+        .where(Templating.fab_id == Fab.id)
+        .order_by(Templating.id.desc())
+        .limit(1)
+        .lateral("latest_templating")
+    )
     
     # Build query with joins to get related data including templating
     query = select(
@@ -155,9 +166,9 @@ async def get_fabs(
         StoneColor.name.label("stone_color_name"),
         StoneThickness.thickness.label("stone_thickness_value"),
         Edge.name.label("edge_name"),
-        Templating.schedule_start_date.label("templating_schedule_start_date"),
-        Templating.schedule_due_date.label("templating_schedule_due_date"),
-        Templating.notes.label("templating_notes"),
+        latest_templating.c.schedule_start_date.label("templating_schedule_start_date"),
+        latest_templating.c.schedule_due_date.label("templating_schedule_due_date"),
+        latest_templating.c.notes.label("templating_notes"),
         TechnicianUser.first_name.label("technician_first_name"),
         TechnicianUser.last_name.label("technician_last_name")
     ).select_from(Fab)
@@ -168,8 +179,8 @@ async def get_fabs(
     query = query.join(StoneColor, Fab.stone_color_id == StoneColor.id, isouter=True)
     query = query.join(StoneThickness, Fab.stone_thickness_id == StoneThickness.id, isouter=True)
     query = query.join(Edge, Fab.edge_id == Edge.id, isouter=True)
-    query = query.join(Templating, Fab.id == Templating.fab_id, isouter=True)
-    query = query.join(TechnicianUser, Templating.technician_id == TechnicianUser.id, isouter=True)
+    query = query.outerjoin(latest_templating, sa.literal(True))
+    query = query.join(TechnicianUser, latest_templating.c.technician_id == TechnicianUser.id, isouter=True)
     
     # Apply filters
     if job_id is not None:
@@ -238,7 +249,17 @@ async def get_fab(
     # Use a join query to get all related data in one go
     # Use aliased User for sales_person and technician to avoid conflicts
     from sqlalchemy.orm import aliased
+    from sqlalchemy import and_
     TechnicianUser = aliased(User)
+    
+    # Subquery to get the latest templating record for this FAB
+    latest_templating = (
+        select(Templating)
+        .where(Templating.fab_id == Fab.id)
+        .order_by(Templating.id.desc())
+        .limit(1)
+        .lateral("latest_templating")
+    )
     
     query = select(
         Fab,
@@ -248,9 +269,9 @@ async def get_fab(
         StoneColor.name.label("stone_color_name"),
         StoneThickness.thickness.label("stone_thickness_value"),
         Edge.name.label("edge_name"),
-        Templating.schedule_start_date.label("templating_schedule_start_date"),
-        Templating.schedule_due_date.label("templating_schedule_due_date"),
-        Templating.notes.label("templating_notes"),
+        latest_templating.c.schedule_start_date.label("templating_schedule_start_date"),
+        latest_templating.c.schedule_due_date.label("templating_schedule_due_date"),
+        latest_templating.c.notes.label("templating_notes"),
         TechnicianUser.first_name.label("technician_first_name"),
         TechnicianUser.last_name.label("technician_last_name")
     ).select_from(Fab).where(Fab.id == fab_id)
@@ -261,8 +282,8 @@ async def get_fab(
     query = query.join(StoneColor, Fab.stone_color_id == StoneColor.id, isouter=True)
     query = query.join(StoneThickness, Fab.stone_thickness_id == StoneThickness.id, isouter=True)
     query = query.join(Edge, Fab.edge_id == Edge.id, isouter=True)
-    query = query.join(Templating, Fab.id == Templating.fab_id, isouter=True)
-    query = query.join(TechnicianUser, Templating.technician_id == TechnicianUser.id, isouter=True)
+    query = query.outerjoin(latest_templating, sa.literal(True))
+    query = query.join(TechnicianUser, latest_templating.c.technician_id == TechnicianUser.id, isouter=True)
     
     result = await db.execute(query)
     row = result.first()
