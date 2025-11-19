@@ -8,16 +8,12 @@ router = APIRouter()
 
 # Predefined fab types - can be moved to database later
 FAB_TYPES = [
-    {"name": "Kitchen Countertop", "description": "Standard kitchen counter fabrication"},
-    {"name": "Bathroom Vanity", "description": "Bathroom vanity top fabrication"},
-    {"name": "Island Top", "description": "Kitchen island countertop fabrication"},
-    {"name": "Bar Top", "description": "Bar counter fabrication"},
-    {"name": "Fireplace Surround", "description": "Decorative fireplace stone work"},
-    {"name": "Backsplash", "description": "Kitchen or bathroom backsplash"},
-    {"name": "Shower Walls", "description": "Shower enclosure stone walls"},
-    {"name": "Floor Tiles", "description": "Natural stone floor installation"},
-    {"name": "Custom Design", "description": "Custom fabrication project"},
-    {"name": "Repair/Restoration", "description": "Repair or restoration work"}
+    {"name": "standard", "description": "Standard fabrication"},
+    {"name": "fab only", "description": "Fabrication only"},
+    {"name": "ag redo", "description": "Alpha Granit redo"},
+    {"name": "cust redo", "description": "Customer redo"},
+    {"name": "resurface", "description": "Resurface existing work"},
+    {"name": "fast track", "description": "Fast track priority fabrication"}
 ]
 
 
