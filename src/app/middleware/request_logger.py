@@ -4,13 +4,10 @@ from typing import Callable
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
+from src.app.utils.logger import get_logger
 
-# Configure logger
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Get logger instance
+logger = get_logger(__name__)
 
 
 class RequestLoggerMiddleware(BaseHTTPMiddleware):

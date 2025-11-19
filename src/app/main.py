@@ -39,8 +39,15 @@ from src.app.routers import stone_thickness
 from src.app.routers import templating
 from src.app.routers import drafting  
 
+# Import logging configuration
+from src.app.utils.logger import setup_logging
+
 # Load environment variables
 load_dotenv()
+
+# Initialize logging system
+log_level = os.getenv("LOG_LEVEL", "INFO")
+setup_logging(log_level)
 
 # Get CORS settings from environment variables or use defaults
 cors_origins = os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")

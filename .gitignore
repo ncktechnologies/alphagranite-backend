@@ -11,3 +11,8 @@ venv/
 static/uploads/
 *.log
 logs/*
+
+# Application logs
+applog/*.log
+applog/*.log.*
+!applog/.gitkeep
