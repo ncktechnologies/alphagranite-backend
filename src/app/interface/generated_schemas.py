@@ -17,6 +17,8 @@ class Templating(SQLModel, table=True):
     schedule_start_date: Optional[datetime] = Field(default=None)
     schedule_due_date: Optional[datetime] = Field(default=None)
     total_sqft: Optional[str] = Field(default=None)
+    actual_start_date: Optional[datetime] = Field(default=None)
+    duration: Optional[int] = Field(default=None)
     notes: Optional[List[str]] = Field(default=None, sa_column=Column(JSONB))
     is_templating_schedule: bool = Field(default=False)
     status_id: int = Field()

@@ -89,6 +89,8 @@ async def schedule_templating(
         schedule_start_date=templating.schedule_start_date,
         schedule_due_date=templating.schedule_due_date,
         total_sqft=templating.total_sqft,
+        actual_start_date=templating.actual_start_date,
+        duration=templating.duration,
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
         status_id=templating.status_id,
@@ -173,6 +175,8 @@ async def update_templating(
         schedule_start_date=templating.schedule_start_date,
         schedule_due_date=templating.schedule_due_date,
         total_sqft=templating.total_sqft,
+        actual_start_date=templating.actual_start_date,
+        duration=templating.duration,
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
         status_id=templating.status_id,
@@ -206,6 +210,10 @@ async def complete_templating(
     # Update templating record
     if request_data.actual_sqft:
         templating.total_sqft = request_data.actual_sqft
+    if request_data.actual_start_date:
+        templating.actual_start_date = request_data.actual_start_date
+    if request_data.duration is not None:
+        templating.duration = request_data.duration
     if request_data.notes:
         # Append new notes to existing notes array
         existing_notes = templating.notes or []
@@ -232,6 +240,8 @@ async def complete_templating(
         schedule_start_date=templating.schedule_start_date,
         schedule_due_date=templating.schedule_due_date,
         total_sqft=templating.total_sqft,
+        actual_start_date=templating.actual_start_date,
+        duration=templating.duration,
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
         status_id=templating.status_id,
@@ -310,6 +320,8 @@ async def get_templating(
         schedule_start_date=templating.schedule_start_date,
         schedule_due_date=templating.schedule_due_date,
         total_sqft=templating.total_sqft,
+        actual_start_date=templating.actual_start_date,
+        duration=templating.duration,
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
         status_id=templating.status_id,
@@ -349,6 +361,8 @@ async def get_templating_by_fab(
         schedule_start_date=templating.schedule_start_date,
         schedule_due_date=templating.schedule_due_date,
         total_sqft=templating.total_sqft,
+        actual_start_date=templating.actual_start_date,
+        duration=templating.duration,
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
         status_id=templating.status_id,
