@@ -1,5 +1,6 @@
 from datetime import datetime, date
 from typing import List, Optional
+from decimal import Decimal
 import sqlalchemy as sa
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -284,8 +285,8 @@ async def get_fabs(
         drafter_assigned_by_first_name = row[20]
         drafter_assigned_by_last_name = row[21]
         
-        # Convert to dict and serialize datetime/date objects
-        fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else v 
+        # Convert to dict and serialize datetime/date/Decimal objects
+        fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
                     for k, v in fab.__dict__.items() if not k.startswith('_')}
         fab_dict["sales_person_name"] = f"{sales_person_first_name} {sales_person_last_name}" if sales_person_first_name else None
         fab_dict["stone_type_name"] = stone_type_name
@@ -295,7 +296,7 @@ async def get_fabs(
         
         # Add job details as a dictionary
         if business_job:
-            job_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else v
+            job_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
                        for k, v in business_job.__dict__.items() if not k.startswith('_')}
             fab_dict["job_details"] = job_dict
             fab_dict["account_id"] = business_job.account_id
@@ -425,8 +426,8 @@ async def get_fab(
     drafter_assigned_by_first_name = row[20]
     drafter_assigned_by_last_name = row[21]
     
-    # Convert to dict and add related names
-    fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else v 
+    # Convert to dict and add related names (handle datetime, date, and Decimal serialization)
+    fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
                 for k, v in fab.__dict__.items() if not k.startswith('_')}
     fab_dict["sales_person_name"] = f"{sales_person_first_name} {sales_person_last_name}" if sales_person_first_name else None
     fab_dict["stone_type_name"] = stone_type_name
@@ -436,7 +437,7 @@ async def get_fab(
     
     # Add job details as a dictionary
     if business_job:
-        job_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else v
+        job_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
                    for k, v in business_job.__dict__.items() if not k.startswith('_')}
         fab_dict["job_details"] = job_dict
         fab_dict["account_id"] = business_job.account_id
@@ -701,8 +702,8 @@ async def get_fabs_by_job(
         drafter_assigned_by_first_name = row[20]
         drafter_assigned_by_last_name = row[21]
         
-        # Convert to dict and serialize datetime/date objects
-        fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else v 
+        # Convert to dict and serialize datetime/date/Decimal objects
+        fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
                     for k, v in fab.__dict__.items() if not k.startswith('_')}
         fab_dict["sales_person_name"] = f"{sales_person_first_name} {sales_person_last_name}" if sales_person_first_name else None
         fab_dict["stone_type_name"] = stone_type_name
@@ -712,7 +713,7 @@ async def get_fabs_by_job(
         
         # Add job details
         if business_job:
-            job_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else v
+            job_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
                        for k, v in business_job.__dict__.items() if not k.startswith('_')}
             fab_dict["job_details"] = job_dict
             fab_dict["account_id"] = business_job.account_id
