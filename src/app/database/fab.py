@@ -27,6 +27,11 @@ class Fab(SQLModel, table=True):
     sct_needed: bool = Field(default=True)
     final_programming_needed: bool = Field(default=True)
     
+    # Drafter assignment
+    drafter_id: Optional[int] = Field(default=None, foreign_key="users.id")
+    drafter_assigned_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    drafter_assigned_at: Optional[datetime] = None
+    
     current_stage: Optional[str] = Field(max_length=255, default=None)
     next_stage: Optional[str] = Field(max_length=255, default=None)
     status_id: int = Field(foreign_key="status.value_id")

@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from src.app.database import get_db
 from src.app.database.fab import Fab
+from src.app.database.fab_notes import FabNotes
 from src.app.database.business_job import BusinessJob
 from src.app.database.account import Account
 from src.app.database.user import User
@@ -55,6 +56,53 @@ def get_next_stage(current_stage: str) -> Optional[str]:
     except ValueError:
         # Current stage not in list, default to templating
         return "templating"
+
+
+async def get_fab_notes(db: AsyncSession, fab_id: int) -> List[dict]:
+    """Get last 10 fab notes for a given FAB"""
+    from sqlalchemy.orm import aliased
+    
+    CreatorUser = aliased(User)
+    UpdaterUser = aliased(User)
+    
+    query = select(
+        FabNotes,
+        CreatorUser.first_name.label("creator_first_name"),
+        CreatorUser.last_name.label("creator_last_name"),
+        UpdaterUser.first_name.label("updater_first_name"),
+        UpdaterUser.last_name.label("updater_last_name")
+    ).where(FabNotes.fab_id == fab_id)
+    
+    query = query.join(CreatorUser, FabNotes.created_by == CreatorUser.id, isouter=True)
+    query = query.join(UpdaterUser, FabNotes.updated_by == UpdaterUser.id, isouter=True)
+    query = query.order_by(FabNotes.created_at.desc()).limit(10)
+    
+    result = await db.execute(query)
+    rows = result.all()
+    
+    notes = []
+    for row in rows:
+        fab_note = row[0]
+        creator_first = row[1]
+        creator_last = row[2]
+        updater_first = row[3]
+        updater_last = row[4]
+        
+        note_dict = {
+            "id": fab_note.id,
+            "fab_id": fab_note.fab_id,
+            "stage": fab_note.stage,
+            "note": fab_note.note,
+            "created_by": fab_note.created_by,
+            "created_by_name": f"{creator_first} {creator_last}" if creator_first else None,
+            "created_at": fab_note.created_at.isoformat() if fab_note.created_at else None,
+            "updated_at": fab_note.updated_at.isoformat() if fab_note.updated_at else None,
+            "updated_by": fab_note.updated_by,
+            "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
+        }
+        notes.append(note_dict)
+    
+    return notes
 
 
 @router.post("/fabs", response_model=SuccessResponse[FabResponse], status_code=201)
@@ -135,10 +183,12 @@ async def get_fabs(
 ):
     """Get list of fabs with optional filtering"""
     
-    # Use aliased User for sales_person and technician to avoid conflicts
+    # Use aliased User for sales_person, technician, drafter, and drafter_assigned_by to avoid conflicts
     from sqlalchemy.orm import aliased
     from sqlalchemy import and_
     TechnicianUser = aliased(User)
+    DrafterUser = aliased(User)
+    DrafterAssignedByUser = aliased(User)
     
     # Subquery to get the latest templating record for each FAB
     latest_templating = (
@@ -149,7 +199,7 @@ async def get_fabs(
         .lateral("latest_templating")
     )
     
-    # Build query with joins to get related data including templating
+    # Build query with joins to get related data including templating and drafter
     query = select(
         Fab,
         User.first_name.label("sales_person_first_name"),
@@ -168,7 +218,11 @@ async def get_fabs(
         Account.account_number.label("account_number"),
         Account.contact_person.label("account_contact_person"),
         Account.email.label("account_email"),
-        Account.phone.label("account_phone")
+        Account.phone.label("account_phone"),
+        DrafterUser.first_name.label("drafter_first_name"),
+        DrafterUser.last_name.label("drafter_last_name"),
+        DrafterAssignedByUser.first_name.label("drafter_assigned_by_first_name"),
+        DrafterAssignedByUser.last_name.label("drafter_assigned_by_last_name")
     ).select_from(Fab)
     
     # Join with related tables
@@ -181,6 +235,8 @@ async def get_fabs(
     query = query.join(Edge, Fab.edge_id == Edge.id, isouter=True)
     query = query.outerjoin(latest_templating, sa.literal(True))
     query = query.join(TechnicianUser, latest_templating.c.technician_id == TechnicianUser.id, isouter=True)
+    query = query.join(DrafterUser, Fab.drafter_id == DrafterUser.id, isouter=True)
+    query = query.join(DrafterAssignedByUser, Fab.drafter_assigned_by == DrafterAssignedByUser.id, isouter=True)
     
     # Apply filters
     if job_id is not None:
@@ -223,6 +279,10 @@ async def get_fabs(
         account_contact_person = row[15]
         account_email = row[16]
         account_phone = row[17]
+        drafter_first_name = row[18]
+        drafter_last_name = row[19]
+        drafter_assigned_by_first_name = row[20]
+        drafter_assigned_by_last_name = row[21]
         
         # Convert to dict and serialize datetime/date objects
         fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else v 
@@ -256,10 +316,19 @@ async def get_fabs(
         fab_dict["templating_notes"] = templating_notes
         fab_dict["technician_name"] = f"{technician_first_name} {technician_last_name}" if technician_first_name else None
         
+        # Add drafter information
+        fab_dict["drafter_name"] = f"{drafter_first_name} {drafter_last_name}" if drafter_first_name else None
+        fab_dict["drafter_assigned_by_name"] = f"{drafter_assigned_by_first_name} {drafter_assigned_by_last_name}" if drafter_assigned_by_first_name else None
+        
         # Add next stage
         fab_dict["next_stage"] = get_next_stage(fab_dict.get("current_stage"))
         
         fabs.append(fab_dict)
+    
+    # Fetch fab_notes for all FABs
+    for fab_dict in fabs:
+        fab_notes = await get_fab_notes(db, fab_dict["id"])
+        fab_dict["fab_notes"] = fab_notes
     
     return success_response(fabs, "Fabs fetched successfully")
 
@@ -272,10 +341,12 @@ async def get_fab(
 ):
     """Get a specific fab by ID with related data"""
     # Use a join query to get all related data in one go
-    # Use aliased User for sales_person and technician to avoid conflicts
+    # Use aliased User for sales_person, technician, drafter, and drafter_assigned_by to avoid conflicts
     from sqlalchemy.orm import aliased
     from sqlalchemy import and_
     TechnicianUser = aliased(User)
+    DrafterUser = aliased(User)
+    DrafterAssignedByUser = aliased(User)
     
     # Subquery to get the latest templating record for this FAB
     latest_templating = (
@@ -304,7 +375,11 @@ async def get_fab(
         Account.account_number.label("account_number"),
         Account.contact_person.label("account_contact_person"),
         Account.email.label("account_email"),
-        Account.phone.label("account_phone")
+        Account.phone.label("account_phone"),
+        DrafterUser.first_name.label("drafter_first_name"),
+        DrafterUser.last_name.label("drafter_last_name"),
+        DrafterAssignedByUser.first_name.label("drafter_assigned_by_first_name"),
+        DrafterAssignedByUser.last_name.label("drafter_assigned_by_last_name")
     ).select_from(Fab).where(Fab.id == fab_id)
     
     # Join with related tables
@@ -317,6 +392,8 @@ async def get_fab(
     query = query.join(Edge, Fab.edge_id == Edge.id, isouter=True)
     query = query.outerjoin(latest_templating, sa.literal(True))
     query = query.join(TechnicianUser, latest_templating.c.technician_id == TechnicianUser.id, isouter=True)
+    query = query.join(DrafterUser, Fab.drafter_id == DrafterUser.id, isouter=True)
+    query = query.join(DrafterAssignedByUser, Fab.drafter_assigned_by == DrafterAssignedByUser.id, isouter=True)
     
     result = await db.execute(query)
     row = result.first()
@@ -337,12 +414,16 @@ async def get_fab(
     templating_notes = row[9]
     technician_first_name = row[10]
     technician_last_name = row[11]
-    business_job = row[12]  # BusinessJob object
+    business_job = row[12]
     account_name = row[13]
     account_number = row[14]
     account_contact_person = row[15]
     account_email = row[16]
     account_phone = row[17]
+    drafter_first_name = row[18]
+    drafter_last_name = row[19]
+    drafter_assigned_by_first_name = row[20]
+    drafter_assigned_by_last_name = row[21]
     
     # Convert to dict and add related names
     fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else v 
@@ -376,8 +457,16 @@ async def get_fab(
     fab_dict["templating_notes"] = templating_notes
     fab_dict["technician_name"] = f"{technician_first_name} {technician_last_name}" if technician_first_name else None
     
-    # Add next stage to response
+    # Add drafter information
+    fab_dict["drafter_name"] = f"{drafter_first_name} {drafter_last_name}" if drafter_first_name else None
+    fab_dict["drafter_assigned_by_name"] = f"{drafter_assigned_by_first_name} {drafter_assigned_by_last_name}" if drafter_assigned_by_first_name else None
+    
+    # Add next stage
     fab_dict["next_stage"] = get_next_stage(fab_dict.get("current_stage"))
+    
+    # Fetch fab_notes
+    fab_notes = await get_fab_notes(db, fab_id)
+    fab_dict["fab_notes"] = fab_notes
     
     # Determine success message based on stage
     message = "Fab fetched successfully"
@@ -396,6 +485,7 @@ async def update_fab(
     current_user: User = Depends(get_current_user)
 ):
     """Update a fab"""
+    from src.app.database.fab_notes import FabNotes
     
     # Get existing fab
     result = await db.execute(select(Fab).where(Fab.id == fab_id))
@@ -430,12 +520,30 @@ async def update_fab(
         if not edge_result.scalar_one_or_none():
             raise HTTPException(status_code=404, detail="Edge not found")
     
-    # Update fields
-    update_data = fab_data.model_dump(exclude_unset=True)
+    # Validate drafter if provided
+    if fab_data.drafter_id:
+        drafter_result = await db.execute(select(User).where(User.id == fab_data.drafter_id))
+        if not drafter_result.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail="Drafter not found")
+    
+    # Extract note and stage before updating
+    note_text = fab_data.notes
+    note_stage = fab_data.stage if fab_data.stage else fab.current_stage
+    
+    # Update fields (exclude notes and stage as they're for fab_notes)
+    update_data = fab_data.model_dump(exclude_unset=True, exclude={"notes", "stage"})
     
     # Track if current_stage is being updated
     stage_changed = False
     new_current_stage = None
+    
+    # Handle drafter assignment
+    if fab_data.drafter_id and fab_data.drafter_id != fab.drafter_id:
+        # New drafter assigned
+        fab.drafter_id = fab_data.drafter_id
+        fab.drafter_assigned_by = current_user.id
+        fab.drafter_assigned_at = datetime.now()
+        fab.drafting_needed = True  # Set drafting_needed to True when drafter assigned
     
     for field, value in update_data.items():
         if field == "current_stage":
@@ -449,6 +557,17 @@ async def update_fab(
     
     fab.updated_at = datetime.now()
     fab.updated_by = current_user.id
+    
+    # Create FabNotes entry if notes provided
+    if note_text:
+        fab_note = FabNotes(
+            fab_id=fab_id,
+            stage=note_stage,
+            note=note_text,
+            created_by=current_user.id,
+            created_at=datetime.now()
+        )
+        db.add(fab_note)
     
     await db.commit()
     await db.refresh(fab)

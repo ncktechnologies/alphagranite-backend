@@ -29,6 +29,7 @@ from src.app.routers.action_menu import action_menu_router, permission_router
 from src.app.routers import jobs
 from src.app.routers import edges
 from src.app.routers import fabs 
+from src.app.routers import fab_notes
 from src.app.routers import accounts
 from src.app.routers import users
 from src.app.routers import fab_types
@@ -122,6 +123,7 @@ app.include_router(stone_types.router, prefix="/api/v1", tags=["Stone Types"])
 app.include_router(edges.router, prefix="/api/v1", tags=["Edges"])
 app.include_router(fab_types.router, prefix="/api/v1", tags=["Fab Types"])
 app.include_router(fabs.router, prefix="/api/v1", tags=["Fabs"])
+app.include_router(fab_notes.router, prefix="/api/v1", tags=["FAB Notes"])
 
 # Workflow routers (templating, drafting, etc.)
 app.include_router(templating.router, prefix="/api/v1", tags=["Templating"])

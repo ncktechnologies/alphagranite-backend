@@ -208,13 +208,15 @@ class FabUpdate(BaseModel):
     edge_id: Optional[int] = Field(None, gt=0)
     input_area: Optional[str] = Field(None, min_length=1, max_length=255)
     total_sqft: Optional[float] = Field(None, gt=0)
-    notes: Optional[str] = None
+    notes: Optional[str] = Field(None, description="Note to add to FAB (will be saved to fab_notes)")
+    stage: Optional[str] = Field(None, description="Stage for the note (defaults to current_stage)")
     template_needed: Optional[bool] = None
     drafting_needed: Optional[bool] = None
     slab_smith_cust_needed: Optional[bool] = None
     slab_smith_ag_needed: Optional[bool] = None
     sct_needed: Optional[bool] = None
     final_programming_needed: Optional[bool] = None
+    drafter_id: Optional[int] = Field(None, gt=0, description="Drafter user ID")
     current_stage: Optional[str] = None
     next_stage: Optional[str] = None
     status_id: Optional[int] = None
@@ -250,6 +252,11 @@ class FabResponse(BaseModel):
     slab_smith_ag_needed: bool
     sct_needed: bool
     final_programming_needed: bool
+    drafter_id: Optional[int] = None
+    drafter_name: Optional[str] = None
+    drafter_assigned_by: Optional[int] = None
+    drafter_assigned_by_name: Optional[str] = None
+    drafter_assigned_at: Optional[datetime] = None
     current_stage: Optional[str]
     next_stage: Optional[str]
     status_id: int
@@ -262,6 +269,8 @@ class FabResponse(BaseModel):
     templating_schedule_due_date: Optional[datetime] = None
     templating_notes: Optional[List[str]] = None
     technician_name: Optional[str] = None
+    # FAB Notes (last 10)
+    fab_notes: Optional[List[dict]] = None
 
     class Config:
         from_attributes = True
@@ -532,3 +541,28 @@ class JobWithFabsResponse(BaseModel):
 # Table Names Response
 class TableNamesResponse(BaseModel):
     table_names: List[str]
+
+
+# FabNotes Schemas
+class FabNotesCreate(BaseModel):
+    fab_id: int = Field(..., gt=0, description="FAB ID")
+    stage: Optional[str] = Field(None, description="Stage for the note (defaults to FAB's current_stage)")
+    note: str = Field(..., min_length=1, description="Note content")
+
+
+class FabNotesUpdate(BaseModel):
+    note: Optional[str] = Field(None, min_length=1, description="Updated note content")
+    stage: Optional[str] = Field(None, description="Updated stage")
+
+
+class FabNotesResponse(BaseModel):
+    id: int
+    fab_id: int
+    stage: str
+    note: str
+    created_by: int
+    created_by_name: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[int] = None
+    updated_by_name: Optional[str] = None
