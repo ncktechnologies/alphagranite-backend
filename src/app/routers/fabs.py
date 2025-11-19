@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date
 from typing import List, Optional
 import sqlalchemy as sa
 from sqlalchemy.future import select
@@ -163,7 +163,7 @@ async def get_fabs(
         latest_templating.c.notes.label("templating_notes"),
         TechnicianUser.first_name.label("technician_first_name"),
         TechnicianUser.last_name.label("technician_last_name"),
-        BusinessJob.account_id.label("account_id"),
+        BusinessJob,  # Include full BusinessJob object
         Account.name.label("account_name"),
         Account.account_number.label("account_number"),
         Account.contact_person.label("account_contact_person"),
@@ -217,15 +217,15 @@ async def get_fabs(
         templating_notes = row[9]
         technician_first_name = row[10]
         technician_last_name = row[11]
-        account_id = row[12]
+        business_job = row[12]  # BusinessJob object
         account_name = row[13]
         account_number = row[14]
         account_contact_person = row[15]
         account_email = row[16]
         account_phone = row[17]
         
-        # Convert to dict and serialize datetime objects
-        fab_dict = {k: v.isoformat() if isinstance(v, datetime) else v 
+        # Convert to dict and serialize datetime/date objects
+        fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else v 
                     for k, v in fab.__dict__.items() if not k.startswith('_')}
         fab_dict["sales_person_name"] = f"{sales_person_first_name} {sales_person_last_name}" if sales_person_first_name else None
         fab_dict["stone_type_name"] = stone_type_name
@@ -233,8 +233,17 @@ async def get_fabs(
         fab_dict["stone_thickness_value"] = stone_thickness_value
         fab_dict["edge_name"] = edge_name
         
+        # Add job details as a dictionary
+        if business_job:
+            job_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else v
+                       for k, v in business_job.__dict__.items() if not k.startswith('_')}
+            fab_dict["job_details"] = job_dict
+            fab_dict["account_id"] = business_job.account_id
+        else:
+            fab_dict["job_details"] = None
+            fab_dict["account_id"] = None
+
         # Add account data
-        fab_dict["account_id"] = account_id
         fab_dict["account_name"] = account_name
         fab_dict["account_number"] = account_number
         fab_dict["account_contact_person"] = account_contact_person
@@ -290,7 +299,7 @@ async def get_fab(
         latest_templating.c.notes.label("templating_notes"),
         TechnicianUser.first_name.label("technician_first_name"),
         TechnicianUser.last_name.label("technician_last_name"),
-        BusinessJob.account_id.label("account_id"),
+        BusinessJob,  # Include full BusinessJob object
         Account.name.label("account_name"),
         Account.account_number.label("account_number"),
         Account.contact_person.label("account_contact_person"),
@@ -328,7 +337,7 @@ async def get_fab(
     templating_notes = row[9]
     technician_first_name = row[10]
     technician_last_name = row[11]
-    account_id = row[12]
+    business_job = row[12]  # BusinessJob object
     account_name = row[13]
     account_number = row[14]
     account_contact_person = row[15]
@@ -336,7 +345,7 @@ async def get_fab(
     account_phone = row[17]
     
     # Convert to dict and add related names
-    fab_dict = {k: v.isoformat() if isinstance(v, datetime) else v 
+    fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else v 
                 for k, v in fab.__dict__.items() if not k.startswith('_')}
     fab_dict["sales_person_name"] = f"{sales_person_first_name} {sales_person_last_name}" if sales_person_first_name else None
     fab_dict["stone_type_name"] = stone_type_name
@@ -344,8 +353,17 @@ async def get_fab(
     fab_dict["stone_thickness_value"] = stone_thickness_value
     fab_dict["edge_name"] = edge_name
     
+    # Add job details as a dictionary
+    if business_job:
+        job_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else v
+                   for k, v in business_job.__dict__.items() if not k.startswith('_')}
+        fab_dict["job_details"] = job_dict
+        fab_dict["account_id"] = business_job.account_id
+    else:
+        fab_dict["job_details"] = None
+        fab_dict["account_id"] = None
+
     # Add account data
-    fab_dict["account_id"] = account_id
     fab_dict["account_name"] = account_name
     fab_dict["account_number"] = account_number
     fab_dict["account_contact_person"] = account_contact_person

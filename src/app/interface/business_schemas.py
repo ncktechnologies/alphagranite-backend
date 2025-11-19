@@ -223,6 +223,7 @@ class FabUpdate(BaseModel):
 class FabResponse(BaseModel):
     id: int
     job_id: int
+    job_details: Optional[dict] = None  # Complete job information
     account_id: Optional[int] = None
     account_name: Optional[str] = None
     account_number: Optional[str] = None
