@@ -307,6 +307,8 @@ class TemplatingResponse(BaseModel):
     is_templating_schedule: bool
     status_id: int
     status_name: Optional[str] = None  # Status description
+    current_stage: Optional[str] = None  # Current FAB stage
+    next_stage: Optional[str] = None  # Next FAB stage
     created_at: datetime
     updated_at: Optional[datetime]
     updated_by: Optional[int]

@@ -12,7 +12,7 @@ class BusinessJobBase(SQLModel):
     """Base model for business jobs (work orders)"""
     name: str = Field(max_length=255, index=True)
     job_number: str = Field(max_length=100, unique=True, index=True)
-    account_id: int = Field(foreign_key="accounts.id")
+    account_id: Optional[int] = Field(default=None, foreign_key="accounts.id")
     description: Optional[str] = Field(default=None, sa_type=Text)
     priority: Optional[str] = Field(default="Medium", max_length=50)
     start_date: Optional[date] = Field(default=None, sa_column=Column(Date))

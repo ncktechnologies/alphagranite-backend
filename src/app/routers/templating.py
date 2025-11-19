@@ -199,6 +199,7 @@ async def complete_templating(
     """
     Technician marks templating as complete.
     Updates: actual square footage, notes (appends new notes to existing), status to completed.
+    Also updates FAB stage to next stage in workflow.
     """
     
     # Get templating record
@@ -206,6 +207,12 @@ async def complete_templating(
     templating = result.scalar_one_or_none()
     if not templating:
         raise error_response("Templating not found", 404)
+    
+    # Get associated FAB
+    fab_result = await db.execute(select(Fab).where(Fab.id == templating.fab_id))
+    fab = fab_result.scalar_one_or_none()
+    if not fab:
+        raise error_response("Associated FAB not found", 404)
     
     # Update templating record
     if request_data.actual_sqft:
@@ -219,13 +226,27 @@ async def complete_templating(
         existing_notes = templating.notes or []
         templating.notes = existing_notes + request_data.notes
     
-    # Mark as completed (status_id = 2 for completed, adjust based on your status table)
+    # Mark templating as completed (status_id = 2 for completed)
     templating.status_id = 2
     templating.updated_at = datetime.now()
     templating.updated_by = current_user.id
     
+    # Update FAB stage: Move to next stage based on current stage
+    # Import get_next_stage from fabs router
+    from src.app.routers.fabs import get_next_stage
+    
+    if fab.current_stage:
+        fab.next_stage = get_next_stage(fab.current_stage)
+        # Move to next stage
+        if fab.next_stage:
+            fab.current_stage = fab.next_stage
+            fab.next_stage = get_next_stage(fab.current_stage)
+        fab.updated_at = datetime.now()
+        fab.updated_by = current_user.id
+    
     await db.commit()
     await db.refresh(templating)
+    await db.refresh(fab)
     
     # Fetch technician and status details for enriched response
     technician = await db.get(User, templating.technician_id) if templating.technician_id else None
@@ -246,6 +267,8 @@ async def complete_templating(
         is_templating_schedule=templating.is_templating_schedule,
         status_id=templating.status_id,
         status_name=status.name if status else None,
+        current_stage=fab.current_stage,
+        next_stage=fab.next_stage,
         created_at=templating.created_at,
         updated_at=templating.updated_at,
         updated_by=templating.updated_by
