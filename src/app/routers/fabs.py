@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from src.app.database import get_db
 from src.app.database.fab import Fab
 from src.app.database.business_job import BusinessJob
+from src.app.database.account import Account
 from src.app.database.user import User
 from src.app.database.edge import Edge
 from src.app.database.stone_type import StoneType
@@ -25,45 +26,35 @@ router = APIRouter()
 
 # Define the fab workflow stages in order (based on client workflow)
 FAB_STAGES = [
-    "fab_created",          # Stage 1: Fab Created
-    "templating",           # Stage 2: Templating Queue
-    "pre_draft_review",     # Stage 3: Pre-Draft Review
-    "drafting",             # Stage 4: CAD/Drafting Department
-    "sales_check",          # Stage 5: Sales Department Review
-    "revision",             # Stage 6: Revisions Queue (loops back to sales_check)
-    "cut_list",             # Stage 7: Cut List Scheduling
-    "final_programming",    # Stage 8: Final Programming
-    "shop_planning"         # Stage 9: Shop Planning (final stage)
+    "fab_created",              # Stage 1: Fab Created
+    "templating",               # Stage 2: Templating
+    "templating_technician",    # Stage 3: Templating Technician Assignment
+    "pre_draft",                # Stage 4: Pre-Draft
+    "drafting",                 # Stage 5: Drafting
+    "drafting_review",          # Stage 6: Drafting Review
+    "drafting_revision",        # Stage 7: Drafting Revision
+    "shop_production"           # Stage 8: Shop Production (final stage)
 ]
 
 def get_next_stage(current_stage: str) -> Optional[str]:
     """
     Get the next stage in the fab workflow.
-    Special handling for revision loop: revision -> sales_check
-    Returns None if current stage is the last stage (shop_planning).
+    Returns None if current stage is the last stage (shop_production).
     """
     if not current_stage or current_stage == "fab_created":
-        return "fab_created"
-    
-    # Special case: revision always goes back to sales_check
-    if current_stage == "revision":
-        return "sales_check"
+        return "templating"
     
     try:
         current_index = FAB_STAGES.index(current_stage)
-        # Skip revision stage in normal flow (it's only entered from sales_check)
         next_index = current_index + 1
-        if current_index == FAB_STAGES.index("sales_check"):
-            # From sales_check, skip revision and go to cut_list (normal approval flow)
-            next_index = FAB_STAGES.index("cut_list")
         
-        if next_index < len(FAB_STAGES) and FAB_STAGES[next_index] != "revision":
+        if next_index < len(FAB_STAGES):
             return FAB_STAGES[next_index]
         
         return None  # Last stage, no next stage
     except ValueError:
-        # Current stage not in list, default to fab_created
-        return "fab_created"
+        # Current stage not in list, default to templating
+        return "templating"
 
 
 @router.post("/fabs", response_model=SuccessResponse[FabResponse], status_code=201)
@@ -138,6 +129,7 @@ async def get_fabs(
     sales_person_id: Optional[int] = Query(None, description="Filter by sales person ID"),
     status_id: Optional[int] = Query(None, description="Filter by status ID"),
     current_stage: Optional[str] = Query(None, description="Filter by current stage"),
+    next_stage: Optional[str] = Query(None, description="Filter by next stage"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -170,10 +162,18 @@ async def get_fabs(
         latest_templating.c.schedule_due_date.label("templating_schedule_due_date"),
         latest_templating.c.notes.label("templating_notes"),
         TechnicianUser.first_name.label("technician_first_name"),
-        TechnicianUser.last_name.label("technician_last_name")
+        TechnicianUser.last_name.label("technician_last_name"),
+        BusinessJob.account_id.label("account_id"),
+        Account.name.label("account_name"),
+        Account.account_number.label("account_number"),
+        Account.contact_person.label("account_contact_person"),
+        Account.email.label("account_email"),
+        Account.phone.label("account_phone")
     ).select_from(Fab)
     
     # Join with related tables
+    query = query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
+    query = query.join(Account, BusinessJob.account_id == Account.id, isouter=True)
     query = query.join(User, Fab.sales_person_id == User.id, isouter=True)
     query = query.join(StoneType, Fab.stone_type_id == StoneType.id, isouter=True)
     query = query.join(StoneColor, Fab.stone_color_id == StoneColor.id, isouter=True)
@@ -193,6 +193,8 @@ async def get_fabs(
         query = query.where(Fab.status_id == status_id)
     if current_stage:
         query = query.where(Fab.current_stage == current_stage)
+    if next_stage:
+        query = query.where(Fab.next_stage == next_stage)
     
     # Apply pagination
     query = query.offset(skip).limit(limit).order_by(Fab.created_at.desc())
@@ -215,6 +217,12 @@ async def get_fabs(
         templating_notes = row[9]
         technician_first_name = row[10]
         technician_last_name = row[11]
+        account_id = row[12]
+        account_name = row[13]
+        account_number = row[14]
+        account_contact_person = row[15]
+        account_email = row[16]
+        account_phone = row[17]
         
         # Convert to dict and serialize datetime objects
         fab_dict = {k: v.isoformat() if isinstance(v, datetime) else v 
@@ -224,6 +232,14 @@ async def get_fabs(
         fab_dict["stone_color_name"] = stone_color_name
         fab_dict["stone_thickness_value"] = stone_thickness_value
         fab_dict["edge_name"] = edge_name
+        
+        # Add account data
+        fab_dict["account_id"] = account_id
+        fab_dict["account_name"] = account_name
+        fab_dict["account_number"] = account_number
+        fab_dict["account_contact_person"] = account_contact_person
+        fab_dict["account_email"] = account_email
+        fab_dict["account_phone"] = account_phone
         
         # Add templating data
         fab_dict["templating_schedule_start_date"] = templating_schedule_start_date.isoformat() if templating_schedule_start_date else None
@@ -273,10 +289,18 @@ async def get_fab(
         latest_templating.c.schedule_due_date.label("templating_schedule_due_date"),
         latest_templating.c.notes.label("templating_notes"),
         TechnicianUser.first_name.label("technician_first_name"),
-        TechnicianUser.last_name.label("technician_last_name")
+        TechnicianUser.last_name.label("technician_last_name"),
+        BusinessJob.account_id.label("account_id"),
+        Account.name.label("account_name"),
+        Account.account_number.label("account_number"),
+        Account.contact_person.label("account_contact_person"),
+        Account.email.label("account_email"),
+        Account.phone.label("account_phone")
     ).select_from(Fab).where(Fab.id == fab_id)
     
     # Join with related tables
+    query = query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
+    query = query.join(Account, BusinessJob.account_id == Account.id, isouter=True)
     query = query.join(User, Fab.sales_person_id == User.id, isouter=True)
     query = query.join(StoneType, Fab.stone_type_id == StoneType.id, isouter=True)
     query = query.join(StoneColor, Fab.stone_color_id == StoneColor.id, isouter=True)
@@ -304,6 +328,12 @@ async def get_fab(
     templating_notes = row[9]
     technician_first_name = row[10]
     technician_last_name = row[11]
+    account_id = row[12]
+    account_name = row[13]
+    account_number = row[14]
+    account_contact_person = row[15]
+    account_email = row[16]
+    account_phone = row[17]
     
     # Convert to dict and add related names
     fab_dict = {k: v.isoformat() if isinstance(v, datetime) else v 
@@ -313,6 +343,14 @@ async def get_fab(
     fab_dict["stone_color_name"] = stone_color_name
     fab_dict["stone_thickness_value"] = stone_thickness_value
     fab_dict["edge_name"] = edge_name
+    
+    # Add account data
+    fab_dict["account_id"] = account_id
+    fab_dict["account_name"] = account_name
+    fab_dict["account_number"] = account_number
+    fab_dict["account_contact_person"] = account_contact_person
+    fab_dict["account_email"] = account_email
+    fab_dict["account_phone"] = account_phone
     
     # Add templating data
     fab_dict["templating_schedule_start_date"] = templating_schedule_start_date.isoformat() if templating_schedule_start_date else None

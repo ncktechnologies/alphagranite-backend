@@ -4,7 +4,8 @@ This is separate from recruitment jobs in job.py
 """
 from datetime import datetime, date
 from typing import Optional
-from sqlmodel import SQLModel, Field, Column, Integer, String, Text, DateTime, Date, func
+from sqlmodel import SQLModel, Field, Column, Integer, String, Text, DateTime, Date, Numeric, func
+from decimal import Decimal
 
 
 class BusinessJobBase(SQLModel):
@@ -16,6 +17,7 @@ class BusinessJobBase(SQLModel):
     priority: Optional[str] = Field(default="Medium", max_length=50)
     start_date: Optional[date] = Field(default=None, sa_column=Column(Date))
     due_date: Optional[date] = Field(default=None, sa_column=Column(Date))
+    project_value: Optional[Decimal] = Field(default=None, sa_column=Column(Numeric(15, 2)))
     status_id: int = Field(foreign_key="status.value_id")
     created_by: int = Field(foreign_key="users.id")
     created_at: datetime = Field(

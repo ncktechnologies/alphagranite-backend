@@ -23,23 +23,15 @@ async def create_job(
     
     Args:
         db: Database session
-        job_data: Job creation data
+        job_data: Job creation data (name, job_number, project_value)
         user_id: ID of user creating the job
         
     Returns:
         Created Job object
         
     Raises:
-        HTTPException: If account not found or job number already exists
+        HTTPException: If job number already exists
     """
-    # Check if account exists
-    account_result = await db.execute(
-        select(Account).where(Account.id == job_data.account_id)
-    )
-    account = account_result.scalar_one_or_none()
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
-    
     # Check if job number already exists
     job_check = await db.execute(
         select(BusinessJob).where(BusinessJob.job_number == job_data.job_number)
@@ -47,15 +39,16 @@ async def create_job(
     if job_check.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Job number already exists")
     
-    # Create job
+    # Create job with minimal required fields
     job = BusinessJob(
         name=job_data.name,
         job_number=job_data.job_number,
-        account_id=job_data.account_id,
-        description=job_data.description,
-        priority=job_data.priority,
-        start_date=job_data.start_date,
-        due_date=job_data.due_date,
+        project_value=job_data.project_value,
+        account_id=None,  # Optional field
+        description=None,
+        priority="Medium",  # Default priority
+        start_date=None,
+        due_date=None,
         status_id=1,  # Active status
         created_by=user_id,
         created_at=datetime.now()
@@ -147,14 +140,14 @@ async def update_job(
     Args:
         db: Database session
         job_id: ID of job to update
-        job_data: Job update data
+        job_data: Job update data (name, job_number, project_value, status_id)
         user_id: ID of user updating the job
         
     Returns:
         Updated Job object
         
     Raises:
-        HTTPException: If job not found, account not found, or job number already exists
+        HTTPException: If job not found or job number already exists
     """
     # Get existing job
     result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
@@ -162,14 +155,6 @@ async def update_job(
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    
-    # Check account exists if being updated
-    if job_data.account_id:
-        account_result = await db.execute(
-            select(Account).where(Account.id == job_data.account_id)
-        )
-        if not account_result.scalar_one_or_none():
-            raise HTTPException(status_code=404, detail="Account not found")
     
     # Check job number uniqueness if being updated
     if job_data.job_number and job_data.job_number != job.job_number:

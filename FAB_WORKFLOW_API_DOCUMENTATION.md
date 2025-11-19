@@ -1,8 +1,15 @@
 # FAB Workflow API Documentation
 
-**Version**: 1.0  
-**Date**: November 18, 2025  
+**Version**: 2.0  
+**Date**: November 19, 2025  
 **Backend Base URL**: `https://your-api-domain.com/api/v1`
+
+> **⚠️ IMPORTANT UPDATE (v2.0):**  
+> The workflow stages have been updated to the new simplified flow. The current stages are:
+> `fab_created` → `templating` → `templating_technician` → `pre_draft` → `drafting` → `drafting_review` → `drafting_revision` → `shop_production`
+> 
+> Old stages like `sales_check`, `revision`, `cut_list`, `final_programming`, `shop_planning`, and `pre_draft_review` are deprecated.
+> See the [Workflow Stages](#workflow-stages) section for the complete updated flow.
 
 ---
 
@@ -87,27 +94,28 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 FABs progress through the following stages in order:
 
-| Stage               | Description                                  | Who Works on It      |
-| ------------------- | -------------------------------------------- | -------------------- |
-| `fab_created`       | Initial creation, ready for templating       | Coordinator          |
-| `templating`        | Templating scheduled/in progress             | Templater Technician |
-| `pre_draft_review`  | Post-templating review                       | Coordinator          |
-| `drafting`          | CAD drafting in progress                     | Drafter              |
-| `sales_check`       | Sales department review                      | Salesperson          |
-| `revision`          | Revisions needed (loops back to sales_check) | Drafter              |
-| `cut_list`          | Scheduling for shop cut date                 | Coordinator          |
-| `final_programming` | Final CNC programming                        | Programmer           |
-| `shop_planning`     | Final stage before fabrication               | Production Team      |
+| Stage                  | Description                                  | Who Works on It      |
+| ---------------------- | -------------------------------------------- | -------------------- |
+| `fab_created`          | Initial creation, ready for templating       | Coordinator          |
+| `templating`           | Templating scheduled/in progress             | Coordinator          |
+| `templating_technician`| Technician assigned for templating           | Templater Technician |
+| `pre_draft`            | Pre-drafting preparation                     | Coordinator          |
+| `drafting`             | CAD drafting in progress                     | Drafter              |
+| `drafting_review`      | Drafting review                              | Reviewer             |
+| `drafting_revision`    | Revisions needed                             | Drafter              |
+| `shop_production`      | Final stage - ready for production           | Production Team      |
 
 **Stage Progression:**
 
 ```
-fab_created → templating → pre_draft_review → drafting → sales_check
-                                                              ↓
-                                                           revision (loops back)
-                                                              ↓
-cut_list → final_programming → shop_planning
+fab_created → templating → templating_technician → pre_draft → drafting → drafting_review → drafting_revision → shop_production
 ```
+
+**Notes:**
+- Each stage automatically transitions to the next when marked as complete
+- `current_stage` tracks where the FAB currently is
+- `next_stage` indicates where it will go next
+- You can filter FABs by `current_stage` or `next_stage` in list endpoints
 
 ---
 
@@ -259,14 +267,17 @@ All dates use ISO 8601 format:
 # Get all FABs in templating stage
 GET /fabs?current_stage=templating
 
+# Get all FABs by next stage
+GET /fabs?next_stage=drafting
+
 # Get all FABs for a specific job
 GET /fabs?job_id=5
 
 # Get FABs in drafting stage, paginated
 GET /fabs?current_stage=drafting&skip=0&limit=20
 
-# Get all FABs awaiting sales check
-GET /fabs?current_stage=sales_check
+# Get all FABs ready for production
+GET /fabs?current_stage=shop_production
 ```
 
 **Response:** `200 OK`
@@ -281,7 +292,7 @@ GET /fabs?current_stage=sales_check
       "job_id": 5,
       "fab_type": "standard",
       "current_stage": "templating",
-      "next_stage": "pre_draft_review",
+      "next_stage": "templating_technician",
       "sales_person_name": "John Doe",
       "stone_type_name": "Granite",
       "stone_color_name": "Absolute Black",

@@ -7,21 +7,13 @@ from pydantic import BaseModel, Field
 class JobCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="Job name")
     job_number: str = Field(..., min_length=1, max_length=100, description="Unique job number")
-    account_id: int = Field(..., gt=0, description="Account ID")
-    description: Optional[str] = None
-    priority: Optional[str] = Field(default="Medium", description="Job priority: Low, Medium, High, Urgent")
-    start_date: Optional[datetime] = None
-    due_date: Optional[datetime] = None
+    project_value: Optional[float] = Field(None, ge=0, description="Project value/amount")
 
 
 class JobUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     job_number: Optional[str] = Field(None, min_length=1, max_length=100)
-    account_id: Optional[int] = Field(None, gt=0)
-    description: Optional[str] = None
-    priority: Optional[str] = None
-    start_date: Optional[datetime] = None
-    due_date: Optional[datetime] = None
+    project_value: Optional[float] = Field(None, ge=0)
     status_id: Optional[int] = None
 
 
@@ -29,16 +21,17 @@ class JobResponse(BaseModel):
     id: int
     name: str
     job_number: str
-    account_id: int
-    description: Optional[str]
-    priority: Optional[str]
-    start_date: Optional[datetime]
-    due_date: Optional[datetime]
+    account_id: Optional[int] = None
+    description: Optional[str] = None
+    priority: Optional[str] = None
+    start_date: Optional[datetime] = None
+    due_date: Optional[datetime] = None
+    project_value: Optional[float] = None
     status_id: int
     created_at: datetime
     created_by: int
-    updated_at: Optional[datetime]
-    updated_by: Optional[int]
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[int] = None
 
 
 # Account Schemas
@@ -230,6 +223,12 @@ class FabUpdate(BaseModel):
 class FabResponse(BaseModel):
     id: int
     job_id: int
+    account_id: Optional[int] = None
+    account_name: Optional[str] = None
+    account_number: Optional[str] = None
+    account_contact_person: Optional[str] = None
+    account_email: Optional[str] = None
+    account_phone: Optional[str] = None
     fab_type: str
     sales_person_id: int
     sales_person_name: Optional[str] = None

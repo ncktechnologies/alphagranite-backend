@@ -32,9 +32,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         # the token as "Bearer <token>" automatically; some clients may
         # send just the token).
         if auth_header.startswith("Bearer "):
-            print('token here ==============')
             token = auth_header.split(" ", 1)[1]
-            print(token)
         else:
             token = auth_header
         try:
