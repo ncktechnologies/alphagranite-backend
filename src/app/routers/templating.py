@@ -12,6 +12,7 @@ from src.app.database.status import Status
 from src.app.interface.business_schemas import (
     TemplatingScheduleCreate,
     TemplatingScheduleUpdate,
+    TemplatingCompleteRequest,
     TemplatingResponse,
 )
 from src.app.middleware.jwt_auth import get_current_user
@@ -187,8 +188,7 @@ async def update_templating(
 @router.post("/templating/{templating_id}/complete", response_model=SuccessResponse[TemplatingResponse])
 async def complete_templating(
     templating_id: int,
-    actual_sqft: Optional[str] = None,
-    notes: Optional[List[str]] = None,
+    request_data: TemplatingCompleteRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -204,12 +204,12 @@ async def complete_templating(
         raise error_response("Templating not found", 404)
     
     # Update templating record
-    if actual_sqft:
-        templating.total_sqft = actual_sqft
-    if notes:
+    if request_data.actual_sqft:
+        templating.total_sqft = request_data.actual_sqft
+    if request_data.notes:
         # Append new notes to existing notes array
         existing_notes = templating.notes or []
-        templating.notes = existing_notes + notes
+        templating.notes = existing_notes + request_data.notes
     
     # Mark as completed (status_id = 2 for completed, adjust based on your status table)
     templating.status_id = 2

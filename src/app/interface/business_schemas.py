@@ -286,6 +286,11 @@ class TemplatingScheduleUpdate(BaseModel):
     status_id: Optional[int] = None
 
 
+class TemplatingCompleteRequest(BaseModel):
+    actual_sqft: Optional[str] = Field(None, description="Actual square footage measured")
+    notes: Optional[List[str]] = Field(None, description="Notes to append to existing notes")
+
+
 class TemplatingResponse(BaseModel):
     id: int
     fab_id: int
