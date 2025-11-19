@@ -414,8 +414,20 @@ async def update_fab(
     
     # Update fields
     update_data = fab_data.model_dump(exclude_unset=True)
+    
+    # Track if current_stage is being updated
+    stage_changed = False
+    new_current_stage = None
+    
     for field, value in update_data.items():
+        if field == "current_stage":
+            stage_changed = True
+            new_current_stage = value
         setattr(fab, field, value)
+    
+    # If current_stage was updated, automatically update next_stage
+    if stage_changed and new_current_stage:
+        fab.next_stage = get_next_stage(new_current_stage)
     
     fab.updated_at = datetime.now()
     fab.updated_by = current_user.id

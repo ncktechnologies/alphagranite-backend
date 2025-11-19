@@ -7,7 +7,7 @@
 > **⚠️ IMPORTANT UPDATE (v2.0):**  
 > The workflow stages have been updated to the new simplified flow. The current stages are:
 > `fab_created` → `templating` → `templating_technician` → `pre_draft` → `drafting` → `drafting_review` → `drafting_revision` → `shop_production`
-> 
+>
 > Old stages like `sales_check`, `revision`, `cut_list`, `final_programming`, `shop_planning`, and `pre_draft_review` are deprecated.
 > See the [Workflow Stages](#workflow-stages) section for the complete updated flow.
 
@@ -94,16 +94,16 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 FABs progress through the following stages in order:
 
-| Stage                  | Description                                  | Who Works on It      |
-| ---------------------- | -------------------------------------------- | -------------------- |
-| `fab_created`          | Initial creation, ready for templating       | Coordinator          |
-| `templating`           | Templating scheduled/in progress             | Coordinator          |
-| `templating_technician`| Technician assigned for templating           | Templater Technician |
-| `pre_draft`            | Pre-drafting preparation                     | Coordinator          |
-| `drafting`             | CAD drafting in progress                     | Drafter              |
-| `drafting_review`      | Drafting review                              | Reviewer             |
-| `drafting_revision`    | Revisions needed                             | Drafter              |
-| `shop_production`      | Final stage - ready for production           | Production Team      |
+| Stage                   | Description                            | Who Works on It      |
+| ----------------------- | -------------------------------------- | -------------------- |
+| `fab_created`           | Initial creation, ready for templating | Coordinator          |
+| `templating`            | Templating scheduled/in progress       | Coordinator          |
+| `templating_technician` | Technician assigned for templating     | Templater Technician |
+| `pre_draft`             | Pre-drafting preparation               | Coordinator          |
+| `drafting`              | CAD drafting in progress               | Drafter              |
+| `drafting_review`       | Drafting review                        | Reviewer             |
+| `drafting_revision`     | Revisions needed                       | Drafter              |
+| `shop_production`       | Final stage - ready for production     | Production Team      |
 
 **Stage Progression:**
 
@@ -112,6 +112,7 @@ fab_created → templating → templating_technician → pre_draft → drafting 
 ```
 
 **Notes:**
+
 - Each stage automatically transitions to the next when marked as complete
 - `current_stage` tracks where the FAB currently is
 - `next_stage` indicates where it will go next
