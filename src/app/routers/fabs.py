@@ -477,7 +477,7 @@ async def get_fab(
     return success_response(fab_dict, message)
 
 
-@router.put("/fabs/{fab_id}", response_model=FabResponse)
+@router.put("/fabs/{fab_id}", response_model=SuccessResponse[FabResponse])
 async def update_fab(
     fab_id: int,
     fab_data: FabUpdate,
@@ -572,7 +572,8 @@ async def update_fab(
     await db.commit()
     await db.refresh(fab)
     
-    return fab
+    # Return the updated FAB with full context (drafter info, notes, etc.)
+    return await get_fab(fab_id, db, current_user)
 
 
 @router.delete("/fabs/{fab_id}", status_code=204)
@@ -599,7 +600,7 @@ async def delete_fab(
     return None
 
 
-@router.get("/jobs/{job_id}/fabs", response_model=List[FabResponse])
+@router.get("/jobs/{job_id}/fabs", response_model=SuccessResponse[List[FabResponse]])
 async def get_fabs_by_job(
     job_id: int,
     skip: int = Query(0, ge=0),
@@ -614,10 +615,136 @@ async def get_fabs_by_job(
     if not job_result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Job not found")
     
-    query = select(Fab).where(Fab.job_id == job_id)
+    # Use the same query pattern as get_fabs for consistency
+    from sqlalchemy.orm import aliased
+    TechnicianUser = aliased(User)
+    DrafterUser = aliased(User)
+    DrafterAssignedByUser = aliased(User)
+    
+    # Subquery to get the latest templating record for each FAB
+    latest_templating = (
+        select(Templating)
+        .where(Templating.fab_id == Fab.id)
+        .order_by(Templating.id.desc())
+        .limit(1)
+        .lateral("latest_templating")
+    )
+    
+    # Build query with joins to get related data
+    query = select(
+        Fab,
+        User.first_name.label("sales_person_first_name"),
+        User.last_name.label("sales_person_last_name"),
+        StoneType.name.label("stone_type_name"),
+        StoneColor.name.label("stone_color_name"),
+        StoneThickness.thickness.label("stone_thickness_value"),
+        Edge.name.label("edge_name"),
+        latest_templating.c.schedule_start_date.label("templating_schedule_start_date"),
+        latest_templating.c.schedule_due_date.label("templating_schedule_due_date"),
+        latest_templating.c.notes.label("templating_notes"),
+        TechnicianUser.first_name.label("technician_first_name"),
+        TechnicianUser.last_name.label("technician_last_name"),
+        BusinessJob,
+        Account.name.label("account_name"),
+        Account.account_number.label("account_number"),
+        Account.contact_person.label("account_contact_person"),
+        Account.email.label("account_email"),
+        Account.phone.label("account_phone"),
+        DrafterUser.first_name.label("drafter_first_name"),
+        DrafterUser.last_name.label("drafter_last_name"),
+        DrafterAssignedByUser.first_name.label("drafter_assigned_by_first_name"),
+        DrafterAssignedByUser.last_name.label("drafter_assigned_by_last_name")
+    ).select_from(Fab).where(Fab.job_id == job_id)
+    
+    # Join with related tables
+    query = query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
+    query = query.join(Account, BusinessJob.account_id == Account.id, isouter=True)
+    query = query.join(User, Fab.sales_person_id == User.id, isouter=True)
+    query = query.join(StoneType, Fab.stone_type_id == StoneType.id, isouter=True)
+    query = query.join(StoneColor, Fab.stone_color_id == StoneColor.id, isouter=True)
+    query = query.join(StoneThickness, Fab.stone_thickness_id == StoneThickness.id, isouter=True)
+    query = query.join(Edge, Fab.edge_id == Edge.id, isouter=True)
+    query = query.outerjoin(latest_templating, sa.literal(True))
+    query = query.join(TechnicianUser, latest_templating.c.technician_id == TechnicianUser.id, isouter=True)
+    query = query.join(DrafterUser, Fab.drafter_id == DrafterUser.id, isouter=True)
+    query = query.join(DrafterAssignedByUser, Fab.drafter_assigned_by == DrafterAssignedByUser.id, isouter=True)
+    
+    # Apply pagination
     query = query.offset(skip).limit(limit).order_by(Fab.created_at.desc())
     
     result = await db.execute(query)
-    fabs = result.scalars().all()
+    rows = result.all()
     
-    return fabs
+    # Process the results
+    fabs = []
+    for row in rows:
+        fab = row[0]
+        sales_person_first_name = row[1]
+        sales_person_last_name = row[2]
+        stone_type_name = row[3]
+        stone_color_name = row[4]
+        stone_thickness_value = row[5]
+        edge_name = row[6]
+        templating_schedule_start_date = row[7]
+        templating_schedule_due_date = row[8]
+        templating_notes = row[9]
+        technician_first_name = row[10]
+        technician_last_name = row[11]
+        business_job = row[12]
+        account_name = row[13]
+        account_number = row[14]
+        account_contact_person = row[15]
+        account_email = row[16]
+        account_phone = row[17]
+        drafter_first_name = row[18]
+        drafter_last_name = row[19]
+        drafter_assigned_by_first_name = row[20]
+        drafter_assigned_by_last_name = row[21]
+        
+        # Convert to dict and serialize datetime/date objects
+        fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else v 
+                    for k, v in fab.__dict__.items() if not k.startswith('_')}
+        fab_dict["sales_person_name"] = f"{sales_person_first_name} {sales_person_last_name}" if sales_person_first_name else None
+        fab_dict["stone_type_name"] = stone_type_name
+        fab_dict["stone_color_name"] = stone_color_name
+        fab_dict["stone_thickness_value"] = stone_thickness_value
+        fab_dict["edge_name"] = edge_name
+        
+        # Add job details
+        if business_job:
+            job_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else v
+                       for k, v in business_job.__dict__.items() if not k.startswith('_')}
+            fab_dict["job_details"] = job_dict
+            fab_dict["account_id"] = business_job.account_id
+        else:
+            fab_dict["job_details"] = None
+            fab_dict["account_id"] = None
+
+        # Add account data
+        fab_dict["account_name"] = account_name
+        fab_dict["account_number"] = account_number
+        fab_dict["account_contact_person"] = account_contact_person
+        fab_dict["account_email"] = account_email
+        fab_dict["account_phone"] = account_phone
+        
+        # Add templating data
+        fab_dict["templating_schedule_start_date"] = templating_schedule_start_date.isoformat() if templating_schedule_start_date else None
+        fab_dict["templating_schedule_due_date"] = templating_schedule_due_date.isoformat() if templating_schedule_due_date else None
+        fab_dict["templating_notes"] = templating_notes
+        fab_dict["technician_name"] = f"{technician_first_name} {technician_last_name}" if technician_first_name else None
+        
+        # Add drafter information
+        fab_dict["drafter_name"] = f"{drafter_first_name} {drafter_last_name}" if drafter_first_name else None
+        fab_dict["drafter_assigned_by_name"] = f"{drafter_assigned_by_first_name} {drafter_assigned_by_last_name}" if drafter_assigned_by_first_name else None
+        
+        # ALWAYS add current_stage and next_stage
+        fab_dict["next_stage"] = get_next_stage(fab_dict.get("current_stage"))
+        
+        fabs.append(fab_dict)
+    
+    # Fetch fab_notes for all FABs
+    for fab_dict in fabs:
+        fab_notes = await get_fab_notes(db, fab_dict["id"])
+        fab_dict["fab_notes"] = fab_notes
+    
+    return success_response(fabs, f"Found {len(fabs)} FABs for job {job_id}")
