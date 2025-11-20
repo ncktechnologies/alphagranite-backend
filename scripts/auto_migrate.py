@@ -52,9 +52,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Convert async DATABASE_URL to sync for schema operations
-SYNC_DATABASE_URL = DATABASE_URL.replace('postgresql+asyncpg:', 'postgresql:').replace('sqlite+aiosqlite:', 'sqlite:')
 ASYNC_DATABASE_URL = DATABASE_URL
-
+SYNC_DATABASE_URL = DATABASE_URL
 
 def get_model_tables():
     """Get all table names from SQLModel models"""
