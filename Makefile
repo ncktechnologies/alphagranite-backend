@@ -1,7 +1,7 @@
-.PHONY: help build start stop restart logs shell migrate backup clean status health deploy
+.PHONY: help build start stop restart logs shell migrate backup clean status health deploy check-docker check-docker-compose
 
 # Variables
-DOCKER_COMPOSE = docker-compose
+DOCKER_COMPOSE = docker compose
 CONTAINER_NAME = alpha_granite_api
 
 # Default target
@@ -11,18 +11,20 @@ help:
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Available targets:"
-	@echo "  build      - Build Docker images"
-	@echo "  start      - Start all services"
-	@echo "  stop       - Stop all services"
-	@echo "  restart    - Restart all services"
-	@echo "  logs       - Show application logs (follow mode)"
-	@echo "  shell      - Open shell in web container"
-	@echo "  migrate    - Run database migrations"
-	@echo "  backup     - Create database backup"
-	@echo "  clean      - Clean up containers and images"
-	@echo "  status     - Show container status"
-	@echo "  health     - Run health check"
-	@echo "  deploy     - Full deployment (build and start)"
+	@echo "  build                - Build Docker images"
+	@echo "  start                - Start all services"
+	@echo "  stop                 - Stop all services"
+	@echo "  restart              - Restart all services"
+	@echo "  logs                 - Show application logs (follow mode)"
+	@echo "  shell                - Open shell in web container"
+	@echo "  migrate              - Run database migrations"
+	@echo "  backup               - Create database backup"
+	@echo "  clean                - Clean up containers and images"
+	@echo "  status               - Show container status"
+	@echo "  health               - Run health check"
+	@echo "  check-docker         - Check/install Docker"
+	@echo "  check-docker-compose - Check/install Docker Compose"
+	@echo "  deploy               - Full deployment (checks Docker, builds and starts)"
 	@echo ""
 
 # Build Docker images
@@ -94,8 +96,55 @@ health:
 		exit 1; \
 	fi
 
+# Check and install Docker
+check-docker:
+	@echo "Checking Docker installation..."
+	@if ! command -v docker > /dev/null 2>&1; then \
+		echo "⚠ Docker not found. Installing Docker..."; \
+		if [ "$$(uname)" = "Darwin" ]; then \
+			echo "✗ Please install Docker Desktop for Mac from: https://www.docker.com/products/docker-desktop"; \
+			echo "   Or install via Homebrew: brew install --cask docker"; \
+			exit 1; \
+		elif [ "$$(uname)" = "Linux" ]; then \
+			echo "Installing Docker on Linux..."; \
+			curl -fsSL https://get.docker.com -o get-docker.sh; \
+			sudo sh get-docker.sh; \
+			sudo usermod -aG docker $$USER; \
+			rm get-docker.sh; \
+			echo "✓ Docker installed. You may need to log out and back in for group changes to take effect."; \
+		else \
+			echo "✗ Unsupported OS. Please install Docker manually."; \
+			exit 1; \
+		fi; \
+	else \
+		echo "✓ Docker is installed ($$(docker --version))"; \
+	fi
+
+# Check and install Docker Compose
+check-docker-compose:
+	@echo "Checking Docker Compose installation..."
+	@if ! command -v docker > /dev/null 2>&1; then \
+		echo "✗ Docker must be installed first"; \
+		exit 1; \
+	fi
+	@if ! docker compose version > /dev/null 2>&1; then \
+		echo "⚠ Docker Compose plugin not found. Installing..."; \
+		if [ "$$(uname)" = "Linux" ]; then \
+			DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}; \
+			mkdir -p $$DOCKER_CONFIG/cli-plugins; \
+			COMPOSE_VERSION=$$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep 'tag_name' | cut -d\" -f4); \
+			curl -SL "https://github.com/docker/compose/releases/download/$$COMPOSE_VERSION/docker-compose-$$(uname -s)-$$(uname -m)" -o $$DOCKER_CONFIG/cli-plugins/docker-compose; \
+			chmod +x $$DOCKER_CONFIG/cli-plugins/docker-compose; \
+			echo "✓ Docker Compose installed ($$COMPOSE_VERSION)"; \
+		else \
+			echo "✓ Docker Compose should be included with Docker Desktop"; \
+		fi; \
+	else \
+		echo "✓ Docker Compose is installed ($$(docker compose version))"; \
+	fi
+
 # Full deployment
-deploy:
+deploy: check-docker check-docker-compose
 	@echo "=========================================="
 	@echo "Alpha Granite Backend - Deployment"
 	@echo "=========================================="
