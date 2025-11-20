@@ -167,7 +167,12 @@ def sync_database_schema():
 async def verify_database_connection():
     """Verify database connection before migration"""
     try:
-        engine = create_async_engine(ASYNC_DATABASE_URL, echo=False)
+        # Configure engine with statement_cache_size=0 for pgBouncer compatibility
+        engine = create_async_engine(
+            ASYNC_DATABASE_URL,
+            echo=False,
+            connect_args={"statement_cache_size": 0} if "postgresql" in ASYNC_DATABASE_URL else {}
+        )
         async with engine.begin() as conn:
             await conn.execute(text("SELECT 1"))
         await engine.dispose()

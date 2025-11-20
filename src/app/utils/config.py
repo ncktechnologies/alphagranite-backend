@@ -58,7 +58,11 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
 # Database connection
-engine = create_async_engine(DATABASE_URL)
+# Configure engine with statement_cache_size=0 for pgBouncer compatibility
+engine = create_async_engine(
+    DATABASE_URL,
+    connect_args={"statement_cache_size": 0} if "postgresql" in DATABASE_URL else {}
+)
 SessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
