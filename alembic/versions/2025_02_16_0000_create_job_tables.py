@@ -37,15 +37,6 @@ def enum_exists(enum_name):
     return result.scalar()
 
 
-def create_enum_if_not_exists(enum_obj):
-    """Create an ENUM type only if it doesn't exist."""
-    if not enum_exists(enum_obj.name):
-        enum_obj.create(op.get_bind(), checkfirst=False)
-        print(f"Created ENUM type: {enum_obj.name}")
-    else:
-        print(f"Skipped ENUM (already exists): {enum_obj.name}")
-
-
 def create_table_if_not_exists(table_name, *args, **kwargs):
     """Create a table only if it doesn't already exist."""
     if not table_exists(table_name):
@@ -74,20 +65,40 @@ def create_index_if_not_exists(index_name, table_name, columns, **kwargs):
         print(f"Skipped index (already exists): {index_name}")
 
 def upgrade():
-    # Create enum types
-    job_status = sa.Enum('draft', 'published', 'closed', 'archived', name='jobstatus')
-    job_type = sa.Enum('full_time', 'part_time', 'contract', 'internship', 'temporary', name='jobtype')
-    experience_level = sa.Enum('entry', 'mid', 'senior', 'executive', name='experiencelevel')
+    # Create enum types with create_type=False to prevent auto-creation later
+    job_status = sa.Enum('draft', 'published', 'closed', 'archived', name='jobstatus', create_type=False)
+    job_type = sa.Enum('full_time', 'part_time', 'contract', 'internship', 'temporary', name='jobtype', create_type=False)
+    experience_level = sa.Enum('entry', 'mid', 'senior', 'executive', name='experiencelevel', create_type=False)
     application_status = sa.Enum(
         'applied', 'under_review', 'interview', 'offered', 'hired', 'rejected', 'withdrawn',
-        name='applicationstatus'
+        name='applicationstatus',
+        create_type=False
     )
     
-    # Create the enum types only if they don't exist
-    create_enum_if_not_exists(job_status)
-    create_enum_if_not_exists(job_type)
-    create_enum_if_not_exists(experience_level)
-    create_enum_if_not_exists(application_status)
+    # Manually create the enum types only if they don't exist
+    if not enum_exists('jobstatus'):
+        op.execute("CREATE TYPE jobstatus AS ENUM ('draft', 'published', 'closed', 'archived')")
+        print("Created ENUM type: jobstatus")
+    else:
+        print("Skipped ENUM (already exists): jobstatus")
+    
+    if not enum_exists('jobtype'):
+        op.execute("CREATE TYPE jobtype AS ENUM ('full_time', 'part_time', 'contract', 'internship', 'temporary')")
+        print("Created ENUM type: jobtype")
+    else:
+        print("Skipped ENUM (already exists): jobtype")
+    
+    if not enum_exists('experiencelevel'):
+        op.execute("CREATE TYPE experiencelevel AS ENUM ('entry', 'mid', 'senior', 'executive')")
+        print("Created ENUM type: experiencelevel")
+    else:
+        print("Skipped ENUM (already exists): experiencelevel")
+    
+    if not enum_exists('applicationstatus'):
+        op.execute("CREATE TYPE applicationstatus AS ENUM ('applied', 'under_review', 'interview', 'offered', 'hired', 'rejected', 'withdrawn')")
+        print("Created ENUM type: applicationstatus")
+    else:
+        print("Skipped ENUM (already exists): applicationstatus")
     
     # Create jobs table
     create_table_if_not_exists(
