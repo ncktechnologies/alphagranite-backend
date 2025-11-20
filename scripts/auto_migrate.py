@@ -42,13 +42,7 @@ from src.app.database.shop_planning_section import ShopPlanningSection
 from src.app.database.operation_workflow import OperationWorkflow
 
 # Import database configuration
-from src.app.utils.config import (
-    DATABASE_USER,
-    DATABASE_PASSWORD,
-    DATABASE_HOST,
-    DATABASE_PORT,
-    DATABASE_NAME
-)
+from src.app.utils.config import DATABASE_URL
 
 # Configure logging
 logging.basicConfig(
@@ -57,9 +51,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Database URL
-DATABASE_URL = f"postgresql://{DATABASE_USER}:{DATABASE_PASSWORD}@{DATABASE_HOST}:{DATABASE_PORT}/{DATABASE_NAME}"
-ASYNC_DATABASE_URL = f"postgresql+asyncpg://{DATABASE_USER}:{DATABASE_PASSWORD}@{DATABASE_HOST}:{DATABASE_PORT}/{DATABASE_NAME}"
+# Convert async DATABASE_URL to sync for schema operations
+SYNC_DATABASE_URL = DATABASE_URL.replace('postgresql+asyncpg:', 'postgresql:').replace('sqlite+aiosqlite:', 'sqlite:')
+ASYNC_DATABASE_URL = DATABASE_URL
 
 
 def get_model_tables():
@@ -122,9 +116,9 @@ def sync_database_schema():
     
     try:
         # Create synchronous engine for schema operations
-        engine = create_engine(DATABASE_URL, echo=False)
+        engine = create_engine(SYNC_DATABASE_URL, echo=False)
         
-        logger.info(f"Connected to database: {DATABASE_NAME} at {DATABASE_HOST}:{DATABASE_PORT}")
+        logger.info(f"Connected to database: {SYNC_DATABASE_URL.split('@')[-1] if '@' in SYNC_DATABASE_URL else 'local'}")
         
         # Get model and database tables
         model_tables = get_model_tables()
