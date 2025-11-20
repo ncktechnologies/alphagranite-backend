@@ -20,11 +20,11 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
-    # Add project_value column to business_jobs table
-    op.add_column('business_jobs', sa.Column('project_value', sa.Numeric(precision=15, scale=2), nullable=True))
+    # Add project_value column to jobs table
+    op.add_column('jobs', sa.Column('project_value', sa.Numeric(precision=15, scale=2), nullable=True))
 
 
 def downgrade() -> None:
     """Downgrade schema."""
-    # Remove project_value column from business_jobs table
-    op.drop_column('business_jobs', 'project_value')
+    # Remove project_value column from jobs table
+    op.drop_column('jobs', 'project_value')

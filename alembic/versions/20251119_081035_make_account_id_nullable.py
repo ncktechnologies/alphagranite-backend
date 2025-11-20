@@ -19,10 +19,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Make account_id column nullable in business_jobs table."""
+    """Make account_id column nullable in jobs table."""
     
     # Make account_id nullable
-    op.alter_column('business_jobs', 'account_id',
+    op.alter_column('jobs', 'account_id',
                     existing_type=sa.Integer(),
                     nullable=True)
 
@@ -31,6 +31,6 @@ def downgrade() -> None:
     """Revert account_id to NOT NULL."""
     
     # Make account_id NOT NULL again
-    op.alter_column('business_jobs', 'account_id',
+    op.alter_column('jobs', 'account_id',
                     existing_type=sa.Integer(),
                     nullable=False)
