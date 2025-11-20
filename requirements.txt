@@ -13,6 +13,10 @@ passlib[bcrypt]
 bcrypt==3.2.2
 starlette
 python-multipart
+aiosqlite
+email-validator
+pydantic-settings
+dnspython
 
 # test
 httpx>=0.25.0

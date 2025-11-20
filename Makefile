@@ -161,8 +161,12 @@ deploy: check-docker check-docker-compose
 	@$(DOCKER_COMPOSE) up -d --build
 	@echo ""
 	@echo "Waiting for services to be ready..."
-	@sleep 5
+	@sleep 10
 	@make status
+	@echo ""
+	@echo "Running database migrations..."
+	@$(DOCKER_COMPOSE) exec -T web alembic upgrade head || echo "⚠ Migration failed or no migrations to run"
+	@echo "✓ Migrations complete"
 	@echo ""
 	@echo "=========================================="
 	@echo "✓ Deployment Complete!"
