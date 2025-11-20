@@ -65,16 +65,6 @@ def create_index_if_not_exists(index_name, table_name, columns, **kwargs):
         print(f"Skipped index (already exists): {index_name}")
 
 def upgrade():
-    # Create enum types with create_type=False to prevent auto-creation later
-    job_status = sa.Enum('draft', 'published', 'closed', 'archived', name='jobstatus', create_type=False)
-    job_type = sa.Enum('full_time', 'part_time', 'contract', 'internship', 'temporary', name='jobtype', create_type=False)
-    experience_level = sa.Enum('entry', 'mid', 'senior', 'executive', name='experiencelevel', create_type=False)
-    application_status = sa.Enum(
-        'applied', 'under_review', 'interview', 'offered', 'hired', 'rejected', 'withdrawn',
-        name='applicationstatus',
-        create_type=False
-    )
-    
     # Manually create the enum types only if they don't exist
     if not enum_exists('jobstatus'):
         op.execute("CREATE TYPE jobstatus AS ENUM ('draft', 'published', 'closed', 'archived')")
@@ -99,6 +89,16 @@ def upgrade():
         print("Created ENUM type: applicationstatus")
     else:
         print("Skipped ENUM (already exists): applicationstatus")
+    
+    # Reference existing enum types by name (prevents SQLAlchemy from trying to create them)
+    job_status = postgresql.ENUM('draft', 'published', 'closed', 'archived', name='jobstatus', create_type=False)
+    job_type = postgresql.ENUM('full_time', 'part_time', 'contract', 'internship', 'temporary', name='jobtype', create_type=False)
+    experience_level = postgresql.ENUM('entry', 'mid', 'senior', 'executive', name='experiencelevel', create_type=False)
+    application_status = postgresql.ENUM(
+        'applied', 'under_review', 'interview', 'offered', 'hired', 'rejected', 'withdrawn',
+        name='applicationstatus',
+        create_type=False
+    )
     
     # Create jobs table
     create_table_if_not_exists(
