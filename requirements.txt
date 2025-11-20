@@ -7,7 +7,6 @@ pytest
 pytest-asyncio
 httpx
 alembic
-psycopg2
 psycopg2-binary
 pyjwt
 passlib[bcrypt]
