@@ -111,6 +111,21 @@ class EmployeeService:
             await db.refresh(new_employee)
             logger.info(f"[CREATE] Created employee object: id={getattr(new_employee, 'id', None)} username={getattr(new_employee, 'username', None)} repr={new_employee!r}")
 
+            # Create UserRole entry if role_id is provided
+            if data.role_id:
+                try:
+                    user_role = UserRole(
+                        user_id=new_employee.id,
+                        role_id=data.role_id,
+                        created_at=datetime.now()
+                    )
+                    db.add(user_role)
+                    await db.commit()
+                    logger.info(f"[CREATE] Created UserRole for user {new_employee.id} with role {data.role_id}")
+                except Exception as e:
+                    logger.exception(f"[CREATE] Failed to create UserRole: {e}")
+                    # Don't fail the employee creation if UserRole fails
+
             await save_audit_trail(
                 db=db,
                 activity="employee_created",
@@ -119,27 +134,28 @@ class EmployeeService:
                 activity_trace_id=new_employee.id
             )
 
-            email_body = f"""
-            Welcome to Alpha Granite!
+            if data.email:
+                email_body = f"""
+                Welcome to Alpha Granite!
 
-            Your account has been created. Here are your login credentials:
+                Your account has been created. Here are your login credentials:
 
-            Username: {username}
-            Password: {password}
+                Username: {username}
+                Password: {password}
 
-            Please login and change your password immediately.
+                Please login and change your password immediately.
 
-            Best regards,
-            The Alpha Granite Team
-            """
+                Best regards,
+                The Alpha Granite Team
+                """
 
-            await send_notification(
-                db=db,
-                email=data.email,
-                title="Your Alpha Granite Account",
-                body=email_body,
-                user_id=current_user_id
-            )
+                await send_notification(
+                    db=db,
+                    email=data.email,
+                    title="Your Alpha Granite Account",
+                    body=email_body,
+                    user_id=current_user_id
+                )
 
             # Return employee with generated password
             return {
@@ -187,8 +203,9 @@ class EmployeeService:
             employee.department = data.department_id
         if data.role_id is not None:
             employee.role_id = data.role_id
-            # Ensure the role assignment exists in user_roles table as well
+            # Update the role assignment in user_roles table
             try:
+                # Check if UserRole already exists for this role
                 ur_result = await db.execute(
                     select(UserRole).where(
                         UserRole.user_id == employee.id,
@@ -197,16 +214,26 @@ class EmployeeService:
                 )
                 existing_ur = ur_result.scalars().first()
                 if not existing_ur:
+                    # Remove old role assignments (if you want single role per user)
+                    # If you want multiple roles, comment out the delete section
+                    delete_result = await db.execute(
+                        select(UserRole).where(UserRole.user_id == employee.id)
+                    )
+                    old_roles = delete_result.scalars().all()
+                    for old_role in old_roles:
+                        await db.delete(old_role)
+                    
+                    # Add new role
                     new_user_role = UserRole(
                         user_id=employee.id,
                         role_id=data.role_id,
                         created_at=datetime.now(),
                     )
                     db.add(new_user_role)
+                    logger.info(f"[UPDATE] Updated UserRole for user {employee.id} to role {data.role_id}")
             except Exception:
                 # don't block the update if user_role insertion fails; log and continue
-                logger = logging.getLogger("employee_update")
-                logger.exception(f"Failed to ensure UserRole for user {employee.id} role {data.role_id}")
+                logger.exception(f"Failed to update UserRole for user {employee.id} role {data.role_id}")
         
         # Update profile_image_id if provided (use final_profile_image_id which prioritizes data object)
         if final_profile_image_id is not None:

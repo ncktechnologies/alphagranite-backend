@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends, Request, BackgroundTasks, HTTPException,
 
 # Import database session dependency
 from src.app.database import get_db
+from src.app.database.user_role import UserRole
 
 bearer_scheme = HTTPBearer()
 
@@ -578,8 +579,31 @@ async def get_user_profile(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
-    """Get current user profile"""
-    return UserResponse.from_orm(current_user)
+    """Get current user profile with roles and permissions"""
+    # Fetch department name if user has a department
+    from src.app.database.department import Department
+    department_name = None
+    if current_user.department:
+        dept_result = await db.execute(
+            select(Department).where(Department.id == current_user.department)
+        )
+        department = dept_result.scalars().first()
+        if department:
+            department_name = department.name
+    
+    # Get user roles and permissions using auth service
+    user_roles = await auth_service.get_user_roles(current_user.id, db)
+    user_role_permissions = await auth_service.get_user_role_permissions(current_user.id, db)
+    user_action_permissions = await auth_service.get_user_permissions(current_user.id, db)
+    
+    # Convert user to dict and add additional data
+    user_dict = current_user.model_dump()
+    user_dict['department_name'] = department_name
+    user_dict['roles'] = user_roles
+    user_dict['permissions'] = user_role_permissions
+    user_dict['action_permissions'] = user_action_permissions
+    
+    return UserResponse(**user_dict)
 
 
 @auth_router.put("/me")
@@ -597,8 +621,43 @@ async def update_user_profile(
         ip_address = request.client.host if request.client else None
         browser = request.headers.get(HEADER_USER_AGENT)
 
-        # Update user profile
-        for field, value in profile_data.dict(exclude_unset=True).items():
+        # Check if role_id is being updated - only admins can do this
+        if profile_data.role_id is not None:
+            if not current_user.is_super_admin:
+                raise error_response("Only administrators can assign roles", 403)
+            
+            # Update role_id on user
+            current_user.role_id = profile_data.role_id
+            
+            # Update user_roles table - update existing or create new one
+            try:
+                # Check if user already has a role assignment
+                ur_result = await db.execute(
+                    select(UserRole).where(UserRole.user_id == current_user.id)
+                )
+                existing_user_role = ur_result.scalars().first()
+                
+                if existing_user_role:
+                    # Update existing role assignment
+                    existing_user_role.role_id = profile_data.role_id
+                    existing_user_role.update_at = datetime.now()
+                    db.add(existing_user_role)
+                else:
+                    # Create new role assignment
+                    new_user_role = UserRole(
+                        user_id=current_user.id,
+                        role_id=profile_data.role_id,
+                        created_at=datetime.now()
+                    )
+                    db.add(new_user_role)
+                
+                await db.flush()  # Flush to ensure UserRole is updated/created
+            except Exception as e:
+                await db.rollback()
+                raise error_response(f"Failed to update role assignment: {str(e)}", 500)
+
+        # Update other profile fields
+        for field, value in profile_data.dict(exclude_unset=True, exclude={'role_id'}).items():
             if value is not None:  # Only update fields that were included in the request
                 setattr(current_user, field, value)
 

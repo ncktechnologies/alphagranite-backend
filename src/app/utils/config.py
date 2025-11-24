@@ -19,7 +19,8 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./app.db")
 if DATABASE_URL.startswith('postgresql:'):
     DATABASE_URL = DATABASE_URL.replace('postgresql:', 'postgresql+asyncpg:')
 
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@example.com")
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "")
+
 
 # Superuser credentials
 SUPERUSER_USERNAME = os.getenv("SUPERUSER_USERNAME", "admin")

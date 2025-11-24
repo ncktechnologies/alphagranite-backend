@@ -135,6 +135,7 @@ class UserProfileUpdate(BaseModel):
     phone: Optional[str] = None
     home_address: Optional[str] = None
     gender: Optional[str] = None
+    role_id: Optional[int] = None  # Only admins can update this
 
 class UserResponse(BaseModel):
     id: int
@@ -146,10 +147,14 @@ class UserResponse(BaseModel):
     home_address: Optional[str] = None
     gender: Optional[str] = None
     department: int
+    department_name: Optional[str] = None
     status: int
     is_super_admin: bool
     created_at: datetime
     updated_at: datetime
+    roles: Optional[List[Dict[str, Any]]] = None
+    permissions: Optional[List[Dict[str, Any]]] = None
+    action_permissions: Optional[List[Dict[str, Any]]] = None
     
     class Config:
         from_attributes = True

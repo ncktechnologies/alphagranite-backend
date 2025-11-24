@@ -52,6 +52,13 @@ async def enrich_employee_with_profile_image(
         dept_obj = dept_result.scalars().first()
         result["department_name"] = dept_obj.name if dept_obj else None
 
+    # Add role name
+    if result.get("role_id"):
+        from src.app.database.role import Role
+        role_result = await db.execute(select(Role).where(Role.id == result["role_id"]))
+        role_obj = role_result.scalars().first()
+        result["role_name"] = role_obj.name if role_obj else None
+
     # Add profile_image_url
     if result.get("profile_image_id"):
         logger.info(f"[ENRICH] Fetching file for profile_image_id: {result['profile_image_id']}")

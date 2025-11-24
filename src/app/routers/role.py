@@ -161,14 +161,19 @@ async def update_role(
     """
     Update role details
     
-    This endpoint updates a role's details including its permissions.
+    This endpoint updates a role's details including its permissions and members.
     You can update any combination of fields:
     - name: New role name (must be unique)
     - description: New role description
-    - permission_ids: New list of permission IDs
+    - action_menu_permissions: New list of action menus with CRUD permissions
+    - user_ids: New list of user IDs to assign to this role
+    - permission_ids: New list of permission IDs (alternative to action_menu_permissions)
     - status: New role status (1=Active, 2=Inactive)
     """
-    # current_user is provided by Depends(get_current_user)
+    # Convert action_menu_permissions to dicts if provided
+    action_menu_permissions_dicts = None
+    if data.action_menu_permissions:
+        action_menu_permissions_dicts = [amp.dict() for amp in data.action_menu_permissions]
     
     # Call service using helper for error handling
     result = await call_service(
@@ -177,6 +182,8 @@ async def update_role(
         role_id=role_id,
         name=data.name,
         description=data.description,
+        action_menu_permissions=action_menu_permissions_dicts,
+        user_ids=data.user_ids,
         permission_ids=data.permission_ids,
         status=data.status,
         current_user_id=current_user.id

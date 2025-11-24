@@ -22,6 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.app.database.permission import Permission
 from src.app.database.action_menu import ActionMenu
 from src.app.database.role_permission import RolePermission
+from src.app.database.role import Role
+from src.app.database.user_role import UserRole
 
 
 class AuthService:
@@ -139,6 +141,65 @@ class AuthService:
             for row in rows
         ]
 
+    async def get_user_roles(self, user_id: int, db_session: AsyncSession) -> List[Dict]:
+        """Get all roles assigned to a user"""
+        # Query user roles with role details
+        qry = (
+            select(
+                Role.id,
+                Role.name,
+                Role.description,
+            )
+            .join(UserRole, UserRole.role_id == Role.id)
+            .filter(UserRole.user_id == user_id)
+        )
+        
+        res = await db_session.execute(qry)
+        rows = res.all()
+        
+        return [
+            {
+                "id": row.id,
+                "name": row.name,
+                "description": row.description,
+            }
+            for row in rows
+        ]
+
+    async def get_user_role_permissions(self, user_id: int, db_session: AsyncSession) -> List[Dict]:
+        """Get all permissions from all roles assigned to a user"""
+        # First get all role IDs for this user
+        role_qry = select(UserRole.role_id).filter(UserRole.user_id == user_id)
+        role_res = await db_session.execute(role_qry)
+        role_ids = [row[0] for row in role_res.all()]
+        
+        if not role_ids:
+            return []
+        
+        # Get all permissions for these roles
+        perm_qry = (
+            select(Permission)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .filter(RolePermission.role_id.in_(role_ids))
+            .distinct()
+        )
+        
+        perm_res = await db_session.execute(perm_qry)
+        permissions = perm_res.scalars().all()
+        
+        return [
+            {
+                "id": perm.id,
+                "name": perm.name,
+                "description": perm.description,
+                "can_create": perm.can_create,
+                "can_read": perm.can_read,
+                "can_update": perm.can_update,
+                "can_delete": perm.can_delete,
+            }
+            for perm in permissions
+        ]
+
     async def authenticate_user(self, user_id: int, db_session: AsyncSession) -> Dict:
         """Generate tokens and user info for authenticated user"""
         res = await db_session.execute(select(User).where(User.id == user_id))
@@ -146,7 +207,11 @@ class AuthService:
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-        # Get user permissions for action menus
+        # Get user roles and permissions
+        user_roles = await self.get_user_roles(user.id, db_session)
+        user_role_permissions = await self.get_user_role_permissions(user.id, db_session)
+        
+        # Get user permissions for action menus (existing functionality)
         user_permissions = await self.get_user_permissions(user.id, db_session)
 
         # Create tokens with claims
@@ -160,7 +225,7 @@ class AuthService:
         access_token = self.create_access_token(token_data)
         refresh_token = self.create_refresh_token({"sub": user.username, "user_id": user.id})
 
-        # Return tokens with user permissions
+        # Return tokens with user info, roles, and permissions
         return {
             "access_token": access_token,
             "refresh_token": refresh_token,
@@ -174,7 +239,9 @@ class AuthService:
                 "role_id": user.role_id,
                 "is_super_admin": user.is_super_admin,
             },
-            "permissions": user_permissions,
+            "roles": user_roles,  # New: List of roles the user has
+            "permissions": user_role_permissions,  # New: Permissions from all roles
+            "action_permissions": user_permissions,  # Existing: Action menu permissions
         }
 
     async def create_password_reset_token(self, email: str, db_session: AsyncSession) -> Tuple[bool, Optional[str], Optional[User]]:

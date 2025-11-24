@@ -190,6 +190,8 @@ class RoleService:
         role_id: int, 
         name: Optional[str] = None,
         description: Optional[str] = None, 
+        action_menu_permissions: Optional[List[Dict[str, Any]]] = None,
+        user_ids: Optional[List[int]] = None,
         permission_ids: Optional[List[int]] = None, 
         status: Optional[int] = None,
         current_user_id: int = None
@@ -202,6 +204,8 @@ class RoleService:
             role_id: ID of the role to update
             name: New role name (optional)
             description: New role description (optional)
+            action_menu_permissions: New list of action menus with CRUD permissions (optional)
+            user_ids: New list of user IDs to assign to this role (optional)
             permission_ids: New list of permission IDs (optional)
             status: New role status (optional)
             current_user_id: ID of the user updating the role
@@ -243,8 +247,38 @@ class RoleService:
             
             role.updated_at = datetime.now()
             
-            # Update permissions if provided
-            if permission_ids is not None:
+            # Update permissions using action_menu_permissions if provided
+            if action_menu_permissions is not None:
+                # Delete existing role_permissions
+                from sqlalchemy import delete
+                await db.execute(
+                    delete(RolePermission).where(RolePermission.role_id == role_id)
+                )
+                
+                # Create permissions from action menu permissions (similar to create_role)
+                for amp in action_menu_permissions:
+                    # Create a permission for this action menu
+                    permission = Permission(
+                        name=f"{role.name} - Menu {amp['action_menu_id']}",
+                        description=f"Auto-generated permission for role {role.name}",
+                        can_create=amp.get('can_create', False),
+                        can_read=amp.get('can_read', False),
+                        can_update=amp.get('can_update', False),
+                        can_delete=amp.get('can_delete', False)
+                    )
+                    db.add(permission)
+                    await db.flush()  # Get permission ID
+                    
+                    # Link permission to role with action menu
+                    role_permission = RolePermission(
+                        role_id=role_id,
+                        permission_id=permission.id,
+                        action_menu_id=amp['action_menu_id']
+                    )
+                    db.add(role_permission)
+            
+            # Update permissions using permission_ids if provided (alternative method)
+            elif permission_ids is not None:
                 # Verify all permissions exist
                 permissions_count = await db.execute(
                     select(func.count(Permission.id)).where(Permission.id.in_(permission_ids))
@@ -256,8 +290,9 @@ class RoleService:
                     )
                 
                 # Delete existing role_permissions
+                from sqlalchemy import delete
                 await db.execute(
-                    select(RolePermission).where(RolePermission.role_id == role_id).delete()
+                    delete(RolePermission).where(RolePermission.role_id == role_id)
                 )
                 
                 # Create new role_permissions
@@ -267,6 +302,23 @@ class RoleService:
                         permission_id=permission_id
                     )
                     db.add(role_permission)
+            
+            # Update user assignments if provided
+            if user_ids is not None:
+                # Delete existing user-role assignments
+                from sqlalchemy import delete
+                await db.execute(
+                    delete(UserRole).where(UserRole.role_id == role_id)
+                )
+                
+                # Create new user-role assignments
+                for user_id in user_ids:
+                    user_role = UserRole(
+                        user_id=user_id,
+                        role_id=role_id,
+                        created_at=datetime.now()
+                    )
+                    db.add(user_role)
             
             await db.commit()
             await db.refresh(role)
@@ -443,6 +495,42 @@ class RoleService:
         perm_result = await db.execute(perm_stmt)
         permission_rows = perm_result.all()
 
+        # Build permissions list
+        permissions = [
+            {
+                "id": p.id,
+                "name": getattr(p, 'name', None),
+                "description": getattr(p, 'description', None),
+                "can_create": getattr(p, 'can_create', False),
+                "can_read": getattr(p, 'can_read', False),
+                "can_update": getattr(p, 'can_update', False),
+                "can_delete": getattr(p, 'can_delete', False),
+                "action_menu_id": rp.action_menu_id if rp else None,
+                "action_menu_name": am.name if am else None,
+            }
+            for p, rp, am in permission_rows
+        ]
+
+        # Group permissions by action menu for action_permissions
+        action_permissions = {}
+        for p, rp, am in permission_rows:
+            if am:  # Only include permissions with action menus
+                menu_id = am.id
+                if menu_id not in action_permissions:
+                    action_permissions[menu_id] = {
+                        "action_menu_id": menu_id,
+                        "action_menu_name": am.name,
+                        "can_create": False,
+                        "can_read": False,
+                        "can_update": False,
+                        "can_delete": False,
+                    }
+                # Aggregate permissions for this action menu
+                action_permissions[menu_id]["can_create"] = action_permissions[menu_id]["can_create"] or getattr(p, 'can_create', False)
+                action_permissions[menu_id]["can_read"] = action_permissions[menu_id]["can_read"] or getattr(p, 'can_read', False)
+                action_permissions[menu_id]["can_update"] = action_permissions[menu_id]["can_update"] or getattr(p, 'can_update', False)
+                action_permissions[menu_id]["can_delete"] = action_permissions[menu_id]["can_delete"] or getattr(p, 'can_delete', False)
+
         # Return a serializable representation combining role and permissions
         return {
             "id": role.id,
@@ -452,20 +540,8 @@ class RoleService:
             "status_name": status_obj.name if status_obj else None,
             "created_at": role.created_at,
             "updated_at": role.updated_at,
-            "permissions": [
-                {
-                    "id": p.id,
-                    "name": getattr(p, 'name', None),
-                    "description": getattr(p, 'description', None),
-                    "can_create": getattr(p, 'can_create', False),
-                    "can_read": getattr(p, 'can_read', False),
-                    "can_update": getattr(p, 'can_update', False),
-                    "can_delete": getattr(p, 'can_delete', False),
-                    "action_menu_id": rp.action_menu_id if rp else None,
-                    "action_menu_name": am.name if am else None,
-                }
-                for p, rp, am in permission_rows
-            ]
+            "permissions": permissions,
+            "action_permissions": list(action_permissions.values())
         }
     
     @staticmethod
@@ -642,7 +718,7 @@ class RoleService:
         result = await db.execute(query)
         roles = result.scalars().all()
         
-        # For each role, get member count and top 3 members with profile images
+        # For each role, get member count and all members with profile images
         role_data = []
         for role in roles:
             # Get total member count
@@ -650,19 +726,18 @@ class RoleService:
             member_count_result = await db.execute(member_count_query)
             member_count = member_count_result.scalar_one()
             
-            # Get top 3 members with profile images
-            top_members_query = (
+            # Get all members with profile images (not just top 3)
+            all_members_query = (
                 select(User)
                 .join(UserRole, User.id == UserRole.user_id)
                 .where(UserRole.role_id == role.id)
-                .limit(3)
             )
-            top_members_result = await db.execute(top_members_query)
-            top_members = top_members_result.scalars().all()
+            all_members_result = await db.execute(all_members_query)
+            all_members = all_members_result.scalars().all()
             
-            # Create list of members with profile images
+            # Create list of all members with profile images
             members_with_images = []
-            for member in top_members:
+            for member in all_members:
                 # Get profile image URL if available
                 profile_image_url = None
                 if member.profile_image_id:
@@ -674,8 +749,12 @@ class RoleService:
                 
                 members_with_images.append({
                     "id": member.id,
+                    "username": member.username,
+                    "email": member.email,
                     "first_name": member.first_name,
                     "last_name": member.last_name,
+                    "department": member.department,
+                    "status": member.status,
                     "profile_image_url": profile_image_url
                 })
             
@@ -688,7 +767,7 @@ class RoleService:
                 "created_at": role.created_at,
                 "updated_at": role.updated_at,
                 "member_count": member_count,
-                "top_members": members_with_images
+                "members": members_with_images  # Changed from top_members to members
             })
         
         return {

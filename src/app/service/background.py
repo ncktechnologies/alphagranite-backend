@@ -1,5 +1,6 @@
 
 import os
+import logging
 import smtplib
 import asyncio
 from email.mime.text import MIMEText
@@ -9,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.database.user import User
-from src.app.utils.config import SessionLocal
+from src.app.utils.config import SessionLocal, ADMIN_EMAIL
 from src.app.database.audit_trail import AuditTrail
 from src.app.utils.helpers import error_response, success_response
 
@@ -21,11 +22,12 @@ from src.app.utils.helpers import error_response, success_response
 
 def send_email(to_email: str, subject: str, body: str):
     """Synchronous SMTP send (will be executed in threadpool to avoid blocking)."""
-    smtp_host = os.getenv("SMTP_HOST")
-    smtp_port = int(os.getenv("SMTP_PORT", 587))
-    smtp_user = os.getenv("SMTP_USER")
-    smtp_password = os.getenv("SMTP_PASSWORD")
-    smtp_from = os.getenv("SMTP_FROM")
+    smtp_host = os.getenv("EMAIL_HOST")
+    smtp_port = int(os.getenv("EMAIL_PORT", 587))
+    smtp_user = os.getenv("EMAIL_HOST_USER")
+    smtp_password = os.getenv("EMAIL_HOST_PASSWORD")
+    smtp_from = os.getenv("DEFAULT_FROM_EMAIL")
+    use_tls = os.getenv("EMAIL_USE_TLS", "True").lower() == "true"
 
     msg = MIMEMultipart()
     msg["From"] = smtp_from
@@ -35,7 +37,8 @@ def send_email(to_email: str, subject: str, body: str):
 
     try:
         with smtplib.SMTP(smtp_host, smtp_port) as server:
-            server.starttls()
+            if use_tls:
+                server.starttls()
             server.login(smtp_user, smtp_password)
             server.sendmail(smtp_from, to_email, msg.as_string())
     except Exception:
@@ -76,22 +79,83 @@ async def send_notification(
 ):
     """Send an email notification and record audit events. This function
     opens its own async session so callers can pass a request session or None.
+    
+    Args:
+        email: Can be a single email, list of emails, or comma-separated string
+        title: Email subject
+        body: Email body
+        user_id: User ID for audit trail
     """
-    async with SessionLocal() as session:
-        result = await session.execute(select(User).where(User.id == user_id))
-        user = result.scalars().first()
-        if not user or getattr(user, "status", None) == "deleted":
-            await save_audit_trail(session, "notification_failed", user_id, f"Notification failed for {email}", 0)
-            return error_response("User not found or deleted", 404)
-        if not getattr(user, "email_notifications_enabled", True):
-            await save_audit_trail(session, "notification_off", user_id, f"Notification off for {email}", 0)
-            return error_response("Email notifications are off", 400)
-
-    # Send the email in a thread so we don't block the event loop
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, send_email, email, title, body)
-
-    # Record audit trail that notification was sent
-    async with SessionLocal() as session:
-        await save_audit_trail(session, "notification_sent", user_id, f"Notification sent to {email}", 0)
-    return success_response({"email": email}, "Notification sent.")
+    # Parse admin emails (could be comma-separated)
+    admin_emails = [e.strip().lower() for e in ADMIN_EMAIL.split(',') if e.strip()]
+    
+    # Handle different email input formats
+    email_list = []
+    if isinstance(email, list):
+        email_list = [e.strip() for e in email if e.strip()]
+    elif isinstance(email, str):
+        # Check if comma-separated
+        if ',' in email:
+            email_list = [e.strip() for e in email.split(',') if e.strip()]
+        else:
+            email_list = [email.strip()]
+    
+    if not email_list:
+        return error_response("No valid email addresses provided", 400)
+    
+    # Process each email
+    sent_emails = []
+    failed_emails = []
+    
+    for recipient_email in email_list:
+        # Check if email is an admin email
+        is_admin_email = recipient_email.lower() in admin_emails
+        
+        # For non-admin emails, verify user exists and has notifications enabled
+        if not is_admin_email:
+            try:
+                async with SessionLocal() as session:
+                    result = await session.execute(select(User).where(User.id == user_id))
+                    user = result.scalars().first()
+                    if not user or getattr(user, "status", None) == "deleted":
+                        await save_audit_trail(session, "notification_failed", user_id, f"Notification failed for {recipient_email}", 0)
+                        failed_emails.append(recipient_email)
+                        continue
+                    if not getattr(user, "email_notifications_enabled", True):
+                        await save_audit_trail(session, "notification_off", user_id, f"Notification off for {recipient_email}", 0)
+                        failed_emails.append(recipient_email)
+                        continue
+            except Exception as e:
+                logging.error(f"Error verifying user for notification: {e}")
+                failed_emails.append(recipient_email)
+                continue
+        
+        # Send the email in a thread so we don't block the event loop
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, send_email, recipient_email, title, body)
+            sent_emails.append(recipient_email)
+            
+            # Record audit trail that notification was sent
+            async with SessionLocal() as session:
+                await save_audit_trail(session, "notification_sent", user_id, f"Notification sent to {recipient_email}", 0)
+        except Exception as e:
+            logging.error(f"Error sending email to {recipient_email}: {e}")
+            failed_emails.append(recipient_email)
+    
+    # Return response based on results
+    if sent_emails and not failed_emails:
+        return success_response(
+            {"sent": sent_emails}, 
+            f"Notification sent to {len(sent_emails)} recipient(s)."
+        )
+    elif sent_emails and failed_emails:
+        return success_response(
+            {"sent": sent_emails, "failed": failed_emails},
+            f"Notification sent to {len(sent_emails)} recipient(s), failed for {len(failed_emails)}."
+        )
+    else:
+        return error_response(
+            f"Failed to send notification to all recipients: {', '.join(failed_emails)}", 
+            500
+        )

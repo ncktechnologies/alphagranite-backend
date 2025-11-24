@@ -331,7 +331,14 @@ async def get_fabs(
         fab_notes = await get_fab_notes(db, fab_dict["id"])
         fab_dict["fab_notes"] = fab_notes
     
-    return success_response(fabs, "Fabs fetched successfully")
+    # Calculate total square footage for the filtered results
+    total_sqft = sum(fab_dict.get("total_sqft", 0) or 0 for fab_dict in fabs)
+    
+    return success_response({
+        "fabs": fabs,
+        "total_count": len(fabs),
+        "total_sqft": total_sqft
+    }, "Fabs fetched successfully")
 
 
 @router.get("/fabs/{fab_id}", response_model=SuccessResponse[FabResponse])
