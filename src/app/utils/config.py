@@ -13,8 +13,7 @@ load_dotenv()
 BASE_DIR = pathlib.Path(__file__).parent.parent.parent.parent
 
 # Database configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./app.db")
-
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 # If using PostgreSQL, convert to async driver
 if DATABASE_URL.startswith('postgresql:'):
     DATABASE_URL = DATABASE_URL.replace('postgresql:', 'postgresql+asyncpg:')

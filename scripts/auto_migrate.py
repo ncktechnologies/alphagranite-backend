@@ -4,8 +4,8 @@ Automatically creates, updates, and removes database tables based on SQLModel mo
 Runs on application startup to ensure database schema is in sync
 """
 
-import asyncio
 import sys
+import time
 from pathlib import Path
 
 # Add project root to path
@@ -13,7 +13,6 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from sqlalchemy import create_engine, inspect, text, MetaData
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from sqlmodel import SQLModel
 import logging
@@ -51,9 +50,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Convert async DATABASE_URL to sync for schema operations
-ASYNC_DATABASE_URL = DATABASE_URL
-SYNC_DATABASE_URL = DATABASE_URL
 
 def get_model_tables():
     """Get all table names from SQLModel models"""
@@ -115,9 +111,9 @@ def sync_database_schema():
     
     try:
         # Create synchronous engine for schema operations
-        engine = create_engine(SYNC_DATABASE_URL, echo=False)
+        engine = create_engine(DATABASE_URL, echo=False)
         
-        logger.info(f"Connected to database: {SYNC_DATABASE_URL.split('@')[-1] if '@' in SYNC_DATABASE_URL else 'local'}")
+        logger.info(f"Connected to database: {DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else 'local'}")
         
         # Get model and database tables
         model_tables = get_model_tables()
@@ -164,18 +160,13 @@ def sync_database_schema():
         raise
 
 
-async def verify_database_connection():
+def verify_database_connection():
     """Verify database connection before migration"""
     try:
-        # Configure engine with statement_cache_size=0 for pgBouncer compatibility
-        engine = create_async_engine(
-            ASYNC_DATABASE_URL,
-            echo=False,
-            connect_args={"statement_cache_size": 0} if "postgresql" in ASYNC_DATABASE_URL else {}
-        )
-        async with engine.begin() as conn:
-            await conn.execute(text("SELECT 1"))
-        await engine.dispose()
+        engine = create_engine(DATABASE_URL, echo=False)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        engine.dispose()
         logger.info("✓ Database connection verified")
         return True
     except Exception as e:
@@ -183,24 +174,24 @@ async def verify_database_connection():
         return False
 
 
-async def wait_for_database(max_retries=30, delay=2):
+def wait_for_database(max_retries=30, delay=2):
     """Wait for database to be ready"""
     logger.info("Waiting for database to be ready...")
     for i in range(max_retries):
-        if await verify_database_connection():
+        if verify_database_connection():
             return True
         logger.info(f"Attempt {i + 1}/{max_retries} - Database not ready, waiting {delay}s...")
-        await asyncio.sleep(delay)
+        time.sleep(delay)
     
     logger.error("Database did not become ready in time")
     return False
 
 
-async def main():
+def main():
     """Main entry point"""
     try:
         # Wait for database to be ready (important for Docker)
-        if not await wait_for_database():
+        if not wait_for_database():
             sys.exit(1)
         
         # Run synchronous schema sync
@@ -215,4 +206,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
