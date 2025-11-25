@@ -6,18 +6,42 @@ Runs on application startup to ensure database schema is in sync
 
 import sys
 import time
+import os
 from pathlib import Path
+from dotenv import load_dotenv
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
+
+# Load environment variables BEFORE any other imports
+load_dotenv()
+
+# Set flag to prevent async engine creation during migration
+os.environ["SKIP_ASYNC_ENGINE"] = "1"
 
 from sqlalchemy import create_engine, inspect, text, MetaData
 from sqlalchemy.orm import sessionmaker
 from sqlmodel import SQLModel
 import logging
 
+# Get DATABASE_URL directly from environment to avoid importing config.py
+# (which would trigger async engine creation)
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError(
+        "DATABASE_URL environment variable is not set. "
+        "Please configure your database connection in the .env file."
+    )
+
+# Convert async driver to sync driver for migration operations
+if DATABASE_URL.startswith("postgresql+asyncpg://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+elif DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://")
+
 # Import all models to ensure they're registered with SQLModel
+# Import directly from model files (not from __init__.py which imports config)
 from src.app.database.user import User
 from src.app.database.role import Role
 from src.app.database.permission import Permission
@@ -39,9 +63,6 @@ from src.app.database.shop_planning import ShopPlanning
 from src.app.database.planning_section import PlanningSection
 from src.app.database.shop_planning_section import ShopPlanningSection
 from src.app.database.operation_workflow import OperationWorkflow
-
-# Import database configuration
-from src.app.utils.config import DATABASE_URL
 
 # Configure logging
 logging.basicConfig(
