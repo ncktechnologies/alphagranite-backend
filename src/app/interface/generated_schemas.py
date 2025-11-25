@@ -21,6 +21,7 @@ class Templating(SQLModel, table=True):
     duration: Optional[int] = Field(default=None)
     notes: Optional[List[str]] = Field(default=None, sa_column=Column(JSONB))
     is_templating_schedule: bool = Field(default=False)
+    is_completed: bool = Field(default=False)
     status_id: int = Field()
     created_at: datetime = Field()
     updated_at: Optional[datetime] = Field(default=None)
@@ -37,6 +38,7 @@ class SlabSmith(SQLModel, table=True):
     start_date: datetime = Field()
     end_date: Optional[datetime] = Field(default=None)
     total_sqft_completed: Optional[str] = Field(default=None)
+    is_completed: bool = Field(default=False)
     created_at: datetime = Field()
     updated_at: Optional[datetime] = Field(default=None)
     updated_by: Optional[int] = Field(default=None)
@@ -110,6 +112,7 @@ class Drafting(SQLModel, table=True):
     draft_note: Optional[str] = Field(default=None)
     mentions: Optional[str] = Field(default=None, description="List of user_ids of user to be notified of the draft submission")
     is_redrafting: bool = Field(default=False)
+    is_completed: bool = Field(default=False)
 
 # --- Pre Draft Reviews ---
 class PreDraftReview(SQLModel, table=True):
@@ -118,6 +121,7 @@ class PreDraftReview(SQLModel, table=True):
     fab_id: int = Field()
     draft_notes: int = Field()
     is_redrafting_needed: int = Field()
+    is_completed: bool = Field(default=False)
     created_at: datetime = Field()
     updated_by: int = Field()
     updated_at: datetime = Field()
@@ -130,6 +134,7 @@ class SalesCT(SQLModel, table=True):
     fab_id: int = Field()
     is_revision_needed: bool = Field()
     is_revision_completed: Optional[bool] = Field(default=None)
+    is_completed: bool = Field(default=False)
     status_id: int = Field()
     created_at: datetime = Field()
     updated_at: Optional[datetime] = Field(default=None)
@@ -153,6 +158,7 @@ class CutList(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     fab_id: int = Field()
     is_final_progreamming_completed: bool = Field(default=False)
+    is_completed: bool = Field(default=False)
     shop_schedule_date: Optional[datetime] = Field(default=None)
     status_id: int = Field()
     created_at: datetime = Field()
@@ -189,6 +195,7 @@ class FinalProgramming(SQLModel, table=True):
     scheduled_end_date: datetime = Field()
     drafter_start_date: Optional[datetime] = Field(default=None)
     drafter_end_date: Optional[datetime] = Field(default=None)
+    is_completed: bool = Field(default=False)
     status_id: int = Field()
     created_at: datetime = Field()
     updated_at: Optional[datetime] = Field(default=None)
@@ -228,3 +235,135 @@ class OperationWorkflow(SQLModel, table=True):
     created_at: datetime = Field()
     updated_at: Optional[datetime] = Field(default=None)
     updated_by: Optional[int] = Field(default=None)
+
+# --- WJ Programming ---
+class WJProgramming(SQLModel, table=True):
+    __tablename__ = "wj_programmings"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    drafter_id: int = Field()
+    fab_id: int = Field()
+    scheduled_start_date: datetime = Field()
+    scheduled_end_date: datetime = Field()
+    drafter_start_date: Optional[datetime] = Field(default=None)
+    drafter_end_date: Optional[datetime] = Field(default=None)
+    is_completed: bool = Field(default=False)
+    status_id: int = Field()
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+    updated_by: Optional[int] = Field(default=None)
+    file_ids: Optional[str] = Field(default=None, description="stores a list of different file ids that belongs to this programming")
+    no_of_pieces: Optional[str] = Field(default=None)
+    total_ln_ft: Optional[str] = Field(default=None)
+    notes: Optional[List[str]] = Field(default=None, sa_column=Column(JSONB))
+
+# --- WJ Scheduling ---
+class WJScheduling(SQLModel, table=True):
+    __tablename__ = "wj_schedulings"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    fab_id: int = Field()
+    technician_id: Optional[int] = Field(default=None)
+    scheduled_start_date: Optional[datetime] = Field(default=None)
+    scheduled_end_date: Optional[datetime] = Field(default=None)
+    actual_start_date: Optional[datetime] = Field(default=None)
+    actual_end_date: Optional[datetime] = Field(default=None)
+    total_ln_ft: Optional[str] = Field(default=None)
+    completed_ln_ft: Optional[str] = Field(default=None)
+    is_completed: bool = Field(default=False)
+    status_id: int = Field()
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+    updated_by: Optional[int] = Field(default=None)
+    notes: Optional[List[str]] = Field(default=None, sa_column=Column(JSONB))
+
+# --- Resurface Scheduling ---
+class ResurfaceScheduling(SQLModel, table=True):
+    __tablename__ = "resurface_schedulings"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    fab_id: int = Field()
+    technician_id: Optional[int] = Field(default=None)
+    scheduled_start_date: Optional[datetime] = Field(default=None)
+    scheduled_end_date: Optional[datetime] = Field(default=None)
+    actual_start_date: Optional[datetime] = Field(default=None)
+    actual_end_date: Optional[datetime] = Field(default=None)
+    total_sqft: Optional[str] = Field(default=None)
+    completed_sqft: Optional[str] = Field(default=None)
+    is_completed: bool = Field(default=False)
+    status_id: int = Field()
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+    updated_by: Optional[int] = Field(default=None)
+    notes: Optional[List[str]] = Field(default=None, sa_column=Column(JSONB))
+
+# --- Revisions ---
+class Revision(SQLModel, table=True):
+    __tablename__ = "revisions"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    fab_id: int = Field()
+    revision_type: str = Field(description="Type of revision needed")
+    requested_by: int = Field()
+    assigned_to: Optional[int] = Field(default=None)
+    scheduled_start_date: Optional[datetime] = Field(default=None)
+    scheduled_end_date: Optional[datetime] = Field(default=None)
+    actual_start_date: Optional[datetime] = Field(default=None)
+    actual_end_date: Optional[datetime] = Field(default=None)
+    revision_notes: Optional[str] = Field(default=None)
+    is_completed: bool = Field(default=False)
+    status_id: int = Field()
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+    updated_by: Optional[int] = Field(default=None)
+    file_ids: Optional[str] = Field(default=None)
+
+# --- Cost of Stone ---
+class CostOfStone(SQLModel, table=True):
+    __tablename__ = "cost_of_stones"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    fab_id: int = Field()
+    stone_color_id: Optional[int] = Field(default=None)
+    stone_type_id: Optional[int] = Field(default=None)
+    total_sqft: Optional[str] = Field(default=None)
+    cost_per_sqft: Optional[str] = Field(default=None)
+    total_cost: Optional[str] = Field(default=None)
+    waste_percentage: Optional[str] = Field(default=None)
+    calculated_by: Optional[int] = Field(default=None)
+    is_completed: bool = Field(default=False)
+    status_id: int = Field()
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+    updated_by: Optional[int] = Field(default=None)
+    notes: Optional[List[str]] = Field(default=None, sa_column=Column(JSONB))
+
+# --- Install Scheduling ---
+class InstallScheduling(SQLModel, table=True):
+    __tablename__ = "install_schedulings"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    fab_id: int = Field()
+    installer_id: Optional[int] = Field(default=None)
+    scheduled_install_date: Optional[datetime] = Field(default=None)
+    scheduled_end_date: Optional[datetime] = Field(default=None)
+    actual_install_date: Optional[datetime] = Field(default=None)
+    total_sqft: Optional[str] = Field(default=None)
+    is_completed: bool = Field(default=False)
+    status_id: int = Field()
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+    updated_by: Optional[int] = Field(default=None)
+    notes: Optional[List[str]] = Field(default=None, sa_column=Column(JSONB))
+
+# --- Install Completion ---
+class InstallCompletion(SQLModel, table=True):
+    __tablename__ = "install_completions"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    fab_id: int = Field()
+    installer_id: int = Field()
+    install_date: datetime = Field()
+    completion_date: datetime = Field()
+    total_sqft_installed: Optional[str] = Field(default=None)
+    customer_signature: Optional[str] = Field(default=None, description="Path to signature file or signature data")
+    completion_notes: Optional[str] = Field(default=None)
+    is_completed: bool = Field(default=False)
+    status_id: int = Field()
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+    updated_by: Optional[int] = Field(default=None)
+    file_ids: Optional[str] = Field(default=None, description="Photos or documents from installation")

@@ -2,6 +2,7 @@ from typing import List
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends, UploadFile, File, Form, Request, HTTPException, status
 
+from src.app.database.user import User
 from src.app.service.file import FileService
 from src.app.utils.config import get_db, get_settings
 from src.app.utils.helpers import success_response, call_service
@@ -21,7 +22,7 @@ async def upload_file(
     file_type: str = Form(None),
     directory: str = Form("uploads"),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     settings = Depends(get_settings)
 ):
     """
@@ -67,9 +68,10 @@ async def upload_file(
         FileService.upload_file,
         db=db,
         file=file,
-        user_id=current_user["id"],
+        user_id=current_user.id,
         directory=directory,
-        file_type=file_type
+        file_type=file_type,
+        request=request
     )
     
     return success_response(
@@ -82,7 +84,7 @@ async def get_file(
     request: Request,
     file_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Get file metadata by ID
@@ -92,7 +94,8 @@ async def get_file(
     file_data = await call_service(
         FileService.get_file,
         db=db,
-        file_id=file_id
+        file_id=file_id,
+        request=request
     )
     
     if not file_data:
@@ -111,7 +114,7 @@ async def delete_file(
     request: Request,
     file_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Delete a file by ID

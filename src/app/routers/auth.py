@@ -582,6 +582,8 @@ async def get_user_profile(
     """Get current user profile with roles and permissions"""
     # Fetch department name if user has a department
     from src.app.database.department import Department
+    from src.app.service.file import FileService
+    
     department_name = None
     if current_user.department:
         dept_result = await db.execute(
@@ -591,6 +593,13 @@ async def get_user_profile(
         if department:
             department_name = department.name
     
+    # Fetch profile image URL if user has a profile image
+    profile_image_url = None
+    if current_user.profile_image_id:
+        file_data = await FileService.get_file(db, current_user.profile_image_id)
+        if file_data:
+            profile_image_url = file_data.get("url")
+    
     # Get user roles and permissions using auth service
     user_roles = await auth_service.get_user_roles(current_user.id, db)
     user_role_permissions = await auth_service.get_user_role_permissions(current_user.id, db)
@@ -599,6 +608,7 @@ async def get_user_profile(
     # Convert user to dict and add additional data
     user_dict = current_user.model_dump()
     user_dict['department_name'] = department_name
+    user_dict['profile_image_url'] = profile_image_url
     user_dict['roles'] = user_roles
     user_dict['permissions'] = user_role_permissions
     user_dict['action_permissions'] = user_action_permissions
@@ -626,32 +636,31 @@ async def update_user_profile(
             if not current_user.is_super_admin:
                 raise error_response("Only administrators can assign roles", 403)
             
-            # Update role_id on user
+            # Update role_id on user (for backward compatibility)
             current_user.role_id = profile_data.role_id
             
-            # Update user_roles table - update existing or create new one
+            # Update user_roles table - add new role if not already assigned
             try:
-                # Check if user already has a role assignment
+                # Check if user already has THIS specific role
                 ur_result = await db.execute(
-                    select(UserRole).where(UserRole.user_id == current_user.id)
+                    select(UserRole).where(
+                        UserRole.user_id == current_user.id,
+                        UserRole.role_id == profile_data.role_id
+                    )
                 )
                 existing_user_role = ur_result.scalars().first()
                 
-                if existing_user_role:
-                    # Update existing role assignment
-                    existing_user_role.role_id = profile_data.role_id
-                    existing_user_role.update_at = datetime.now()
-                    db.add(existing_user_role)
-                else:
-                    # Create new role assignment
+                if not existing_user_role:
+                    # Create new role assignment (don't replace existing roles)
                     new_user_role = UserRole(
                         user_id=current_user.id,
                         role_id=profile_data.role_id,
                         created_at=datetime.now()
                     )
                     db.add(new_user_role)
+                    await db.flush()  # Flush to ensure UserRole is created
+                # else: User already has this role, no action needed
                 
-                await db.flush()  # Flush to ensure UserRole is updated/created
             except Exception as e:
                 await db.rollback()
                 raise error_response(f"Failed to update role assignment: {str(e)}", 500)
@@ -679,6 +688,29 @@ async def update_user_profile(
             browser,
         )
 
-        return success_response(UserResponse.from_orm(current_user), MSG_PROFILE_UPDATED)
+        # Fetch department name if user has a department
+        from src.app.database.department import Department
+        department_name = None
+        if current_user.department:
+            dept_result = await db.execute(
+                select(Department).where(Department.id == current_user.department)
+            )
+            department = dept_result.scalars().first()
+            if department:
+                department_name = department.name
+        
+        # Get user roles and permissions using auth service
+        user_roles = await auth_service.get_user_roles(current_user.id, db)
+        user_role_permissions = await auth_service.get_user_role_permissions(current_user.id, db)
+        user_action_permissions = await auth_service.get_user_permissions(current_user.id, db)
+        
+        # Convert user to dict and add additional data
+        user_dict = current_user.model_dump()
+        user_dict['department_name'] = department_name
+        user_dict['roles'] = user_roles
+        user_dict['permissions'] = user_role_permissions
+        user_dict['action_permissions'] = user_action_permissions
+
+        return success_response(UserResponse(**user_dict), MSG_PROFILE_UPDATED)
 
     return await call_service(update_profile_flow)

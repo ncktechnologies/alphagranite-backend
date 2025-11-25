@@ -54,7 +54,7 @@ async def get_stone_thicknesses(
     limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
     status_id: Optional[int] = Query(None, description="Filter by status ID"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(PermissionChecker("stone_thickness", "read"))
+    current_user: User = Depends(get_current_user)
 ):
     """Get list of stone thicknesses with optional filtering"""
     

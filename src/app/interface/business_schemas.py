@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 class JobCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="Job name")
     job_number: str = Field(..., min_length=1, max_length=100, description="Unique job number")
+    account_id: int = Field(..., gt=0, description="Account ID")
     project_value: Optional[float] = Field(None, ge=0, description="Project value/amount")
 
 
@@ -22,6 +23,11 @@ class JobResponse(BaseModel):
     name: str
     job_number: str
     account_id: Optional[int] = None
+    account_name: Optional[str] = None
+    account_number: Optional[str] = None
+    account_contact_person: Optional[str] = None
+    account_email: Optional[str] = None
+    account_phone: Optional[str] = None
     description: Optional[str] = None
     priority: Optional[str] = None
     start_date: Optional[datetime] = None
@@ -66,6 +72,7 @@ class AccountResponse(BaseModel):
     phone: Optional[str]
     address: Optional[str]
     status_id: int
+    total_jobs: Optional[int] = 0
     created_at: datetime
     created_by: int
     updated_at: Optional[datetime]
@@ -217,6 +224,32 @@ class FabUpdate(BaseModel):
     sct_needed: Optional[bool] = None
     final_programming_needed: Optional[bool] = None
     drafter_id: Optional[int] = Field(None, gt=0, description="Drafter user ID")
+    # Templating/Template tracking
+    template_received: Optional[bool] = Field(None, description="Mark if template is received")
+    template_review_complete: Optional[bool] = Field(None, description="Mark template review as complete")
+    # Drafting tracking
+    draft_completed: Optional[bool] = Field(None, description="Mark draft as completed")
+    cad_review_complete: Optional[bool] = Field(None, description="Mark CAD review as complete")
+    no_of_pieces: Optional[int] = Field(None, gt=0, description="Number of pieces")
+    # Financial tracking
+    revenue: Optional[float] = Field(None, description="Revenue amount")
+    gp: Optional[float] = Field(None, description="Gross Profit amount")
+    # SalesCT tracking
+    sct_completed: Optional[bool] = Field(None, description="Mark SCT review as complete")
+    revised: Optional[bool] = Field(None, description="Mark if FAB has been revised")
+    # Cut List tracking
+    shop_date_schedule: Optional[datetime] = Field(None, description="Scheduled shop date")
+    final_programming_complete: Optional[bool] = Field(None, description="Mark final programming as complete")
+    slab_smith_used: Optional[bool] = Field(None, description="Mark if slab smith was used")
+    fp_not_needed: Optional[bool] = Field(None, description="Mark if final programming is not needed")
+    # Final Programming tracking
+    confirmed_date: Optional[datetime] = Field(None, description="Final programming confirmed date")
+    wj_time_minutes: Optional[int] = Field(None, gt=0, description="Waterjet time in minutes")
+    wj_linft: Optional[float] = Field(None, gt=0, description="Waterjet linear feet")
+    edging_linft: Optional[float] = Field(None, gt=0, description="Edging linear feet")
+    cnc_linft: Optional[float] = Field(None, gt=0, description="CNC linear feet")
+    miter_linft: Optional[float] = Field(None, gt=0, description="Miter linear feet")
+    installation_date: Optional[datetime] = Field(None, description="Installation date")
     current_stage: Optional[str] = None
     next_stage: Optional[str] = None
     status_id: Optional[int] = None
@@ -257,8 +290,36 @@ class FabResponse(BaseModel):
     drafter_assigned_by: Optional[int] = None
     drafter_assigned_by_name: Optional[str] = None
     drafter_assigned_at: Optional[datetime] = None
-    current_stage: Optional[str]
-    next_stage: Optional[str]
+    # Templating/Template tracking
+    template_received: Optional[bool] = False
+    template_review_complete: Optional[bool] = False
+    # Drafting tracking
+    draft_completed: Optional[bool] = False
+    cad_review_complete: Optional[bool] = False
+    no_of_pieces: Optional[int] = None
+    # Financial tracking
+    revenue: Optional[float] = None
+    gp: Optional[float] = None  # Gross Profit
+    # SalesCT tracking
+    sct_completed: Optional[bool] = False
+    revised: Optional[bool] = False  # Indicates if FAB has been sent back for revisions
+    # Cut List tracking
+    shop_date_schedule: Optional[datetime] = None
+    final_programming_complete: Optional[bool] = False
+    slab_smith_used: Optional[bool] = False
+    fp_not_needed: Optional[bool] = False
+    # Final Programming tracking
+    confirmed_date: Optional[datetime] = None  # When final programming confirmed
+    wj_time_minutes: Optional[int] = None  # Waterjet time in minutes
+    wj_linft: Optional[float] = None  # Waterjet linear feet
+    edging_linft: Optional[float] = None  # Edging linear feet
+    cnc_linft: Optional[float] = None  # CNC linear feet
+    miter_linft: Optional[float] = None  # Miter linear feet
+    installation_date: Optional[datetime] = None
+    current_stage: Optional[str] = "templating"
+    next_stage: Optional[str] = "pre_draft_review"
+    is_complete: Optional[bool] = False  # Whether current stage is completed
+    stage_data: Optional[dict] = None  # Stage-specific data for current stage
     status_id: int
     created_at: datetime
     created_by: int
@@ -292,6 +353,7 @@ class TemplatingScheduleUpdate(BaseModel):
     schedule_due_date: Optional[datetime] = None
     total_sqft: Optional[str] = None
     notes: Optional[List[str]] = None
+    is_completed: Optional[bool] = None
     status_id: Optional[int] = None
 
 
@@ -314,6 +376,7 @@ class TemplatingResponse(BaseModel):
     duration: Optional[int] = None
     notes: Optional[List[str]]
     is_templating_schedule: bool
+    is_completed: bool
     status_id: int
     status_name: Optional[str] = None  # Status description
     current_stage: Optional[str] = None  # Current FAB stage
@@ -324,6 +387,57 @@ class TemplatingResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# Templating Coordinator specific schemas
+class TemplatingReviewUpdate(BaseModel):
+    """Schema for templating coordinator to update template review"""
+    template_received: bool = Field(..., description="Mark if template is received")
+    total_sqft: Optional[float] = Field(None, gt=0, description="Updated total square feet")
+    notes: Optional[str] = Field(None, description="Review notes")
+
+
+class TemplateReviewCompleteUpdate(BaseModel):
+    """Schema for marking template review as complete"""
+    template_review_complete: bool = Field(..., description="Mark template review as complete/incomplete")
+    total_sqft: Optional[float] = Field(None, gt=0, description="Updated total square feet")
+
+
+# Templating Technician specific schemas
+class TemplatingTechnicianUpdate(BaseModel):
+    """Schema for templating technician to update their work"""
+    is_completed: bool = Field(..., description="Mark templating as completed/not completed")
+    actual_start_date: Optional[datetime] = Field(None, description="Actual start date of templating work")
+    duration: Optional[int] = Field(None, gt=0, description="Duration in minutes")
+    total_sqft: Optional[str] = Field(None, description="Measured square footage")
+    notes: Optional[List[str]] = Field(None, description="Templating notes")
+
+
+# Pre-Draft schemas
+class PreDraftUpdate(BaseModel):
+    """Schema for pre-draft review actions"""
+    template_review_complete: Optional[bool] = Field(None, description="Mark template review complete")
+    total_sqft: Optional[float] = Field(None, gt=0, description="Updated square feet")
+    drafter_id: Optional[int] = Field(None, gt=0, description="Assign drafter")
+    notes: Optional[str] = Field(None, description="Pre-draft notes")
+    current_stage: Optional[str] = Field(None, description="Move to different stage")
+
+
+# Drafting schemas
+class DraftingSessionUpdate(BaseModel):
+    """Schema for drafting session actions (start, pause, end)"""
+    action: str = Field(..., description="Action: 'start', 'pause', or 'end'")
+    notes: Optional[str] = Field(None, description="Session notes")
+
+
+class DraftingUpdate(BaseModel):
+    """Schema for updating drafting information"""
+    total_sqft: Optional[float] = Field(None, gt=0, description="Updated square feet")
+    no_of_pieces: Optional[int] = Field(None, gt=0, description="Number of pieces")
+    cad_review_complete: Optional[bool] = Field(None, description="Mark CAD review complete")
+    draft_completed: Optional[bool] = Field(None, description="Mark draft as completed")
+    notes: Optional[str] = Field(None, description="Drafting notes")
+    current_stage: Optional[str] = Field(None, description="Move to different stage")
 
 
 # Clockwork Schemas
@@ -378,6 +492,7 @@ class DraftingUpdate(BaseModel):
     no_of_piece_drafted: Optional[str] = None
     draft_note: Optional[str] = None
     mentions: Optional[str] = None
+    is_completed: Optional[bool] = None
     status_id: Optional[int] = None
 
 
@@ -404,6 +519,7 @@ class DraftingResponse(BaseModel):
     mentions: Optional[str]
     file_ids: Optional[str]
     is_redrafting: bool
+    is_completed: bool
     status_id: int
     created_at: datetime
     updated_at: Optional[datetime]
@@ -448,6 +564,7 @@ class SlabSmithCreate(BaseModel):
 class SlabSmithUpdate(BaseModel):
     end_date: Optional[datetime] = None
     total_sqft_completed: Optional[str] = None
+    is_completed: Optional[bool] = None
     status_id: Optional[int] = None
 
 
@@ -460,6 +577,7 @@ class SlabSmithResponse(BaseModel):
     end_date: Optional[datetime]
     total_sqft_completed: Optional[str]
     file_ids: Optional[str]
+    is_completed: bool
     status_id: int
     created_at: datetime
     updated_at: Optional[datetime]
@@ -475,6 +593,7 @@ class SalesCTCreate(BaseModel):
 class SalesCTUpdate(BaseModel):
     is_revision_needed: Optional[bool] = None
     is_revision_completed: Optional[bool] = None
+    is_completed: Optional[bool] = None
     revenue: Optional[float] = None
     status_id: Optional[int] = None
 
@@ -497,6 +616,7 @@ class SalesCTResponse(BaseModel):
     fab_id: int
     is_revision_needed: bool
     is_revision_completed: Optional[bool]
+    is_completed: bool
     no_of_revisions: Optional[str]
     current_revision_count: Optional[str]
     status_id: int
@@ -566,3 +686,335 @@ class FabNotesResponse(BaseModel):
     updated_at: Optional[datetime] = None
     updated_by: Optional[int] = None
     updated_by_name: Optional[str] = None
+
+
+# WJ Programming Schemas
+class WJProgrammingCreate(BaseModel):
+    fab_id: int = Field(..., gt=0)
+    drafter_id: int = Field(..., gt=0)
+    scheduled_start_date: datetime
+    scheduled_end_date: datetime
+    total_ln_ft: Optional[str] = None
+
+
+class WJProgrammingUpdate(BaseModel):
+    drafter_id: Optional[int] = None
+    scheduled_start_date: Optional[datetime] = None
+    scheduled_end_date: Optional[datetime] = None
+    drafter_start_date: Optional[datetime] = None
+    drafter_end_date: Optional[datetime] = None
+    no_of_pieces: Optional[str] = None
+    total_ln_ft: Optional[str] = None
+    is_completed: Optional[bool] = None
+    status_id: Optional[int] = None
+
+
+class WJProgrammingResponse(BaseModel):
+    id: int
+    fab_id: int
+    drafter_id: int
+    scheduled_start_date: datetime
+    scheduled_end_date: datetime
+    drafter_start_date: Optional[datetime]
+    drafter_end_date: Optional[datetime]
+    no_of_pieces: Optional[str]
+    total_ln_ft: Optional[str]
+    is_completed: bool
+    status_id: int
+    created_at: datetime
+    updated_at: Optional[datetime]
+    updated_by: Optional[int]
+
+
+# WJ Scheduling Schemas
+class WJSchedulingCreate(BaseModel):
+    fab_id: int = Field(..., gt=0)
+    scheduled_start_date: Optional[datetime] = None
+    scheduled_end_date: Optional[datetime] = None
+    total_ln_ft: Optional[str] = None
+
+
+class WJSchedulingUpdate(BaseModel):
+    technician_id: Optional[int] = None
+    scheduled_start_date: Optional[datetime] = None
+    scheduled_end_date: Optional[datetime] = None
+    actual_start_date: Optional[datetime] = None
+    actual_end_date: Optional[datetime] = None
+    total_ln_ft: Optional[str] = None
+    completed_ln_ft: Optional[str] = None
+    is_completed: Optional[bool] = None
+    status_id: Optional[int] = None
+
+
+class WJSchedulingResponse(BaseModel):
+    id: int
+    fab_id: int
+    technician_id: Optional[int]
+    scheduled_start_date: Optional[datetime]
+    scheduled_end_date: Optional[datetime]
+    actual_start_date: Optional[datetime]
+    actual_end_date: Optional[datetime]
+    total_ln_ft: Optional[str]
+    completed_ln_ft: Optional[str]
+    is_completed: bool
+    status_id: int
+    created_at: datetime
+    updated_at: Optional[datetime]
+    updated_by: Optional[int]
+
+
+# Resurface Scheduling Schemas
+class ResurfaceSchedulingCreate(BaseModel):
+    fab_id: int = Field(..., gt=0)
+    scheduled_start_date: Optional[datetime] = None
+    scheduled_end_date: Optional[datetime] = None
+    total_sqft: Optional[str] = None
+
+
+class ResurfaceSchedulingUpdate(BaseModel):
+    technician_id: Optional[int] = None
+    scheduled_start_date: Optional[datetime] = None
+    scheduled_end_date: Optional[datetime] = None
+    actual_start_date: Optional[datetime] = None
+    actual_end_date: Optional[datetime] = None
+    total_sqft: Optional[str] = None
+    completed_sqft: Optional[str] = None
+    is_completed: Optional[bool] = None
+    status_id: Optional[int] = None
+
+
+class ResurfaceSchedulingResponse(BaseModel):
+    id: int
+    fab_id: int
+    technician_id: Optional[int]
+    scheduled_start_date: Optional[datetime]
+    scheduled_end_date: Optional[datetime]
+    actual_start_date: Optional[datetime]
+    actual_end_date: Optional[datetime]
+    total_sqft: Optional[str]
+    completed_sqft: Optional[str]
+    is_completed: bool
+    status_id: int
+    created_at: datetime
+    updated_at: Optional[datetime]
+    updated_by: Optional[int]
+
+
+# Revision Schemas
+class RevisionCreate(BaseModel):
+    fab_id: int = Field(..., gt=0)
+    revision_type: str = Field(..., min_length=1)
+    requested_by: int = Field(..., gt=0)
+    assigned_to: Optional[int] = None
+    scheduled_start_date: Optional[datetime] = None
+    scheduled_end_date: Optional[datetime] = None
+    revision_notes: Optional[str] = None
+
+
+class RevisionUpdate(BaseModel):
+    revision_type: Optional[str] = None
+    assigned_to: Optional[int] = None
+    scheduled_start_date: Optional[datetime] = None
+    scheduled_end_date: Optional[datetime] = None
+    actual_start_date: Optional[datetime] = None
+    actual_end_date: Optional[datetime] = None
+    revision_notes: Optional[str] = None
+    is_completed: Optional[bool] = None
+    status_id: Optional[int] = None
+
+
+class RevisionResponse(BaseModel):
+    id: int
+    fab_id: int
+    revision_type: str
+    requested_by: int
+    assigned_to: Optional[int]
+    scheduled_start_date: Optional[datetime]
+    scheduled_end_date: Optional[datetime]
+    actual_start_date: Optional[datetime]
+    actual_end_date: Optional[datetime]
+    revision_notes: Optional[str]
+    is_completed: bool
+    status_id: int
+    created_at: datetime
+    updated_at: Optional[datetime]
+    updated_by: Optional[int]
+
+
+# Cost of Stone Schemas
+class CostOfStoneCreate(BaseModel):
+    fab_id: int = Field(..., gt=0)
+    stone_color_id: Optional[int] = None
+    stone_type_id: Optional[int] = None
+    total_sqft: Optional[str] = None
+    cost_per_sqft: Optional[str] = None
+    waste_percentage: Optional[str] = None
+
+
+class CostOfStoneUpdate(BaseModel):
+    stone_color_id: Optional[int] = None
+    stone_type_id: Optional[int] = None
+    total_sqft: Optional[str] = None
+    cost_per_sqft: Optional[str] = None
+    total_cost: Optional[str] = None
+    waste_percentage: Optional[str] = None
+    calculated_by: Optional[int] = None
+    is_completed: Optional[bool] = None
+    status_id: Optional[int] = None
+
+
+class CostOfStoneResponse(BaseModel):
+    id: int
+    fab_id: int
+    stone_color_id: Optional[int]
+    stone_type_id: Optional[int]
+    total_sqft: Optional[str]
+    cost_per_sqft: Optional[str]
+    total_cost: Optional[str]
+    waste_percentage: Optional[str]
+    calculated_by: Optional[int]
+    is_completed: bool
+    status_id: int
+    created_at: datetime
+    updated_at: Optional[datetime]
+    updated_by: Optional[int]
+
+
+# Install Scheduling Schemas
+class InstallSchedulingCreate(BaseModel):
+    fab_id: int = Field(..., gt=0)
+    scheduled_install_date: Optional[datetime] = None
+    scheduled_end_date: Optional[datetime] = None
+    total_sqft: Optional[str] = None
+
+
+class InstallSchedulingUpdate(BaseModel):
+    installer_id: Optional[int] = None
+    scheduled_install_date: Optional[datetime] = None
+    scheduled_end_date: Optional[datetime] = None
+    actual_install_date: Optional[datetime] = None
+    total_sqft: Optional[str] = None
+    is_completed: Optional[bool] = None
+    status_id: Optional[int] = None
+
+
+class InstallSchedulingResponse(BaseModel):
+    id: int
+    fab_id: int
+    installer_id: Optional[int]
+    scheduled_install_date: Optional[datetime]
+    scheduled_end_date: Optional[datetime]
+    actual_install_date: Optional[datetime]
+    total_sqft: Optional[str]
+    is_completed: bool
+    status_id: int
+    created_at: datetime
+    updated_at: Optional[datetime]
+    updated_by: Optional[int]
+
+
+# Install Completion Schemas
+class InstallCompletionCreate(BaseModel):
+    fab_id: int = Field(..., gt=0)
+    installer_id: int = Field(..., gt=0)
+    install_date: datetime
+    completion_date: datetime
+    total_sqft_installed: Optional[str] = None
+    customer_signature: Optional[str] = None
+    completion_notes: Optional[str] = None
+
+
+class InstallCompletionUpdate(BaseModel):
+    installer_id: Optional[int] = None
+    install_date: Optional[datetime] = None
+    completion_date: Optional[datetime] = None
+    total_sqft_installed: Optional[str] = None
+    customer_signature: Optional[str] = None
+    completion_notes: Optional[str] = None
+    is_completed: Optional[bool] = None
+    status_id: Optional[int] = None
+
+
+class InstallCompletionResponse(BaseModel):
+    id: int
+    fab_id: int
+    installer_id: int
+    install_date: datetime
+    completion_date: datetime
+    total_sqft_installed: Optional[str]
+    customer_signature: Optional[str]
+    completion_notes: Optional[str]
+    is_completed: bool
+    status_id: int
+    created_at: datetime
+    updated_at: Optional[datetime]
+    updated_by: Optional[int]
+
+
+# SalesCT Schemas
+class SalesCTReviewUpdate(BaseModel):
+    """Schema for Sales CT to review and mark FAB complete"""
+    sct_completed: bool = Field(..., description="Mark SCT review as complete")
+    notes: Optional[str] = Field(None, description="SCT review notes")
+
+
+class SalesCTSendToDrafting(BaseModel):
+    """Schema for sending FAB back to drafting for revisions"""
+    notes: str = Field(..., description="Revision notes - required when sending back")
+    
+
+class SalesCTApprove(BaseModel):
+    """Schema for approving FAB and sending to SlabSmith"""
+    sct_completed: bool = Field(default=True, description="Mark SCT as complete")
+    notes: Optional[str] = Field(None, description="Approval notes")
+
+
+# Cut List Schemas
+class CutListScheduleUpdate(BaseModel):
+    """Schema for scheduling cut list shop date"""
+    shop_date_schedule: datetime = Field(..., description="Scheduled shop date")
+    installation_date: Optional[datetime] = Field(None, description="Optional installation date")
+    no_of_pieces: Optional[int] = Field(None, gt=0, description="Number of pieces")
+    total_sqft: Optional[float] = Field(None, gt=0, description="Total square feet")
+    wj_linft: Optional[float] = Field(None, gt=0, description="Waterjet linear feet")
+    edging_linft: Optional[float] = Field(None, gt=0, description="Edging linear feet")
+    cnc_linft: Optional[float] = Field(None, gt=0, description="CNC linear feet")
+    miter_linft: Optional[float] = Field(None, gt=0, description="Miter linear feet")
+    revision_complete: Optional[bool] = Field(None, description="Mark revision as complete")
+
+
+class CutListUpdate(BaseModel):
+    """Schema for updating cut list information"""
+    slab_smith_used: Optional[bool] = Field(None, description="Mark if slab smith was used")
+    fp_not_needed: Optional[bool] = Field(None, description="Mark if final programming not needed")
+    shop_date_schedule: Optional[datetime] = Field(None, description="Scheduled shop date")
+    notes: Optional[str] = Field(None, description="Cut list notes")
+
+
+# Final Programming Schemas
+class FinalProgrammingSessionUpdate(BaseModel):
+    """Schema for final programming session actions (start, pause, resume, end)"""
+    action: str = Field(..., description="Action: 'start', 'pause', 'resume', or 'end'")
+    notes: Optional[str] = Field(None, description="Session notes")
+
+
+class FinalProgrammingScheduleShopDate(BaseModel):
+    """Schema for scheduling shop date from Final Programming"""
+    shop_date_schedule: datetime = Field(..., description="Scheduled shop date")
+    installation_date: Optional[datetime] = Field(None, description="Optional installation date")
+    no_of_pieces: Optional[int] = Field(None, gt=0, description="Number of pieces")
+    total_sqft: Optional[float] = Field(None, gt=0, description="Total square feet")
+    wj_linft: Optional[float] = Field(None, gt=0, description="Waterjet linear feet")
+    edging_linft: Optional[float] = Field(None, gt=0, description="Edging linear feet")
+    cnc_linft: Optional[float] = Field(None, gt=0, description="CNC linear feet")
+    miter_linft: Optional[float] = Field(None, gt=0, description="Miter linear feet")
+    confirmed: Optional[bool] = Field(None, description="Mark as confirmed")
+
+
+class FinalProgrammingComplete(BaseModel):
+    """Schema for completing final programming"""
+    final_programming_complete: bool = Field(..., description="Mark final programming as complete")
+    notes: Optional[str] = Field(None, description="Final programming notes")
+    drafter_id: Optional[int] = Field(None, gt=0, description="Assigned programmer ID")
+    wj_time_minutes: Optional[int] = Field(None, gt=0, description="Waterjet time in minutes")
+

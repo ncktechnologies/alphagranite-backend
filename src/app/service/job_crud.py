@@ -17,21 +17,29 @@ async def create_job(
     db: AsyncSession,
     job_data: JobCreate,
     user_id: int
-) -> BusinessJob:
+) -> dict:
     """
     Create a new job.
     
     Args:
         db: Database session
-        job_data: Job creation data (name, job_number, project_value)
+        job_data: Job creation data (name, job_number, account_id, project_value)
         user_id: ID of user creating the job
         
     Returns:
-        Created Job object
+        Job dict with account details
         
     Raises:
-        HTTPException: If job number already exists
+        HTTPException: If job number already exists or account not found
     """
+    # Check if account exists
+    account_result = await db.execute(
+        select(Account).where(Account.id == job_data.account_id)
+    )
+    account = account_result.scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    
     # Check if job number already exists
     job_check = await db.execute(
         select(BusinessJob).where(BusinessJob.job_number == job_data.job_number)
@@ -39,12 +47,12 @@ async def create_job(
     if job_check.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Job number already exists")
     
-    # Create job with minimal required fields
+    # Create job
     job = BusinessJob(
         name=job_data.name,
         job_number=job_data.job_number,
         project_value=job_data.project_value,
-        account_id=None,  # Optional field
+        account_id=job_data.account_id,
         description=None,
         priority="Medium",  # Default priority
         start_date=None,
@@ -58,7 +66,29 @@ async def create_job(
     await db.commit()
     await db.refresh(job)
     
-    return job
+    # Return job with account details
+    return {
+        "id": job.id,
+        "name": job.name,
+        "job_number": job.job_number,
+        "account_id": job.account_id,
+        "account_name": account.name,
+        "account_number": account.account_number,
+        "account_contact_person": account.contact_person,
+        "account_email": account.email,
+        "account_phone": account.phone,
+        "description": job.description,
+        "priority": job.priority,
+        "start_date": job.start_date,
+        "due_date": job.due_date,
+        "project_value": job.project_value,
+        "status_id": job.status_id,
+        "created_at": job.created_at,
+        "created_by": job.created_by,
+        "updated_at": job.updated_at,
+        "updated_by": job.updated_by
+    }
+    
 
 
 async def get_jobs(
@@ -68,7 +98,7 @@ async def get_jobs(
     account_id: Optional[int] = None,
     status_id: Optional[int] = None,
     priority: Optional[str] = None
-) -> List[BusinessJob]:
+) -> List[dict]:
     """
     Get list of jobs with optional filtering and pagination.
     
@@ -81,9 +111,18 @@ async def get_jobs(
         priority: Filter by priority
         
     Returns:
-        List of Job objects
+        List of Job dicts with account details
     """
-    query = select(BusinessJob)
+    from sqlalchemy.orm import aliased
+    
+    query = select(
+        BusinessJob,
+        Account.name.label("account_name"),
+        Account.account_number.label("account_number"),
+        Account.contact_person.label("account_contact_person"),
+        Account.email.label("account_email"),
+        Account.phone.label("account_phone")
+    ).outerjoin(Account, BusinessJob.account_id == Account.id)
     
     # Apply filters
     if account_id is not None:
@@ -97,35 +136,90 @@ async def get_jobs(
     query = query.offset(skip).limit(limit).order_by(BusinessJob.created_at.desc())
     
     result = await db.execute(query)
-    jobs = result.scalars().all()
+    rows = result.all()
     
-    return jobs
+    jobs_list = []
+    for row in rows:
+        job = row[0]
+        jobs_list.append({
+            "id": job.id,
+            "name": job.name,
+            "job_number": job.job_number,
+            "account_id": job.account_id,
+            "account_name": row[1] if job.account_id else None,
+            "account_number": row[2] if job.account_id else None,
+            "account_contact_person": row[3] if job.account_id else None,
+            "account_email": row[4] if job.account_id else None,
+            "account_phone": row[5] if job.account_id else None,
+            "description": job.description,
+            "priority": job.priority,
+            "start_date": job.start_date,
+            "due_date": job.due_date,
+            "project_value": job.project_value,
+            "status_id": job.status_id,
+            "created_at": job.created_at,
+            "created_by": job.created_by,
+            "updated_at": job.updated_at,
+            "updated_by": job.updated_by
+        })
+    
+    return jobs_list
 
 
 async def get_job_by_id(
     db: AsyncSession,
     job_id: int
-) -> BusinessJob:
+) -> dict:
     """
-    Get a specific job by ID.
+    Get a specific job by ID with account details.
     
     Args:
         db: Database session
         job_id: ID of the job to retrieve
         
     Returns:
-        Job object
+        Job dict with account details
         
     Raises:
         HTTPException: If job not found
     """
-    result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
-    job = result.scalar_one_or_none()
+    query = select(
+        BusinessJob,
+        Account.name.label("account_name"),
+        Account.account_number.label("account_number"),
+        Account.contact_person.label("account_contact_person"),
+        Account.email.label("account_email"),
+        Account.phone.label("account_phone")
+    ).outerjoin(Account, BusinessJob.account_id == Account.id).where(BusinessJob.id == job_id)
     
-    if not job:
+    result = await db.execute(query)
+    row = result.first()
+    
+    if not row:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    return job
+    job = row[0]
+    return {
+        "id": job.id,
+        "name": job.name,
+        "job_number": job.job_number,
+        "account_id": job.account_id,
+        "account_name": row[1] if job.account_id else None,
+        "account_number": row[2] if job.account_id else None,
+        "account_contact_person": row[3] if job.account_id else None,
+        "account_email": row[4] if job.account_id else None,
+        "account_phone": row[5] if job.account_id else None,
+        "description": job.description,
+        "priority": job.priority,
+        "start_date": job.start_date,
+        "due_date": job.due_date,
+        "project_value": job.project_value,
+        "status_id": job.status_id,
+        "created_at": job.created_at,
+        "created_by": job.created_by,
+        "updated_at": job.updated_at,
+        "updated_by": job.updated_by
+    }
 
 
 async def update_job(
@@ -133,7 +227,7 @@ async def update_job(
     job_id: int,
     job_data: JobUpdate,
     user_id: int
-) -> BusinessJob:
+) -> dict:
     """
     Update an existing job.
     
@@ -144,7 +238,7 @@ async def update_job(
         user_id: ID of user updating the job
         
     Returns:
-        Updated Job object
+        Updated Job dict with account details
         
     Raises:
         HTTPException: If job not found or job number already exists
@@ -175,7 +269,35 @@ async def update_job(
     await db.commit()
     await db.refresh(job)
     
-    return job
+    # Get account details
+    account = None
+    if job.account_id:
+        account_result = await db.execute(
+            select(Account).where(Account.id == job.account_id)
+        )
+        account = account_result.scalar_one_or_none()
+    
+    return {
+        "id": job.id,
+        "name": job.name,
+        "job_number": job.job_number,
+        "account_id": job.account_id,
+        "account_name": account.name if account else None,
+        "account_number": account.account_number if account else None,
+        "account_contact_person": account.contact_person if account else None,
+        "account_email": account.email if account else None,
+        "account_phone": account.phone if account else None,
+        "description": job.description,
+        "priority": job.priority,
+        "start_date": job.start_date,
+        "due_date": job.due_date,
+        "project_value": job.project_value,
+        "status_id": job.status_id,
+        "created_at": job.created_at,
+        "created_by": job.created_by,
+        "updated_at": job.updated_at,
+        "updated_by": job.updated_by
+    }
 
 
 async def delete_job(

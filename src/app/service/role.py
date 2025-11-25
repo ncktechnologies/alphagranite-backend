@@ -257,17 +257,30 @@ class RoleService:
                 
                 # Create permissions from action menu permissions (similar to create_role)
                 for amp in action_menu_permissions:
-                    # Create a permission for this action menu
-                    permission = Permission(
-                        name=f"{role.name} - Menu {amp['action_menu_id']}",
-                        description=f"Auto-generated permission for role {role.name}",
-                        can_create=amp.get('can_create', False),
-                        can_read=amp.get('can_read', False),
-                        can_update=amp.get('can_update', False),
-                        can_delete=amp.get('can_delete', False)
+                    # Check if a permission with this exact configuration already exists
+                    permission_name = f"{role.name} - Menu {amp['action_menu_id']}"
+                    existing_perm = await db.execute(
+                        select(Permission).where(
+                            Permission.can_create == amp.get('can_create', False),
+                            Permission.can_read == amp.get('can_read', False),
+                            Permission.can_update == amp.get('can_update', False),
+                            Permission.can_delete == amp.get('can_delete', False)
+                        ).limit(1)
                     )
-                    db.add(permission)
-                    await db.flush()  # Get permission ID
+                    permission = existing_perm.scalar_one_or_none()
+                    
+                    if not permission:
+                        # Create new permission only if no matching permission exists
+                        permission = Permission(
+                            name=permission_name,
+                            description=f"Auto-generated permission for role {role.name}",
+                            can_create=amp.get('can_create', False),
+                            can_read=amp.get('can_read', False),
+                            can_update=amp.get('can_update', False),
+                            can_delete=amp.get('can_delete', False)
+                        )
+                        db.add(permission)
+                        await db.flush()  # Get permission ID
                     
                     # Link permission to role with action menu
                     role_permission = RolePermission(
@@ -950,6 +963,37 @@ class RoleService:
                 "profile_image_url": profile_image_url
             })
         
+        # Get action_permissions for this role
+        from src.app.database.action_menu import ActionMenu
+        perm_stmt = (
+            select(Permission, RolePermission, ActionMenu)
+            .join(RolePermission, Permission.id == RolePermission.permission_id)
+            .outerjoin(ActionMenu, RolePermission.action_menu_id == ActionMenu.id)
+            .where(RolePermission.role_id == role_id)
+        )
+        perm_result = await db.execute(perm_stmt)
+        permission_rows = perm_result.all()
+        
+        # Group permissions by action menu for action_permissions
+        action_permissions = {}
+        for p, rp, am in permission_rows:
+            if am:  # Only include permissions with action menus
+                menu_id = am.id
+                if menu_id not in action_permissions:
+                    action_permissions[menu_id] = {
+                        "action_menu_id": menu_id,
+                        "action_menu_name": am.name,
+                        "can_create": False,
+                        "can_read": False,
+                        "can_update": False,
+                        "can_delete": False,
+                    }
+                # Aggregate permissions for this action menu
+                action_permissions[menu_id]["can_create"] = action_permissions[menu_id]["can_create"] or getattr(p, 'can_create', False)
+                action_permissions[menu_id]["can_read"] = action_permissions[menu_id]["can_read"] or getattr(p, 'can_read', False)
+                action_permissions[menu_id]["can_update"] = action_permissions[menu_id]["can_update"] or getattr(p, 'can_update', False)
+                action_permissions[menu_id]["can_delete"] = action_permissions[menu_id]["can_delete"] or getattr(p, 'can_delete', False)
+        
         # Construct response
         response = {
             "id": role.id,
@@ -963,6 +1007,7 @@ class RoleService:
             "active_members": active_members,
             "pending_members": pending_members,
             "inactive_members": inactive_members,
+            "action_permissions": list(action_permissions.values()),
             "members": {
                 "total": total_count,
                 "page": skip // limit + 1 if limit > 0 else 1,

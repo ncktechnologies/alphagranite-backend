@@ -2,13 +2,15 @@ from datetime import datetime
 from typing import List, Optional
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.app.database import get_db
 from src.app.database.user import User
 from src.app.database.account import Account
+from src.app.database.business_job import BusinessJob
 from src.app.interface.business_schemas import (
-    AccountCreate, AccountUpdate, AccountResponse,
+    AccountCreate, AccountUpdate, AccountResponse, JobResponse,
 )
 from src.app.utils.permissions import PermissionChecker
 from src.app.middleware.jwt_auth import get_current_user
@@ -56,7 +58,11 @@ async def create_account(
     await db.commit()
     await db.refresh(account)
     
-    return success_response(account, "Account created successfully")
+    # Add total_jobs count (new account has 0 jobs)
+    account_dict = account.__dict__.copy()
+    account_dict['total_jobs'] = 0
+    
+    return success_response(account_dict, "Account created successfully")
 
 
 @router.get("/accounts", response_model=SuccessResponse[List[AccountResponse]])
@@ -90,7 +96,19 @@ async def get_accounts(
     result = await db.execute(query)
     accounts = result.scalars().all()
     
-    return success_response(accounts, "Accounts fetched successfully")
+    # Add total_jobs count for each account
+    accounts_with_jobs = []
+    for account in accounts:
+        job_count_result = await db.execute(
+            select(func.count(BusinessJob.id)).where(BusinessJob.account_id == account.id)
+        )
+        job_count = job_count_result.scalar() or 0
+        
+        account_dict = account.__dict__.copy()
+        account_dict['total_jobs'] = job_count
+        accounts_with_jobs.append(account_dict)
+    
+    return success_response(accounts_with_jobs, "Accounts fetched successfully")
 
 
 @router.get("/accounts/{account_id}", response_model=SuccessResponse[AccountResponse])
@@ -107,9 +125,16 @@ async def get_account(
     if not account:
         raise error_response("Account not found", 404)
     
-  
+    # Add total_jobs count
+    job_count_result = await db.execute(
+        select(func.count(BusinessJob.id)).where(BusinessJob.account_id == account_id)
+    )
+    job_count = job_count_result.scalar() or 0
     
-    return success_response(account, "Account fetched successfully")
+    account_dict = account.__dict__.copy()
+    account_dict['total_jobs'] = job_count
+    
+    return success_response(account_dict, "Account fetched successfully")
 
 
 @router.put("/accounts/{account_id}", response_model=SuccessResponse[AccountResponse])
@@ -151,7 +176,16 @@ async def update_account(
     await db.commit()
     await db.refresh(account)
     
-    return success_response(account, "Account updated successfully")
+    # Add total_jobs count
+    job_count_result = await db.execute(
+        select(func.count(BusinessJob.id)).where(BusinessJob.account_id == account_id)
+    )
+    job_count = job_count_result.scalar() or 0
+    
+    account_dict = account.__dict__.copy()
+    account_dict['total_jobs'] = job_count
+    
+    return success_response(account_dict, "Account updated successfully")
 
 
 @router.delete("/accounts/{account_id}", response_model=SuccessResponse[None], status_code=200)
@@ -175,3 +209,72 @@ async def delete_account(
     await db.commit()
 
     return success_response(None, "Account deleted successfully")
+
+
+@router.get("/accounts/{account_id}/jobs", response_model=SuccessResponse[List[JobResponse]])
+async def get_account_jobs(
+    account_id: int,
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
+    status_id: Optional[int] = Query(None, description="Filter by job status ID"),
+    priority: Optional[str] = Query(None, description="Filter by priority"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get all jobs under a specific account with optional filtering"""
+    
+    # Check if account exists
+    account_result = await db.execute(select(Account).where(Account.id == account_id))
+    account = account_result.scalar_one_or_none()
+    
+    if not account:
+        raise error_response("Account not found", 404)
+    
+    # Build query for jobs
+    query = select(
+        BusinessJob,
+        Account.name.label("account_name"),
+        Account.account_number.label("account_number"),
+        Account.contact_person.label("account_contact_person"),
+        Account.email.label("account_email"),
+        Account.phone.label("account_phone")
+    ).outerjoin(Account, BusinessJob.account_id == Account.id).where(BusinessJob.account_id == account_id)
+    
+    # Apply filters
+    if status_id is not None:
+        query = query.where(BusinessJob.status_id == status_id)
+    if priority:
+        query = query.where(BusinessJob.priority == priority)
+    
+    # Apply pagination
+    query = query.offset(skip).limit(limit).order_by(BusinessJob.created_at.desc())
+    
+    result = await db.execute(query)
+    rows = result.all()
+    
+    jobs_list = []
+    for row in rows:
+        job = row[0]
+        jobs_list.append({
+            "id": job.id,
+            "name": job.name,
+            "job_number": job.job_number,
+            "account_id": job.account_id,
+            "account_name": row[1] if job.account_id else None,
+            "account_number": row[2] if job.account_id else None,
+            "account_contact_person": row[3] if job.account_id else None,
+            "account_email": row[4] if job.account_id else None,
+            "account_phone": row[5] if job.account_id else None,
+            "description": job.description,
+            "priority": job.priority,
+            "start_date": job.start_date,
+            "due_date": job.due_date,
+            "project_value": job.project_value,
+            "status_id": job.status_id,
+            "created_at": job.created_at,
+            "created_by": job.created_by,
+            "updated_at": job.updated_at,
+            "updated_by": job.updated_by
+        })
+    
+    return success_response(jobs_list, f"Jobs for account '{account.name}' fetched successfully")

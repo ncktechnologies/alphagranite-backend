@@ -12,6 +12,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Skip auth endpoints, docs/openapi endpoints, and health check
         if (request.url.path.startswith("/auth/") or
+            request.url.path.startswith("/api/v1/auth/") or
             request.url.path.startswith("/docs") or
             request.url.path.startswith("/redoc") or
             request.url.path.startswith("/openapi.json") or

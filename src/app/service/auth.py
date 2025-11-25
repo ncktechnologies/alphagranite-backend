@@ -81,7 +81,7 @@ class AuthService:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
     async def get_user_permissions(self, user_id: int, db_session: AsyncSession) -> List[Dict]:
-        """Get all permissions for a user based on their role"""
+        """Get all permissions for a user based on their roles (from user_roles table)"""
         result = await db_session.execute(select(User).where(User.id == user_id))
         user = result.scalars().first()
         if not user:
@@ -104,10 +104,16 @@ class AuthService:
                 })
             return permissions
 
-        # Regular user permissions
-        if not user.role_id:
+        # Get all role IDs for the user from user_roles table
+        ur_result = await db_session.execute(
+            select(UserRole.role_id).filter(UserRole.user_id == user_id)
+        )
+        role_ids = [row[0] for row in ur_result.all()]
+        
+        if not role_ids:
             return []
 
+        # Get permissions from all roles
         qry = (
             select(
                 ActionMenu.id.label("menu_id"),
@@ -120,13 +126,12 @@ class AuthService:
             )
             .join(RolePermission, RolePermission.action_menu_id == ActionMenu.id)
             .join(Permission, Permission.id == RolePermission.permission_id)
-            .filter(RolePermission.role_id == user.role_id)
+            .filter(RolePermission.role_id.in_(role_ids))
+            .distinct()
         )
 
         res = await db_session.execute(qry)
         rows = res.all()
-        print(rows)
-        print(res)
 
         return [
             {

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import sys
 from dotenv import load_dotenv
@@ -55,6 +56,12 @@ def load_default_action_menu():
             ("Jobs", "jobs"),
             ("Shop", "shop"),
             ("Settings", "settings"),
+            ("Stone Thickness", "stone_thickness"),
+            ("Stone Color", "stone_color"),
+            ("Stone Type", "stone_type"),
+            ("Edges", "edges"),
+            ("Accounts", "accounts"),
+            ("FAB IDs", "fabids"),
         ]
 
         # Insert action menu items idempotently (check by code)
@@ -73,13 +80,13 @@ def load_default_action_menu():
         menu_loaded = result.fetchall()
 
         print("✅ Default action menu items loaded successfully!")
-        print(f"\nLoaded {len(menu_loaded)} menu items:")
+        print("\nLoaded {} menu items:".format(len(menu_loaded)))
         for menu in menu_loaded:
-            print(f"  - {menu[1]} ({menu[2]})")
+            print("  - {} ({})".format(menu[1], menu[2]))
         
     except Exception as e:
         db.rollback()
-        print(f"❌ Error loading action menus items: {str(e)}")
+        print("❌ Error loading action menus items: {}".format(str(e)))
     finally:
         db.close()
 

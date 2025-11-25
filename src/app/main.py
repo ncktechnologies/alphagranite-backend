@@ -38,6 +38,17 @@ from src.app.routers import stone_colors
 from src.app.routers import stone_thickness
 from src.app.routers import templating
 from src.app.routers import drafting  
+from src.app.routers import slabsmith_sales_ct
+from src.app.routers import sales_ct
+from src.app.routers import cut_list
+from src.app.routers import final_programming
+from src.app.routers import wj_programming
+from src.app.routers import wj_scheduling
+from src.app.routers import resurface_scheduling
+from src.app.routers import revisions
+from src.app.routers import cost_of_stone
+from src.app.routers import install_scheduling
+from src.app.routers import install_completion  
 
 # Import logging configuration
 from src.app.utils.logger import setup_logging
@@ -135,6 +146,17 @@ app.include_router(fab_notes.router, prefix="/api/v1", tags=["FAB Notes"])
 # Workflow routers (templating, drafting, etc.)
 app.include_router(templating.router, prefix="/api/v1", tags=["Templating"])
 app.include_router(drafting.router, prefix="/api/v1", tags=["Drafting"])
+app.include_router(slabsmith_sales_ct.router, prefix="/api/v1", tags=["SlabSmith & Sales CT"])
+app.include_router(sales_ct.router, prefix="/api/v1", tags=["SalesCT"])
+app.include_router(cut_list.router, prefix="/api/v1", tags=["Cut List"])
+app.include_router(final_programming.router, prefix="/api/v1", tags=["Final Programming"])
+app.include_router(wj_programming.router, prefix="/api/v1", tags=["WJ Programming"])
+app.include_router(wj_scheduling.router, prefix="/api/v1", tags=["WJ Scheduling"])
+app.include_router(resurface_scheduling.router, prefix="/api/v1", tags=["Resurface Scheduling"])
+app.include_router(revisions.router, prefix="/api/v1", tags=["Revisions"])
+app.include_router(cost_of_stone.router, prefix="/api/v1", tags=["Cost of Stone"])
+app.include_router(install_scheduling.router, prefix="/api/v1", tags=["Install Scheduling"])
+app.include_router(install_completion.router, prefix="/api/v1", tags=["Install Completion"])
 
 # Existing business workflow routers
 app.include_router(job_extras.router, prefix="/api/v1", tags=["Job Extras"])

@@ -14,10 +14,14 @@ from src.app.interface.business_schemas import (
     TemplatingScheduleUpdate,
     TemplatingCompleteRequest,
     TemplatingResponse,
+    TemplatingReviewUpdate,
+    TemplateReviewCompleteUpdate,
+    TemplatingTechnicianUpdate,
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import error_response, success_response
+from src.app.database.fab_notes import FabNotes
 
 router = APIRouter()
 
@@ -93,6 +97,7 @@ async def schedule_templating(
         duration=templating.duration,
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
+        is_completed=templating.is_completed,
         status_id=templating.status_id,
         status_name=status.name if status else None,
         created_at=templating.created_at,
@@ -122,12 +127,12 @@ async def unschedule_templating(
     templating.updated_at = datetime.now()
     templating.updated_by = current_user.id
     
-    # Reset fab stage back to fab_created with next_stage as templating
+    # Reset fab stage - keep it at templating with next_stage as pre_draft_review
     fab_result = await db.execute(select(Fab).where(Fab.id == templating.fab_id))
     fab = fab_result.scalar_one_or_none()
     if fab and fab.current_stage == "templating":
-        fab.current_stage = "fab_created"
-        fab.next_stage = "templating"
+        # FAB stays at templating stage, just mark templating as unscheduled
+        fab.next_stage = "pre_draft_review"
         fab.updated_at = datetime.now()
         fab.updated_by = current_user.id
     
@@ -179,6 +184,7 @@ async def update_templating(
         duration=templating.duration,
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
+        is_completed=templating.is_completed,
         status_id=templating.status_id,
         status_name=status.name if status else None,
         created_at=templating.created_at,
@@ -265,6 +271,7 @@ async def complete_templating(
         duration=templating.duration,
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
+        is_completed=templating.is_completed,
         status_id=templating.status_id,
         status_name=status.name if status else None,
         current_stage=fab.current_stage,
@@ -347,6 +354,7 @@ async def get_templating(
         duration=templating.duration,
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
+        is_completed=templating.is_completed,
         status_id=templating.status_id,
         status_name=status.name if status else None,
         created_at=templating.created_at,
@@ -388,6 +396,7 @@ async def get_templating_by_fab(
         duration=templating.duration,
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
+        is_completed=templating.is_completed,
         status_id=templating.status_id,
         status_name=status.name if status else None,
         created_at=templating.created_at,
@@ -396,3 +405,139 @@ async def get_templating_by_fab(
     )
     
     return success_response(response_data, "Templating fetched successfully")
+
+
+# Templating Coordinator Endpoints
+@router.patch("/templating/coordinator/review/{fab_id}")
+async def update_template_review(
+    fab_id: int,
+    review_data: TemplatingReviewUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Templating Coordinator: Update template received status and square footage
+    """
+    fab = await db.get(Fab, fab_id)
+    if not fab:
+        return error_response("FAB not found", 404)
+    
+    # Update FAB template received status
+    fab.template_received = review_data.template_received
+    if review_data.total_sqft is not None:
+        fab.total_sqft = review_data.total_sqft
+    fab.updated_at = datetime.now()
+    fab.updated_by = current_user.id
+    
+    # Add note if provided
+    if review_data.notes:
+        fab_note = FabNotes(
+            fab_id=fab_id,
+            stage=fab.current_stage or "templating",
+            note=review_data.notes,
+            created_by=current_user.id,
+            created_at=datetime.now()
+        )
+        db.add(fab_note)
+    
+    await db.commit()
+    await db.refresh(fab)
+    
+    return success_response(
+        {
+            "fab_id": fab.id,
+            "template_received": fab.template_received,
+            "total_sqft": fab.total_sqft
+        },
+        "Template review updated successfully"
+    )
+
+
+@router.patch("/templating/coordinator/review-complete/{fab_id}")
+async def mark_template_review_complete(
+    fab_id: int,
+    review_data: TemplateReviewCompleteUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Templating Coordinator: Mark template review as complete
+    """
+    fab = await db.get(Fab, fab_id)
+    if not fab:
+        return error_response("FAB not found", 404)
+    
+    # Update template review complete status
+    fab.template_review_complete = review_data.template_review_complete
+    if review_data.total_sqft is not None:
+        fab.total_sqft = review_data.total_sqft
+    fab.updated_at = datetime.now()
+    fab.updated_by = current_user.id
+    
+    await db.commit()
+    await db.refresh(fab)
+    
+    return success_response(
+        {
+            "fab_id": fab.id,
+            "template_review_complete": fab.template_review_complete,
+            "total_sqft": fab.total_sqft
+        },
+        "Template review marked as complete" if review_data.template_review_complete else "Template review marked as incomplete"
+    )
+
+
+# Templating Technician Endpoints
+@router.patch("/templating/technician/update/{fab_id}")
+async def update_templating_work(
+    fab_id: int,
+    work_data: TemplatingTechnicianUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Templating Technician: Update templating work status, start time, duration, sqft, notes
+    """
+    # Get the templating record for this FAB
+    result = await db.execute(
+        select(Templating).where(Templating.fab_id == fab_id)
+    )
+    templating = result.scalar_one_or_none()
+    
+    if not templating:
+        return error_response("Templating not found for this FAB", 404)
+    
+    # Verify the technician is assigned to this templating
+    if templating.technician_id != current_user.id:
+        return error_response("You are not assigned to this templating task", 403)
+    
+    # Update templating fields
+    templating.is_completed = work_data.is_completed
+    if work_data.actual_start_date is not None:
+        templating.actual_start_date = work_data.actual_start_date
+    if work_data.duration is not None:
+        templating.duration = work_data.duration
+    if work_data.total_sqft is not None:
+        templating.total_sqft = work_data.total_sqft
+    if work_data.notes is not None:
+        # Append notes to existing notes
+        existing_notes = templating.notes or []
+        templating.notes = existing_notes + work_data.notes
+    
+    templating.updated_at = datetime.now()
+    templating.updated_by = current_user.id
+    
+    await db.commit()
+    await db.refresh(templating)
+    
+    return success_response(
+        {
+            "templating_id": templating.id,
+            "fab_id": templating.fab_id,
+            "is_completed": templating.is_completed,
+            "actual_start_date": templating.actual_start_date,
+            "duration": templating.duration,
+            "total_sqft": templating.total_sqft
+        },
+        "Templating work updated successfully"
+    )

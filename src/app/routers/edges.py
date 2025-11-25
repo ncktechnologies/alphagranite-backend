@@ -10,6 +10,7 @@ from src.app.database.user import User
 from src.app.interface.business_schemas import (
     EdgeCreate, EdgeUpdate, EdgeResponse,
 )
+from src.app.utils.permissions import PermissionChecker
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import error_response, success_response
@@ -21,7 +22,7 @@ router = APIRouter()
 async def create_edge(
     edge_data: EdgeCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(PermissionChecker("edges", "create"))
 ):
     """Create a new edge"""
     
@@ -104,7 +105,7 @@ async def update_edge(
     edge_id: int,
     edge_data: EdgeUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(PermissionChecker("edges", "update"))
 ):
     """Update an edge"""
     
@@ -153,7 +154,7 @@ async def update_edge(
 async def delete_edge(
     edge_id: int,
     db: AsyncSession = Depends(get_db),
-  
+    current_user: User = Depends(PermissionChecker("edges", "delete"))
 ):
     """Delete an edge (soft delete by setting status to deleted)"""
     

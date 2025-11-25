@@ -3,6 +3,7 @@ from typing import List, Optional
 from decimal import Decimal
 import sqlalchemy as sa
 from sqlalchemy.future import select
+from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
@@ -28,14 +29,20 @@ router = APIRouter()
 
 # Define the fab workflow stages in order (based on client workflow)
 FAB_STAGES = [
-    "fab_created",              # Stage 1: Fab Created
-    "templating",               # Stage 2: Templating
-    "templating_technician",    # Stage 3: Templating Technician Assignment
-    "pre_draft",                # Stage 4: Pre-Draft
-    "drafting",                 # Stage 5: Drafting
-    "drafting_review",          # Stage 6: Drafting Review
-    "drafting_revision",        # Stage 7: Drafting Revision
-    "shop_production"           # Stage 8: Shop Production (final stage)
+    "templating",               # Stage 1: Templating
+    "pre_draft_review",         # Stage 2: Pre-Draft Review
+    "drafting",                 # Stage 3: Drafting
+    "sales_ct",                 # Stage 4: SalesCT (SCT)
+    "slab_smith_request",       # Stage 5: SlabSmith Request
+    "final_programming",        # Stage 6: Final Programming
+    "wj_programming",           # Stage 7: WJ Programming
+    "cut_list",                 # Stage 8: Cut List
+    "wj_scheduling",            # Stage 9: WJ Scheduling
+    "resurface_scheduling",     # Stage 10: Resurface Scheduling
+    "revisions",                # Stage 11: Revisions
+    "cost_of_stone",            # Stage 12: Cost of Stone
+    "install_scheduling",       # Stage 13: Install Scheduling
+    "install_completion"        # Stage 14: Install Completion (final stage)
 ]
 
 def get_next_stage(current_stage: str) -> Optional[str]:
@@ -43,8 +50,8 @@ def get_next_stage(current_stage: str) -> Optional[str]:
     Get the next stage in the fab workflow.
     Returns None if current stage is the last stage (shop_production).
     """
-    if not current_stage or current_stage == "fab_created":
-        return "templating"
+    if not current_stage:
+        return "templating"  # Default to templating if no stage
     
     try:
         current_index = FAB_STAGES.index(current_stage)
@@ -57,6 +64,63 @@ def get_next_stage(current_stage: str) -> Optional[str]:
     except ValueError:
         # Current stage not in list, default to templating
         return "templating"
+
+
+async def get_stage_completion_data(db: AsyncSession, fab_id: int, current_stage: Optional[str]) -> dict:
+    """
+    Check if current stage is complete and return stage-specific data.
+    
+    Stage completion rules:
+    - templating: Complete when templating schedule exists with is_completed=True
+    - pre_draft_review: Complete when pre-draft review is approved
+    - drafting: Complete when drafting is completed
+    - sales_ct: Complete when SCT is done
+    - slab_smith_request: Complete when SlabSmith request is processed
+    - final_programming: Complete when final programming is done
+    - wj_programming: Complete when WJ programming is done
+    - cut_list: Complete when cut list is generated
+    - wj_scheduling: Complete when WJ is scheduled
+    - resurface_scheduling: Complete when resurfacing is scheduled
+    - revisions: Complete when revisions are done
+    - cost_of_stone: Complete when cost is calculated
+    - install_scheduling: Complete when installation is scheduled
+    - install_completion: Complete when installation is done (final stage)
+    """
+    stage_info = {
+        "is_complete": False,
+        "stage_data": None
+    }
+    
+    if not current_stage:
+        return stage_info
+    
+    # Check templating stage completion
+    if current_stage == "templating":
+        query = select(Templating).where(
+            Templating.fab_id == fab_id,
+            Templating.is_templating_schedule == True
+        ).order_by(Templating.id.desc()).limit(1)
+        result = await db.execute(query)
+        templating = result.scalar_one_or_none()
+        
+        if templating:
+            stage_info["is_complete"] = templating.is_completed
+            stage_info["stage_data"] = {
+                "templating_id": templating.id,
+                "technician_id": templating.technician_id,
+                "schedule_start_date": templating.schedule_start_date.isoformat() if templating.schedule_start_date else None,
+                "schedule_due_date": templating.schedule_due_date.isoformat() if templating.schedule_due_date else None,
+                "actual_start_date": templating.actual_start_date.isoformat() if templating.actual_start_date else None,
+                "duration": templating.duration,
+                "total_sqft": templating.total_sqft,
+                "is_completed": templating.is_completed,
+                "notes": templating.notes
+            }
+    
+    # Add more stage completion checks as needed for other stages
+    # For now, other stages default to is_complete=False
+    
+    return stage_info
 
 
 async def get_fab_notes(db: AsyncSession, fab_id: int) -> List[dict]:
@@ -118,34 +182,34 @@ async def create_fab(
     # Job validation
     job = await db.get(BusinessJob, fab_data.job_id)
     if not job:
-        raise error_response("Job not found", 404)
+        return error_response("Job not found", 404)
     
     # Sales person validation
     sales_person = await db.get(User, fab_data.sales_person_id)
     if not sales_person:
-        raise error_response("Sales person not found", 404)
+        return error_response("Sales person not found", 404)
     
     # Stone type validation
     stone_type = await db.get(StoneType, fab_data.stone_type_id)
     if not stone_type:
-        raise error_response("Stone type not found", 404)
+        return error_response("Stone type not found", 404)
     
     # Stone color validation
     stone_color = await db.get(StoneColor, fab_data.stone_color_id)
     if not stone_color:
-        raise error_response("Stone color not found", 404)
+        return error_response("Stone color not found", 404)
     
     # Stone thickness validation
     stone_thickness = await db.get(StoneThickness, fab_data.stone_thickness_id)
     if not stone_thickness:
-        raise error_response("Stone thickness not found", 404)
+        return error_response("Stone thickness not found", 404)
     
     # Edge validation
     edge = await db.get(Edge, fab_data.edge_id)
     if not edge:
-        raise error_response("Edge not found", 404)
+        return error_response("Edge not found", 404)
     
-    # Create the fab and let it be on fab_created stage
+    # Create the fab and start it at templating stage
     fab_dict = fab_data.model_dump()
     
     # Set default total_sqft to 1 if not provided (as per client requirement)
@@ -154,8 +218,8 @@ async def create_fab(
     
     fab = Fab(
         **fab_dict,
-        current_stage="fab_created",
-        next_stage="templating",  # Next stage after creation
+        current_stage="templating",
+        next_stage="pre_draft_review",  # Next stage after templating
         status_id=1,  # Active/Created status
         created_by=current_user.id,
         created_at=datetime.now()
@@ -169,7 +233,7 @@ async def create_fab(
     return await get_fab(fab.id, db, current_user)
 
 
-@router.get("/fabs", response_model=List[FabResponse])
+@router.get("/fabs")
 async def get_fabs(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
@@ -182,7 +246,7 @@ async def get_fabs(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get list of fabs with optional filtering"""
+    """Get list of fabs with optional filtering and pagination"""
     
     # Use aliased User for sales_person, technician, drafter, and drafter_assigned_by to avoid conflicts
     from sqlalchemy.orm import aliased
@@ -288,6 +352,11 @@ async def get_fabs(
         # Convert to dict and serialize datetime/date/Decimal objects
         fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
                     for k, v in fab.__dict__.items() if not k.startswith('_')}
+        
+        # Ensure notes is always a list
+        if fab_dict.get("notes") and not isinstance(fab_dict["notes"], list):
+            fab_dict["notes"] = [fab_dict["notes"]] if fab_dict["notes"] else None
+        
         fab_dict["sales_person_name"] = f"{sales_person_first_name} {sales_person_last_name}" if sales_person_first_name else None
         fab_dict["stone_type_name"] = stone_type_name
         fab_dict["stone_color_name"] = stone_color_name
@@ -326,19 +395,47 @@ async def get_fabs(
         
         fabs.append(fab_dict)
     
-    # Fetch fab_notes for all FABs
+    # Fetch fab_notes and stage data for all FABs
     for fab_dict in fabs:
         fab_notes = await get_fab_notes(db, fab_dict["id"])
         fab_dict["fab_notes"] = fab_notes
+        
+        # Add stage completion status and stage-specific data
+        stage_info = await get_stage_completion_data(db, fab_dict["id"], fab_dict.get("current_stage"))
+        fab_dict["is_complete"] = stage_info["is_complete"]
+        fab_dict["stage_data"] = stage_info["stage_data"]
     
-    # Calculate total square footage for the filtered results
-    total_sqft = sum(fab_dict.get("total_sqft", 0) or 0 for fab_dict in fabs)
+    # Count total FABs with same filters (without pagination)
+    count_query = select(func.count(Fab.id)).select_from(Fab)
+    if job_id is not None:
+        count_query = count_query.where(Fab.job_id == job_id)
+    if fab_type:
+        count_query = count_query.where(Fab.fab_type.ilike(f"%{fab_type}%"))
+    if sales_person_id is not None:
+        count_query = count_query.where(Fab.sales_person_id == sales_person_id)
+    if status_id is not None:
+        count_query = count_query.where(Fab.status_id == status_id)
+    if current_stage:
+        count_query = count_query.where(Fab.current_stage == current_stage)
+    if next_stage:
+        count_query = count_query.where(Fab.next_stage == next_stage)
     
-    return success_response({
-        "fabs": fabs,
-        "total_count": len(fabs),
-        "total_sqft": total_sqft
-    }, "Fabs fetched successfully")
+    total_result = await db.execute(count_query)
+    total = total_result.scalar()
+    
+    # Calculate pagination metadata
+    page = (skip // limit) + 1 if limit > 0 else 1
+    
+    return {
+        "success": True,
+        "message": "FABs retrieved successfully",
+        "data": {
+            "total": total,
+            "page": page,
+            "per_page": limit,
+            "data": fabs
+        }
+    }
 
 
 @router.get("/fabs/{fab_id}", response_model=SuccessResponse[FabResponse])
@@ -407,7 +504,7 @@ async def get_fab(
     row = result.first()
     
     if not row:
-        raise error_response("Fab not found", 404)
+        return error_response("Fab not found", 404)
     
     # Unpack the row
     fab = row[0]
@@ -436,6 +533,11 @@ async def get_fab(
     # Convert to dict and add related names (handle datetime, date, and Decimal serialization)
     fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
                 for k, v in fab.__dict__.items() if not k.startswith('_')}
+    
+    # Ensure notes is always a list
+    if fab_dict.get("notes") and not isinstance(fab_dict["notes"], list):
+        fab_dict["notes"] = [fab_dict["notes"]] if fab_dict["notes"] else None
+    
     fab_dict["sales_person_name"] = f"{sales_person_first_name} {sales_person_last_name}" if sales_person_first_name else None
     fab_dict["stone_type_name"] = stone_type_name
     fab_dict["stone_color_name"] = stone_color_name
@@ -476,9 +578,14 @@ async def get_fab(
     fab_notes = await get_fab_notes(db, fab_id)
     fab_dict["fab_notes"] = fab_notes
     
+    # Add stage completion status and stage-specific data
+    stage_info = await get_stage_completion_data(db, fab_id, fab_dict.get("current_stage"))
+    fab_dict["is_complete"] = stage_info["is_complete"]
+    fab_dict["stage_data"] = stage_info["stage_data"]
+    
     # Determine success message based on stage
     message = "Fab fetched successfully"
-    if fab_dict.get("current_stage") == "fab_created" and fab_dict.get("updated_at") is None:
+    if fab_dict.get("current_stage") == "templating" and fab_dict.get("updated_at") is None:
         # Just created (no updates yet)
         message = f"FAB {fab_dict['id']} submitted successfully for review!"
     
@@ -756,3 +863,247 @@ async def get_fabs_by_job(
         fab_dict["fab_notes"] = fab_notes
     
     return success_response(fabs, f"Found {len(fabs)} FABs for job {job_id}")
+
+
+@router.get("/stages/{stage_name}/fabs", response_model=SuccessResponse[dict])
+async def get_fabs_by_stage(
+    stage_name: str,
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
+    job_id: Optional[int] = Query(None, description="Filter by job ID"),
+    status_id: Optional[int] = Query(None, description="Filter by status ID"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get paginated list of FABs in a specific stage"""
+    
+    from sqlalchemy.orm import aliased
+    from sqlalchemy import and_, func
+    
+    # Aliases for different user roles
+    TechnicianUser = aliased(User)
+    DrafterUser = aliased(User)
+    DrafterAssignedByUser = aliased(User)
+    
+    # Subquery for latest templating
+    latest_templating = (
+        select(Templating)
+        .where(Templating.fab_id == Fab.id)
+        .order_by(Templating.id.desc())
+        .limit(1)
+        .lateral("latest_templating")
+    )
+    
+    # Build base query with all joins
+    query = select(
+        Fab,
+        User.first_name.label("sales_person_first_name"),
+        User.last_name.label("sales_person_last_name"),
+        StoneType.name.label("stone_type_name"),
+        StoneColor.name.label("stone_color_name"),
+        StoneThickness.thickness.label("stone_thickness_value"),
+        Edge.name.label("edge_name"),
+        latest_templating.c.schedule_start_date.label("templating_schedule_start_date"),
+        latest_templating.c.schedule_due_date.label("templating_schedule_due_date"),
+        latest_templating.c.notes.label("templating_notes"),
+        TechnicianUser.first_name.label("technician_first_name"),
+        TechnicianUser.last_name.label("technician_last_name"),
+        BusinessJob,
+        Account.name.label("account_name"),
+        Account.account_number.label("account_number"),
+        Account.contact_person.label("account_contact_person"),
+        Account.email.label("account_email"),
+        Account.phone.label("account_phone"),
+        DrafterUser.first_name.label("drafter_first_name"),
+        DrafterUser.last_name.label("drafter_last_name"),
+        DrafterAssignedByUser.first_name.label("drafter_assigned_by_first_name"),
+        DrafterAssignedByUser.last_name.label("drafter_assigned_by_last_name")
+    ).select_from(Fab)\
+        .outerjoin(User, Fab.sales_person_id == User.id)\
+        .outerjoin(StoneType, Fab.stone_type_id == StoneType.id)\
+        .outerjoin(StoneColor, Fab.stone_color_id == StoneColor.id)\
+        .outerjoin(StoneThickness, Fab.stone_thickness_id == StoneThickness.id)\
+        .outerjoin(Edge, Fab.edge_id == Edge.id)\
+        .outerjoin(latest_templating, sa.literal(True))\
+        .outerjoin(TechnicianUser, latest_templating.c.technician_id == TechnicianUser.id)\
+        .outerjoin(BusinessJob, Fab.job_id == BusinessJob.id)\
+        .outerjoin(Account, BusinessJob.account_id == Account.id)\
+        .outerjoin(DrafterUser, Fab.drafter_id == DrafterUser.id)\
+        .outerjoin(DrafterAssignedByUser, Fab.drafter_assigned_by == DrafterAssignedByUser.id)
+    
+    # Filter by stage (required)
+    query = query.where(Fab.current_stage == stage_name)
+    
+    # Apply optional filters
+    if job_id:
+        query = query.where(Fab.job_id == job_id)
+    if status_id:
+        query = query.where(Fab.status_id == status_id)
+    
+    # Get total count before pagination
+    count_query = select(func.count()).select_from(Fab).where(Fab.current_stage == stage_name)
+    if job_id:
+        count_query = count_query.where(Fab.job_id == job_id)
+    if status_id:
+        count_query = count_query.where(Fab.status_id == status_id)
+    
+    total_result = await db.execute(count_query)
+    total = total_result.scalar()
+    
+    # Apply pagination
+    query = query.offset(skip).limit(limit)
+    
+    result = await db.execute(query)
+    rows = result.all()
+    
+    fabs = []
+    for row in rows:
+        fab = row[0]
+        sales_person_first_name = row[1]
+        sales_person_last_name = row[2]
+        stone_type_name = row[3]
+        stone_color_name = row[4]
+        stone_thickness_value = row[5]
+        edge_name = row[6]
+        templating_schedule_start_date = row[7]
+        templating_schedule_due_date = row[8]
+        templating_notes = row[9]
+        technician_first_name = row[10]
+        technician_last_name = row[11]
+        business_job = row[12]
+        account_name = row[13]
+        account_number = row[14]
+        account_contact_person = row[15]
+        account_email = row[16]
+        account_phone = row[17]
+        drafter_first_name = row[18]
+        drafter_last_name = row[19]
+        drafter_assigned_by_first_name = row[20]
+        drafter_assigned_by_last_name = row[21]
+        
+        # Build FAB dict
+        fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
+                    for k, v in fab.__dict__.items() if not k.startswith('_')}
+        fab_dict["sales_person_name"] = f"{sales_person_first_name} {sales_person_last_name}" if sales_person_first_name else None
+        fab_dict["stone_type_name"] = stone_type_name
+        fab_dict["stone_color_name"] = stone_color_name
+        fab_dict["stone_thickness_value"] = stone_thickness_value
+        fab_dict["edge_name"] = edge_name
+        
+        # Add job details
+        if business_job:
+            job_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
+                       for k, v in business_job.__dict__.items() if not k.startswith('_')}
+            fab_dict["job_details"] = job_dict
+            fab_dict["account_id"] = business_job.account_id
+        else:
+            fab_dict["job_details"] = None
+            fab_dict["account_id"] = None
+
+        # Add account data
+        fab_dict["account_name"] = account_name
+        fab_dict["account_number"] = account_number
+        fab_dict["account_contact_person"] = account_contact_person
+        fab_dict["account_email"] = account_email
+        fab_dict["account_phone"] = account_phone
+        
+        # Add templating data
+        fab_dict["templating_schedule_start_date"] = templating_schedule_start_date.isoformat() if templating_schedule_start_date else None
+        fab_dict["templating_schedule_due_date"] = templating_schedule_due_date.isoformat() if templating_schedule_due_date else None
+        fab_dict["templating_notes"] = templating_notes
+        fab_dict["technician_name"] = f"{technician_first_name} {technician_last_name}" if technician_first_name else None
+        
+        # Add drafter information
+        fab_dict["drafter_name"] = f"{drafter_first_name} {drafter_last_name}" if drafter_first_name else None
+        fab_dict["drafter_assigned_by_name"] = f"{drafter_assigned_by_first_name} {drafter_assigned_by_last_name}" if drafter_assigned_by_first_name else None
+        
+        # Add next_stage
+        fab_dict["next_stage"] = get_next_stage(fab_dict.get("current_stage"))
+        
+        fabs.append(fab_dict)
+    
+    # Fetch fab_notes for all FABs
+    for fab_dict in fabs:
+        fab_notes = await get_fab_notes(db, fab_dict["id"])
+        fab_dict["fab_notes"] = fab_notes
+    
+    # Return paginated response
+    response_data = {
+        "items": fabs,
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+        "stage": stage_name
+    }
+    
+    return success_response(response_data, f"Found {len(fabs)} of {total} FABs in stage '{stage_name}'")
+
+
+@router.get("/stages", response_model=SuccessResponse[List[dict]])
+async def get_all_stages(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get all workflow stages with FAB count for each stage"""
+    from sqlalchemy import func, case
+    
+    # Get count of FABs for each stage
+    stage_counts_query = select(
+        Fab.current_stage,
+        func.count(Fab.id).label('count')
+    ).group_by(Fab.current_stage)
+    
+    result = await db.execute(stage_counts_query)
+    stage_counts_dict = {row[0]: row[1] for row in result.all()}
+    
+    # Build response with all defined stages
+    stages_data = []
+    for idx, stage_name in enumerate(FAB_STAGES):
+        fab_count = stage_counts_dict.get(stage_name, 0)
+        
+        # Get last 10 FAB IDs in this stage (most recent)
+        fab_ids_query = select(Fab.id).where(Fab.current_stage == stage_name).order_by(Fab.id.desc()).limit(10)
+        fab_ids_result = await db.execute(fab_ids_query)
+        fab_ids = [row[0] for row in fab_ids_result.all()]
+        
+        stages_data.append({
+            "stage_name": stage_name,
+            "stage_order": idx + 1,
+            "fab_count": fab_count,
+            "last_10_fab_ids": fab_ids,
+            "next_stage": get_next_stage(stage_name)
+        })
+    
+    # Also check for FABs in stages not in FAB_STAGES list
+    all_stages_query = select(
+        Fab.current_stage,
+        func.count(Fab.id).label('count')
+    ).where(
+        Fab.current_stage.notin_(FAB_STAGES)
+    ).group_by(Fab.current_stage)
+    
+    other_result = await db.execute(all_stages_query)
+    other_stages = other_result.all()
+    
+    for stage_name, count in other_stages:
+        if stage_name:  # Skip NULL stages
+            # Get last 10 FAB IDs for this stage (most recent)
+            fab_ids_query = select(Fab.id).where(Fab.current_stage == stage_name).order_by(Fab.id.desc()).limit(10)
+            fab_ids_result = await db.execute(fab_ids_query)
+            fab_ids = [row[0] for row in fab_ids_result.all()]
+            
+            stages_data.append({
+                "stage_name": stage_name,
+                "stage_order": None,  # Not in predefined list
+                "fab_count": count,
+                "last_10_fab_ids": fab_ids,
+                "next_stage": get_next_stage(stage_name)
+            })
+    
+    total_fabs = sum(stage['fab_count'] for stage in stages_data)
+    
+    return success_response(
+        stages_data,
+        f"Found {len(stages_data)} stages with {total_fabs} total FABs"
+    )
+

@@ -136,6 +136,7 @@ class UserProfileUpdate(BaseModel):
     home_address: Optional[str] = None
     gender: Optional[str] = None
     role_id: Optional[int] = None  # Only admins can update this
+    profile_image_id: Optional[int] = None
 
 class UserResponse(BaseModel):
     id: int
@@ -152,6 +153,7 @@ class UserResponse(BaseModel):
     is_super_admin: bool
     created_at: datetime
     updated_at: datetime
+    profile_image_url: Optional[str] = None
     roles: Optional[List[Dict[str, Any]]] = None
     permissions: Optional[List[Dict[str, Any]]] = None
     action_permissions: Optional[List[Dict[str, Any]]] = None

@@ -182,3 +182,7 @@ deploy: check-docker check-docker-compose
 	@echo "  make health  - Run health check"
 	@echo "  make stop    - Stop services"
 	@echo ""
+
+run:
+	@echo "Running application..."
+	@uvicorn src.app.main:app --reload --port 8005

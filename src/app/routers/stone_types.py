@@ -10,6 +10,7 @@ from src.app.database.stone_type import StoneType
 from src.app.interface.business_schemas import (
     StoneTypeCreate, StoneTypeUpdate, StoneTypeResponse,
 )
+from src.app.utils.permissions import PermissionChecker
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import success_response, error_response
@@ -21,7 +22,7 @@ router = APIRouter()
 async def create_stone_type(
     stone_type_data: StoneTypeCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(PermissionChecker("stone_type", "create"))
 ):
     """Create a new stone type"""
     
@@ -99,7 +100,7 @@ async def update_stone_type(
     type_id: int,
     stone_type_data: StoneTypeUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(PermissionChecker("stone_type", "update"))
 ):
     """Update a stone type"""
     
@@ -147,7 +148,7 @@ async def update_stone_type(
 async def delete_stone_type(
     type_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(PermissionChecker("stone_type", "delete"))
 ):
     """Delete a stone type (soft delete by setting status to deleted)"""
     

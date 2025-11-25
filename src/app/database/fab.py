@@ -32,6 +32,38 @@ class Fab(SQLModel, table=True):
     drafter_assigned_by: Optional[int] = Field(default=None, foreign_key="users.id")
     drafter_assigned_at: Optional[datetime] = None
     
+    # Templating/Template tracking
+    template_received: bool = Field(default=False)
+    template_review_complete: bool = Field(default=False)
+    
+    # Drafting tracking
+    draft_completed: bool = Field(default=False)
+    cad_review_complete: bool = Field(default=False)
+    no_of_pieces: Optional[int] = Field(default=None)
+    
+    # Financial tracking
+    revenue: Optional[float] = Field(default=None)
+    gp: Optional[float] = Field(default=None)  # Gross Profit
+    
+    # SalesCT tracking
+    sct_completed: bool = Field(default=False)
+    revised: bool = Field(default=False)  # Indicates if FAB has been sent back for revisions
+    
+    # Cut List tracking
+    shop_date_schedule: Optional[datetime] = None
+    final_programming_complete: bool = Field(default=False)
+    slab_smith_used: bool = Field(default=False)
+    fp_not_needed: bool = Field(default=False)
+    
+    # Final Programming tracking
+    confirmed_date: Optional[datetime] = None  # When final programming confirmed
+    wj_time_minutes: Optional[int] = Field(default=None)  # Waterjet time in minutes
+    wj_linft: Optional[float] = Field(default=None)  # Waterjet linear feet
+    edging_linft: Optional[float] = Field(default=None)  # Edging linear feet
+    cnc_linft: Optional[float] = Field(default=None)  # CNC linear feet
+    miter_linft: Optional[float] = Field(default=None)  # Miter linear feet
+    installation_date: Optional[datetime] = None
+    
     current_stage: Optional[str] = Field(max_length=255, default=None)
     next_stage: Optional[str] = Field(max_length=255, default=None)
     status_id: int = Field(foreign_key="status.value_id")

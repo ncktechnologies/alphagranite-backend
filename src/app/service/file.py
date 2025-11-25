@@ -6,7 +6,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import UploadFile, HTTPException, status
+from fastapi import UploadFile, HTTPException, status, Request
+
 
 from src.app.database.file import File
 
@@ -15,12 +16,27 @@ class FileService:
     """Service for managing file uploads and retrievals"""
     
     @staticmethod
+    def get_base_url(request: Request = None) -> str:
+        """Get the base URL from the request or fall back to settings"""
+        if request:
+            # Build base URL from request
+            scheme = request.url.scheme
+            host = request.headers.get("host", request.url.netloc)
+            return f"{scheme}://{host}"
+        
+        # Fall back to settings
+        from src.app.utils.config import get_settings
+        settings = get_settings()
+        return settings.API_BASE_URL
+    
+    @staticmethod
     async def upload_file(
         db: AsyncSession,
         file: UploadFile,
         user_id: int,
         directory: str = "uploads",
-        file_type: str = None
+        file_type: str = None,
+        request: Request = None
     ) -> Dict[str, Any]:
         """
         Upload a file to the server and save its metadata in the database
@@ -31,6 +47,7 @@ class FileService:
             user_id: The ID of the user uploading the file
             directory: The directory to save the file in (relative to UPLOADS_DIR)
             file_type: The type of file (defaults to derived from content-type)
+            request: The FastAPI request object to extract base URL
             
         Returns:
             Dictionary containing file information including ID
@@ -88,6 +105,9 @@ class FileService:
         await db.commit()
         await db.refresh(db_file)
         
+        # Get base URL from request or settings
+        base_url = FileService.get_base_url(request)
+        
         return {
             "id": db_file.id,
             "name": db_file.name,
@@ -95,25 +115,22 @@ class FileService:
             "file_type": db_file.file_type,
             "file_size": db_file.file_size,
             "created_at": db_file.created_at,
-            "url": f"{settings.API_BASE_URL}/static/{file_path}"
+            "url": f"{base_url}/static/{file_path}"
         }
         
     @staticmethod
-    async def get_file(db: AsyncSession, file_id: int) -> Dict[str, Any]:
+    async def get_file(db: AsyncSession, file_id: int, request: Request = None) -> Dict[str, Any]:
         """
         Get file metadata by ID and generate URL
         
         Args:
             db: Database session
             file_id: The ID of the file to retrieve
+            request: The FastAPI request object to extract base URL
             
         Returns:
             Dictionary containing file information including URL
         """
-        # Get environment configuration
-        from src.app.utils.config import get_settings
-        settings = get_settings()
-        
         # Query file from database
         query = select(File).where(File.id == file_id)
         result = await db.execute(query)
@@ -122,8 +139,11 @@ class FileService:
         if not file:
             return None
         
+        # Get base URL from request or settings
+        base_url = FileService.get_base_url(request)
+        
         # Generate file URL
-        file_url = f"{settings.API_BASE_URL}/static/{file.file_path}"
+        file_url = f"{base_url}/static/{file.file_path}"
         
         return {
             "id": file.id,
