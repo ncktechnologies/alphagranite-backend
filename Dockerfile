@@ -54,6 +54,10 @@ COPY --from=builder /opt/venv /opt/venv
 # Copy application code
 COPY . .
 
+# Copy and set permissions for entrypoint script
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+
 # Create necessary directories
 RUN mkdir -p /app/static/uploads /app/static/defaults /app/logs && \
     chown -R appuser:appuser /app
@@ -68,5 +72,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Run migration script and start application
-CMD ["sh", "-c", "python scripts/auto_migrate.py && uvicorn src.app.main:app --host 0.0.0.0 --port 8000 --workers 4"]
+# Run entrypoint script which handles DB URL transformation and starts the app
+ENTRYPOINT ["/app/docker-entrypoint.sh"]

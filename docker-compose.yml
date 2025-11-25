@@ -6,9 +6,12 @@ services:
       dockerfile: Dockerfile
     container_name: alpha_granite_api
     restart: unless-stopped
-    network_mode: "host"
     env_file:
       - .env
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./static/uploads:/app/static/uploads
       - ./static/defaults:/app/static/defaults
