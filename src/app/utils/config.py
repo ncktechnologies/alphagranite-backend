@@ -13,7 +13,15 @@ load_dotenv()
 BASE_DIR = pathlib.Path(__file__).parent.parent.parent.parent
 
 # Database configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "")
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL environment variable is not set. Please configure your database connection.")
+
+# Convert to async driver for the application
+if DATABASE_URL.startswith('postgresql://'):
+    DATABASE_URL = DATABASE_URL.replace('postgresql://', 'postgresql+asyncpg://', 1)
+elif DATABASE_URL.startswith('postgresql+psycopg2://'):
+    DATABASE_URL = DATABASE_URL.replace('postgresql+psycopg2://', 'postgresql+asyncpg://', 1)
 
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "")
 
