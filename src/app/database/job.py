@@ -80,7 +80,7 @@ class JobBase(SQLModel):
 
     benefits: Optional[str] = Field(default=None, sa_type=Text)
 
-    company_id: int = Field(foreign_key="companies.id")
+    company_id: Optional[int] = Field(default=None, foreign_key="companies.id")
     created_by: int = Field(foreign_key="users.id")
 
     created_at: datetime = Field(
