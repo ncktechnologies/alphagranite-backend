@@ -1,4 +1,4 @@
-.PHONY: help build start stop restart logs shell migrate backup clean status health deploy check-docker check-docker-compose
+.PHONY: help build start stop restart logs shell migrate migrate-create migrate-upgrade migrate-downgrade migrate-history backup clean status health deploy check-docker check-docker-compose
 
 # Variables
 DOCKER_COMPOSE = docker compose
@@ -17,7 +17,11 @@ help:
 	@echo "  restart              - Restart all services"
 	@echo "  logs                 - Show application logs (follow mode)"
 	@echo "  shell                - Open shell in web container"
-	@echo "  migrate              - Run database migrations"
+	@echo "  migrate              - Run database migrations (alembic upgrade head)"
+	@echo "  migrate-create       - Create new migration (usage: make migrate-create MSG='description')"
+	@echo "  migrate-upgrade      - Upgrade to specific revision (usage: make migrate-upgrade REV='+1')"
+	@echo "  migrate-downgrade    - Downgrade to specific revision (usage: make migrate-downgrade REV='-1')"
+	@echo "  migrate-history      - Show migration history"
 	@echo "  backup               - Create database backup"
 	@echo "  clean                - Clean up containers and images"
 	@echo "  status               - Show container status"
@@ -64,7 +68,42 @@ shell:
 # Run migrations
 migrate:
 	@echo "Running database migrations..."
-	@$(DOCKER_COMPOSE) exec web python scripts/auto_migrate.py
+	@$(DOCKER_COMPOSE) exec web alembic upgrade head
+
+# Create new migration
+migrate-create:
+	@if [ -z "$(MSG)" ]; then \
+		echo "Error: MSG variable is required"; \
+		echo "Usage: make migrate-create MSG='your migration description'"; \
+		exit 1; \
+	fi
+	@echo "Creating new migration: $(MSG)"
+	@$(DOCKER_COMPOSE) exec web alembic revision --autogenerate -m "$(MSG)"
+
+# Upgrade to specific revision
+migrate-upgrade:
+	@if [ -z "$(REV)" ]; then \
+		echo "Upgrading to head..."; \
+		$(DOCKER_COMPOSE) exec web alembic upgrade head; \
+	else \
+		echo "Upgrading to revision: $(REV)"; \
+		$(DOCKER_COMPOSE) exec web alembic upgrade $(REV); \
+	fi
+
+# Downgrade to specific revision
+migrate-downgrade:
+	@if [ -z "$(REV)" ]; then \
+		echo "Error: REV variable is required"; \
+		echo "Usage: make migrate-downgrade REV='-1' (or specific revision hash)"; \
+		exit 1; \
+	fi
+	@echo "Downgrading to revision: $(REV)"
+	@$(DOCKER_COMPOSE) exec web alembic downgrade $(REV)
+
+# Show migration history
+migrate-history:
+	@echo "Migration history:"
+	@$(DOCKER_COMPOSE) exec web alembic history --verbose
 
 # Create database backup
 backup:

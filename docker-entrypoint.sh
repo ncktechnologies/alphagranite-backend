@@ -8,8 +8,9 @@ if [ -n "$DATABASE_URL" ]; then
     echo "Modified DATABASE_URL for Docker networking"
 fi
 
-# Run migration script
-python scripts/auto_migrate.py
+# Run Alembic migrations
+echo "Running database migrations..."
+alembic upgrade head
 
 # Start the application
 exec uvicorn src.app.main:app --host 0.0.0.0 --port 8000 --workers 4
