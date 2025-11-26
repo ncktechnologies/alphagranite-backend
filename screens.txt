@@ -1,0 +1,261 @@
+Stage Flow:
+
+✅ Templating → Pre-Draft Review
+✅ Pre-Draft Review → Drafting
+✅ Drafting → SalesCT (SCT)
+✅ SalesCT (SCT) → SlabSmith Request
+✅ SlabSmith Request → Final Programming
+✅ Final Programming → WJ Programming
+✅ WJ Programming → Cut List
+✅ Cut List → WJ Scheduling
+✅ WJ Scheduling → Resurface Scheduling
+✅ Resurface Scheduling → Revisions
+✅ Revisions → Cost of Stone
+✅ Cost of Stone → Install Scheduling
+✅ Install Scheduling → Install Completion
+✅ Install Completion → (Final Stage)
+
+Based on user roles, below are what they can see and do on a FAB:
+
+- Templating (Coordinator)
+    - List page:
+        - Search box (search by job, FAB ID)
+        - Filters: Date range, FAB type, status (FAB ID, Unscheduled, Incomplete, Completed)
+        - Export as CSV
+        - Paginated list of all FABs with columns:
+            - FAB TYPE (with status indicators like 'New')
+            - FAB ID
+            - JOB NAME
+            - JOB NO
+            - TEMPLATE SCHEDULE (Date)
+            - TEMPLATE RECEIVED (Yes/No)
+            - TEMPLATER (Name)
+            - TOTAL SQ.FT
+            - REVENUE
+            - Actions menu (...)
+        - Summary metrics: Total SQ.FT, Total Revenue
+    - Detail page:
+        - Job Information section:
+            - FAB ID, FAB type, Account, Job name, Job #, Area(s)
+            - Stone details: Type, Color, Thickness, Edge
+            - Total Sq.Ft
+        - Scheduling Notes section:
+            - Timeline of notes with timestamps and authors
+        - Templating Review section:
+            - Template received status (checkbox)
+            - Square ft input field
+            - Update button
+
+- Templating (Technician)
+    - List page:
+        - Search box (search by job, FAB ID)
+        - Filters: Date range, FAB type
+        - Export as CSV
+        - Paginated list of assigned FABs with 'New' indicators
+        - Shows count of new assigned templates
+    - Detail page:
+        - Job Information section:
+            - Customer name and address
+            - Material details (type, color, thickness)
+            - Total square footage
+            - Scheduled date
+            - Assigned technician
+            - Progress timeline
+        - Template Activity section:
+            - Status toggle (Completed/Not completed)
+            - Schedule date and time (read-only)
+            - Start date picker
+            - Duration timer
+            - Square ft input field
+            - Notes text area
+            - Action buttons (Cancel, Save)
+    - Actions:
+        - Can mark templates as completed/not completed
+        - Can update templating start time and duration
+        - Can update square footage
+        - Can add notes about templating
+        - Can save or cancel changes
+
+- Pre-draft
+    - List page:
+        - Search box (search fab with all possible parameter)
+        - Filters: Date range, FAB type, etc
+        - Export as CSV
+        - Paginated list of all FABs: ID, Type, Job Name, Job number, Template schedule, Template received, Total SQ.Ft, Templater name, etc.
+    - FAB detail page:
+        - All FAB information
+        - All the information of the job attached to FAB
+        - All notes under the FAB: User data (image, name, id, etc), Note, Dates
+        - Can mark/unmark "Template review complete"
+        - Can update the Square ft
+        - Can assign a drafter
+        - Can add notes: Can add Draft note, that is notes under FAB
+        - Can change or move the FAB stage.
+
+- Drafting
+    - List page:
+        - Search box (search fab with all possible parameter)
+        - Filters: Date range, FAB type, etc
+        - Export as CSV
+        - Paginated list of all FABs: ID, Type, Job Name, Job number, No. of pieces, Revenue, GP Template schedule, Template received, Total SQ.Ft, Templater name, Draft completed (bool), etc.
+    - Detail page:
+        - All FAB information
+        - All the information of the job attached to FAB
+        - All notes under the FAB: User data (image, name, id, etc), Note, Dates
+        - Start time & Date (Can see and update)
+        - Can click a [Start drafting] button
+        - Can click a [Pause drafting] button
+        - Can click a [End drafting] button
+        - Can see total hour spent on the drafting
+        - Can upload files for the FAB
+        - Can see all uploaded files for the FAB
+        - Can update the Square ft
+        - Can add notes: Can add Draft note, that is notes under FAB. To add notes, the user can update the total Square Ft, No. of pieces, Notes, Mark CAD review complete
+        - Can change or move the FAB stage.
+        
+        - Revision Handling (when FAB is sent back for revision):
+            - Revision reason (displayed when applicable)
+            - [Start revision] button to begin working on the revision
+            - Revision history showing all previous revisions
+            - For each revision:
+                - Revision number and date
+                - List of files associated with the revision
+                - Status of the revision
+                - Notes or comments
+            - File upload section for new revision files
+            - Ability to view and download previous revision files
+            - [Submit revision] button to complete the revision process
+
+- SalesCT (SCT) - Sales Person View
+    - List page:
+        - Search box (search by job, FAB ID)
+        - Filters: Date range, FAB type
+        - Export as CSV
+        - Paginated list of all FABs with columns:
+            - FAB TYPE (with status indicators)
+            - FAB ID
+            - JOB NAME
+            - JOB NO
+            - NO. OF PIECES
+            - TOTAL SQ FT
+            - REVENUE
+            - REVISED? (Yes/No)
+            - SCT COMPLETED (Yes/No)
+            - Actions menu (...)
+    - Detail page:
+        - Job Information section:
+            - FAB ID, Job name, Job #
+            - Customer information
+            - Material details (stone type, color, thickness)
+            - Edge type
+            - Total square footage
+            - Number of pieces
+            - Revenue information
+        - SalesCT Review section:
+            - SCT Review Checklist:
+                - Customer information verified
+                - Material specifications confirmed
+                - Stone type confirmed
+                - Stone color confirmed
+                - Total area size confirmed
+                - FAB type confirmed
+            - Notes/Discussion area
+        - Action buttons:
+            - [Send back to Drafting] (if changes needed)
+            - [Approve and Send to SlabSmith] (when review is complete)
+            - [Save as Draft] (to save progress)
+        - Revision history (view only)
+    - Actions:
+        - Can mark SCT as completed
+        - Can add review notes
+        - Can send FAB back to Drafting with revision notes if changes are needed
+        - Can approve and send to next stage (SlabSmith)
+        - Can view job details and revision history
+
+- Cut List (Production Coordinator)
+    - List page:
+        - Search box (search by job, FAB ID)
+        - Filters: Date range, FAB type, Select sales person
+        - Export as CSV
+        - Paginated list of all FABs with columns:
+            - FAB TYPE
+            - FAB ID
+            - JOB NAME
+            - JOB NO
+            - NO. OF PIECES
+            - TOTAL SQ FT
+            - REVENUE
+            - GP
+            - CONFIRMED (date from Final Programming)
+            - FINAL PROGRAMMING COMPLETE (Yes/No)
+            - SHOP DATE SCHEDULE
+            - Actions menu (...)
+        - Row actions: View details, Schedule cut list date
+    - Detail page:
+        - Job Details panel:
+            - Customer, Job #, Area, FAB Type
+            - Flags: Slab smith used?, FP not needed?
+            - Sales person
+            - Drafting notes list with timestamps
+        - Draft/Cut List files grid (open/download)
+        - Top action button: [Schedule cut list date]
+        - Schedule modal (Update FAB ID):
+            - Readonly: FAB ID, Account, Area(s), Stone type/color/thickness, Edge
+            - Inputs: No. of pieces, Total Sq Ft, WJ LinFt, Edging LinFt, CNC LinFt, Miter LinFt
+            - Dates: Shop date schedule (required), Installation date (optional)
+            - Checkbox: Revision complete
+            - Action: [Schedule shop date]
+    - Actions:
+        - Can schedule/update cut list shop date
+        - Can edit piece counts and linear feet fields before scheduling
+        - Can mark revision complete
+        - Can view and download attached draft files
+        - Can filter by sales person and export CSV
+        - Receives and displays Confirmed date and FP Complete status from Final Programming
+
+- Final Programming
+    - List page:
+        - Search box (search by job, FAB ID)
+        - Filters: Date range, FAB type, Select sales person
+        - Export as CSV
+        - Paginated list of all FABs with columns:
+            - FAB TYPE
+            - FAB ID
+            - JOB NO
+            - NO. OF PIECES
+            - TOTAL SQ FT
+            - WJ TIME (MINUTES)
+            - CONFIRMED (date)
+            - REVENUE
+            - GP
+            - CLOCK
+            - FINAL PROGRAMMING COMPLETE (Yes/No)
+            - Actions menu (...)
+        - Row actions: View details, Final programming schedule
+    - Detail page (Final programming activity):
+        - Job Details panel (Customer, Job #, Area, FAB Type)
+        - Programming notes
+        - Timer controls and timestamps:
+            - Start time & Date
+            - Paused time & Date (when paused)
+            - Buttons: [Start], [Pause], [Resume], [End]
+        - File uploads area for programming assets (drag/drop, browse)
+        - Action buttons: [Submit programming], [Schedule shop date]
+        - Schedule shop date modal (updates Cut List):
+            - Readonly: FAB ID, Account, Area(s), Stone type/color/thickness, Edge
+            - Inputs: No. of pieces, Total Sq Ft, WJ LinFt, Edging LinFt, CNC LinFt, Miter LinFt
+            - Dates: Shop date schedule (required), Installation date (optional)
+            - Checkbox: Confirmed
+            - Action: [Schedule shop date]
+        - End modal:
+            - Final programming notes (textarea)
+            - Assigned programmer (select)
+            - Checkbox: Final programming complete
+            - Action: [Submit final programming]
+    - Actions:
+        - Can start/pause/resume/end final programming session with time tracking
+        - Can upload and view programming files
+        - Can add notes and assign programmer
+        - Can schedule cut list shop date (writes to Cut List)
+        - Can mark final programming complete and submit
+
