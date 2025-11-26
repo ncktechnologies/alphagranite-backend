@@ -45,11 +45,17 @@ config = context.config
 database_url = os.environ.get("DATABASE_URL")
 if database_url is None:
     raise Exception("DATABASE_URL environment variable is not set")
+
+# Convert async driver to sync driver for migrations
 if database_url.startswith("postgresql+asyncpg://"):
-    sync_url = database_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
-    config.set_main_option("sqlalchemy.url", sync_url)
-else:
-    config.set_main_option("sqlalchemy.url", database_url)
+    database_url = database_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+elif database_url.startswith("postgresql://"):
+    database_url = database_url.replace("postgresql://", "postgresql+psycopg2://")
+
+# Escape % characters for configparser by doubling them
+# This is needed because configparser treats % as interpolation character
+escaped_url = database_url.replace("%", "%%")
+config.set_main_option("sqlalchemy.url", escaped_url)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
