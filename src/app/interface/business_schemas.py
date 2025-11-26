@@ -195,7 +195,7 @@ class FabCreate(BaseModel):
     stone_color_id: int = Field(..., gt=0)
     stone_thickness_id: int = Field(..., gt=0)
     edge_id: int = Field(..., gt=0)
-    input_area: str = Field(..., min_length=1, max_length=255)
+    input_area: Optional[float] = Field(None, ge=0, description="Input area in square feet")
     total_sqft: Optional[float] = Field(default=1.0, gt=0)  # Default to 1 if unknown (client requirement)
     notes: Optional[str] = None
     template_needed: bool = True
@@ -213,7 +213,7 @@ class FabUpdate(BaseModel):
     stone_color_id: Optional[int] = Field(None, gt=0)
     stone_thickness_id: Optional[int] = Field(None, gt=0)
     edge_id: Optional[int] = Field(None, gt=0)
-    input_area: Optional[str] = Field(None, min_length=1, max_length=255)
+    input_area: Optional[float] = Field(None, ge=0, description="Input area in square feet")
     total_sqft: Optional[float] = Field(None, gt=0)
     notes: Optional[str] = Field(None, description="Note to add to FAB (will be saved to fab_notes)")
     stage: Optional[str] = Field(None, description="Stage for the note (defaults to current_stage)")
@@ -276,7 +276,7 @@ class FabResponse(BaseModel):
     stone_thickness_value: Optional[str] = None
     edge_id: int
     edge_name: Optional[str] = None
-    input_area: str
+    input_area: Optional[float] = None
     total_sqft: float
     notes: Optional[List[str]] = None
     template_needed: bool
