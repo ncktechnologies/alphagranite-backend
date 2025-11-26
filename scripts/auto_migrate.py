@@ -75,8 +75,7 @@ logger = logging.getLogger(__name__)
 def get_model_tables():
     """Get all table names from SQLModel models"""
     model_tables = set()
-    for mapper in SQLModel.registry.mappers:
-        table = mapper.class_.__table__
+    for table in SQLModel.metadata.tables.values():
         model_tables.add(table.name)
     return model_tables
 
