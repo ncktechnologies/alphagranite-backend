@@ -1,0 +1,330 @@
+[
+  {
+    "endpoint": "/auth/login",
+    "method": "POST",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T11:59:25.516241"
+  },
+  {
+    "endpoint": "/auth/me",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T11:59:29.057348"
+  },
+  {
+    "endpoint": "/health",
+    "method": "GET",
+    "status": 307,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T11:59:29.060777"
+  },
+  {
+    "endpoint": "/employees",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T11:59:31.245782"
+  },
+  {
+    "endpoint": "/api/v1/users/sales-persons",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T11:59:31.848441"
+  },
+  {
+    "endpoint": "/departments",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T11:59:37.500192"
+  },
+  {
+    "endpoint": "/roles",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T11:59:38.401968"
+  },
+  {
+    "endpoint": "/api/v1/accounts",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T11:59:54.434851"
+  },
+  {
+    "endpoint": "/api/v1/accounts?skip=0&limit=20",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T11:59:58.217106"
+  },
+  {
+    "endpoint": "/api/v1/accounts",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:14.393616"
+  },
+  {
+    "endpoint": "/api/v1/accounts/2",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:15.372343"
+  },
+  {
+    "endpoint": "/api/v1/accounts/2/jobs",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:16.456192"
+  },
+  {
+    "endpoint": "/api/v1/jobs",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:17.134868"
+  },
+  {
+    "endpoint": "/api/v1/jobs?skip=0&limit=20",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:17.762003"
+  },
+  {
+    "endpoint": "/api/v1/jobs",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:18.376917"
+  },
+  {
+    "endpoint": "/api/v1/jobs/4",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:18.988062"
+  },
+  {
+    "endpoint": "/api/v1/jobs/4/fabs",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:19.927261"
+  },
+  {
+    "endpoint": "/api/v1/jobs",
+    "method": "POST",
+    "status": 201,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:21.502835"
+  },
+  {
+    "endpoint": "/api/v1/jobs/5",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:21.949194"
+  },
+  {
+    "endpoint": "/api/v1/stone-colors",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:22.543994"
+  },
+  {
+    "endpoint": "/api/v1/stone-colors?skip=0&limit=20",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:23.190680"
+  },
+  {
+    "endpoint": "/api/v1/stone-colors",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:23.816241"
+  },
+  {
+    "endpoint": "/api/v1/stone-colors/1",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:24.422694"
+  },
+  {
+    "endpoint": "/api/v1/stone-types",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:25.182967"
+  },
+  {
+    "endpoint": "/api/v1/stone-types?skip=0&limit=20",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:25.814868"
+  },
+  {
+    "endpoint": "/api/v1/stone-types",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:26.422595"
+  },
+  {
+    "endpoint": "/api/v1/stone-types/1",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:27.048331"
+  },
+  {
+    "endpoint": "/api/v1/stone-thickness",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:27.655360"
+  },
+  {
+    "endpoint": "/api/v1/stone-thickness?skip=0&limit=20",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:28.254709"
+  },
+  {
+    "endpoint": "/api/v1/stone-thickness",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:28.878329"
+  },
+  {
+    "endpoint": "/api/v1/stone-thickness/3",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:29.501131"
+  },
+  {
+    "endpoint": "/api/v1/edges",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:30.252165"
+  },
+  {
+    "endpoint": "/api/v1/edges?skip=0&limit=20",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:30.931985"
+  },
+  {
+    "endpoint": "/api/v1/edges",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:31.592091"
+  },
+  {
+    "endpoint": "/api/v1/edges/1",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:32.196816"
+  },
+  {
+    "endpoint": "/api/v1/fab-types",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:32.543662"
+  },
+  {
+    "endpoint": "/api/v1/fabs",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:33.712901"
+  },
+  {
+    "endpoint": "/api/v1/fabs?skip=0&limit=100",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:34.758598"
+  },
+  {
+    "endpoint": "/api/v1/fabs",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:35.798800"
+  },
+  {
+    "endpoint": "/action-menus",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:36.546834"
+  },
+  {
+    "endpoint": "/permissions",
+    "method": "GET",
+    "status": 200,
+    "success": true,
+    "error": null,
+    "timestamp": "2025-11-26T12:00:37.209115"
+  }
+]
