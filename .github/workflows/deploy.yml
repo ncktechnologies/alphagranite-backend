@@ -3,8 +3,7 @@ name: Deploy to Production
 on:
   push:
     branches:
-      - job
-      - main
+      - dev
   workflow_dispatch:
 
 jobs:

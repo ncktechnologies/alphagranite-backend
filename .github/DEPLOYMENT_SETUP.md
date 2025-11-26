@@ -14,11 +14,11 @@ Before the CI/CD pipeline can work, you need to configure the following GitHub S
 
 ### Required Secrets
 
-| Secret Name | Value | Description |
-|------------|-------|-------------|
-| `VPS_HOST` | `93.114.128.181` | Your VPS server IP address |
-| `VPS_USERNAME` | `root` | SSH username for your server |
-| `VPS_SSH_KEY` | `<contents of your ssh_key file>` | Your private SSH key |
+| Secret Name    | Value                             | Description                  |
+| -------------- | --------------------------------- | ---------------------------- |
+| `VPS_HOST`     | `93.114.128.181`                  | Your VPS server IP address   |
+| `VPS_USERNAME` | `root`                            | SSH username for your server |
+| `VPS_SSH_KEY`  | `<contents of your ssh_key file>` | Your private SSH key         |
 
 ### How to get your SSH key content
 
@@ -29,6 +29,7 @@ cat ssh_key
 ```
 
 Copy everything including:
+
 - `-----BEGIN OPENSSH PRIVATE KEY-----`
 - The key content
 - `-----END OPENSSH PRIVATE KEY-----`
@@ -38,7 +39,8 @@ Paste the entire content as the value for `VPS_SSH_KEY` secret.
 ## How the CI/CD Works
 
 ### Trigger Events
-- **Automatic**: Runs on every push to `job` or `main` branches
+
+- **Automatic**: Runs on every push to the configured branches in the workflow
 - **Manual**: You can also trigger it manually from the Actions tab
 
 ### Deployment Steps
@@ -96,11 +98,13 @@ docker compose logs -f
 ## Environment Variables
 
 Make sure your `.env` file is properly configured on the server at:
+
 ```
 /root/alphagranite/alpha-granit/.env
 ```
 
 This file should contain:
+
 - `DATABASE_URL`
 - `SECRET_KEY`
 - `ALGORITHM`
@@ -116,6 +120,7 @@ This file should contain:
 ## Support
 
 For issues with the deployment pipeline, check:
+
 1. GitHub Actions logs
 2. Server Docker logs
 3. Application logs at `/root/alphagranite/alpha-granit/logs/`
