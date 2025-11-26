@@ -17,7 +17,7 @@ from sqlmodel import (
     Relationship,
 )
 from sqlalchemy.dialects.postgresql import ARRAY
-from sqlalchemy import event
+from sqlalchemy import event, text
 
 # --- Enums ---
 class JobStatus(str, PyEnum):
@@ -198,7 +198,7 @@ if TYPE_CHECKING:
 @event.listens_for(Job.__table__, "after_create")
 def create_job_indexes(target, connection, **kw):
     connection.execute(
-        """
+        text("""
         CREATE INDEX IF NOT EXISTS idx_job_status ON jobs (status);
         CREATE INDEX IF NOT EXISTS idx_job_company ON jobs (company_id);
         CREATE INDEX IF NOT EXISTS idx_job_type ON jobs (job_type);
@@ -207,17 +207,17 @@ def create_job_indexes(target, connection, **kw):
         CREATE INDEX IF NOT EXISTS idx_job_skills ON jobs USING GIN (skills_required);
         CREATE INDEX IF NOT EXISTS idx_job_priority ON jobs (priority);
         CREATE INDEX IF NOT EXISTS idx_job_dates ON jobs (start_date, due_date);
-        """
+        """)
     )
 
 
 @event.listens_for(JobApplication.__table__, "after_create")
 def create_application_indexes(target, connection, **kw):
     connection.execute(
-        """
+        text("""
         CREATE INDEX IF NOT EXISTS idx_application_job ON job_applications (job_id);
         CREATE INDEX IF NOT EXISTS idx_application_applicant ON job_applications (applicant_id);
         CREATE INDEX IF NOT EXISTS idx_application_status ON job_applications (status);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_application_unique ON job_applications (job_id, applicant_id);
-        """
+        """)
     )
