@@ -1,4 +1,3 @@
-import os
 #!/usr/bin/env python3
 """
 Create a superuser for local development / tests.
@@ -32,6 +31,7 @@ try:
     import src.app.database.status  # noqa: F401
     import src.app.database.user_role  # noqa: F401
     import src.app.database.department  # noqa: F401
+    import src.app.database.job  # noqa: F401 - Import JobApplication before User
 except Exception:
     # We'll still import specific classes below and let errors propagate with clearer messages
     pass
