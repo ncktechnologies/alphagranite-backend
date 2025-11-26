@@ -25,7 +25,7 @@ jobs:
             set -e
             
             echo "========================================="
-            echo "Starting deployment to production server"
+            echo "Starting deployment to staging server"
             echo "========================================="
             
             # Check if Docker is installed
