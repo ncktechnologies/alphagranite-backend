@@ -61,11 +61,15 @@ log_level = os.getenv("LOG_LEVEL", "INFO")
 setup_logging(log_level)
 
 # Get CORS settings from environment variables or use defaults
-cors_origins = os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
+cors_origins_str = os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:3000,http://localhost:5173")
+cors_origins = ["*"] if cors_origins_str == "*" else cors_origins_str.split(",")
 cors_methods = os.getenv("CORS_ALLOW_METHODS", "GET,POST,PUT,DELETE,OPTIONS,PATCH").split(",")
 cors_headers = os.getenv("CORS_ALLOW_HEADERS", "*").split(",")
 cors_credentials = os.getenv("CORS_ALLOW_CREDENTIALS", "true").lower() == "true"
 
+# If using wildcard origins, credentials must be False
+if cors_origins == ["*"]:
+    cors_credentials = False
 
 app = FastAPI(title="Alpha Granite Backend API", version="1.0.0")
 
