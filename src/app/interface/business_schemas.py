@@ -432,12 +432,22 @@ class DraftingSessionUpdate(BaseModel):
 
 class DraftingUpdate(BaseModel):
     """Schema for updating drafting information"""
+    # Original frontend fields
     total_sqft: Optional[float] = Field(None, gt=0, description="Updated square feet")
     no_of_pieces: Optional[int] = Field(None, gt=0, description="Number of pieces")
     cad_review_complete: Optional[bool] = Field(None, description="Mark CAD review complete")
     draft_completed: Optional[bool] = Field(None, description="Mark draft as completed")
     notes: Optional[str] = Field(None, description="Drafting notes")
     current_stage: Optional[str] = Field(None, description="Move to different stage")
+    # Database model fields
+    drafter_start_date: Optional[datetime] = None
+    drafter_end_date: Optional[datetime] = None
+    total_sqft_drafted: Optional[float] = None
+    no_of_piece_drafted: Optional[int] = None
+    draft_note: Optional[str] = None
+    mentions: Optional[str] = None
+    is_completed: Optional[bool] = None
+    status_id: Optional[int] = None
 
 
 # Clockwork Schemas
@@ -485,15 +495,6 @@ class DraftingCreate(BaseModel):
     total_sqft_required_to_draft: str
 
 
-class DraftingUpdate(BaseModel):
-    drafter_start_date: Optional[datetime] = None
-    drafter_end_date: Optional[datetime] = None
-    total_sqft_drafted: Optional[str] = None
-    no_of_piece_drafted: Optional[str] = None
-    draft_note: Optional[str] = None
-    mentions: Optional[str] = None
-    is_completed: Optional[bool] = None
-    status_id: Optional[int] = None
 
 
 class DraftingSubmitUpdate(BaseModel):
@@ -545,6 +546,7 @@ class PreDraftReviewResponse(BaseModel):
     fab_id: int
     draft_notes: Optional[str]
     is_redrafting_needed: Optional[bool]
+    is_completed: bool
     status_id: Optional[int]
     created_at: datetime
     updated_at: datetime

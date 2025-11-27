@@ -1,13 +1,16 @@
 from datetime import datetime
 from typing import List, Optional
 from sqlmodel import Session, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select as async_select
 
 from src.app.database.fab import Fab
 from src.app.database.job import Job
-from src.app.utils.config import get_db
+from src.app.database import get_db
+from src.app.database.drafting import Drafting
 from src.app.interface.generated_schemas import (
     JobTechnicianWorkflow, FinalProgramming, CutList,
-    WorkStation, SalesCT, SlabSmith, Drafting,
+    WorkStation, SalesCT, SlabSmith,
 )
 from src.app.service.drafting import DraftingService
 from src.app.service.templating import TemplatingService
@@ -350,21 +353,23 @@ def delete_file_from_slabsmith(slabsmith_id: int, file_id: str, db: Session = De
     return success_response({"file_ids": file_ids}, "File deleted from SlabSmith successfully")
 
 @router.post("/drafting/{drafting_id}/files")
-def add_files_to_drafting(drafting_id: int, files: List[UploadFile] = FastAPIFile(...), db: Session = Depends(get_db)):
-    drafting = db.get(Drafting, drafting_id)
+async def add_files_to_drafting(drafting_id: int, files: List[UploadFile] = FastAPIFile(...), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(async_select(Drafting).where(Drafting.id == drafting_id))
+    drafting = result.scalar_one_or_none()
     if not drafting:
         raise error_response("Drafting not found", 404)
     file_ids = drafting.file_ids.split(",") if drafting.file_ids else []
     new_file_ids = [f"file_{i+len(file_ids)+1}" for i, _ in enumerate(files)]
     file_ids.extend(new_file_ids)
     drafting.file_ids = ",".join(file_ids)
-    db.commit()
-    db.refresh(drafting)
+    await db.commit()
+    await db.refresh(drafting)
     return success_response({"file_ids": file_ids}, "Files added to drafting successfully")
 
 @router.delete("/drafting/{drafting_id}/files/{file_id}")
-def delete_file_from_drafting(drafting_id: int, file_id: str, db: Session = Depends(get_db)):
-    drafting = db.get(Drafting, drafting_id)
+async def delete_file_from_drafting(drafting_id: int, file_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(async_select(Drafting).where(Drafting.id == drafting_id))
+    drafting = result.scalar_one_or_none()
     if not drafting:
         raise error_response("Drafting not found", 404)
     file_ids = drafting.file_ids.split(",") if drafting.file_ids else []
@@ -372,8 +377,8 @@ def delete_file_from_drafting(drafting_id: int, file_id: str, db: Session = Depe
         raise error_response("File not found in drafting", 404)
     file_ids.remove(file_id)
     drafting.file_ids = ",".join(file_ids)
-    db.commit()
-    db.refresh(drafting)
+    await db.commit()
+    await db.refresh(drafting)
     return success_response({"file_ids": file_ids}, "File deleted from drafting successfully")
 
 @router.post("/drafting/{drafting_id}/submit-review")
