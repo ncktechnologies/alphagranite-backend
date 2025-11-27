@@ -88,10 +88,23 @@ async def update_drafting(
     if not drafting:
         raise error_response("Drafting not found", 404)
     
-    # Update fields
+    # Update fields with mapping for frontend vs database field names
     update_data = drafting_data.model_dump(exclude_unset=True)
+    
+    # Map frontend fields to database fields
+    field_mapping = {
+        'total_sqft': 'total_sqft_drafted',
+        'no_of_pieces': 'no_of_piece_drafted',
+        'notes': 'draft_note',
+    }
+    
     for field, value in update_data.items():
-        setattr(drafting, field, value)
+        # Use mapped field name if it exists, otherwise use original
+        db_field = field_mapping.get(field, field)
+        
+        # Only set fields that exist on the model
+        if hasattr(drafting, db_field):
+            setattr(drafting, db_field, value)
     
     drafting.updated_at = datetime.now()
     drafting.updated_by = current_user.id
@@ -105,8 +118,8 @@ async def update_drafting(
 @router.post("/drafting/{drafting_id}/submit", response_model=SuccessResponse[DraftingResponse])
 async def submit_draft_for_review(
     drafting_id: int,
-    total_sqft_drafted: str = Form(...),
-    no_of_piece_drafted: str = Form(...),
+    total_sqft_drafted: float = Form(...),
+    no_of_piece_drafted: int = Form(...),
     is_drafting_completed: bool = Form(False),
     draft_note: Optional[str] = Form(None),
     mentions: Optional[str] = Form(None, description="Comma-separated list of user IDs to notify"),

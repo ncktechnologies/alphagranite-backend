@@ -1,6 +1,6 @@
 from typing import Optional, List
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # Job Schemas
@@ -448,6 +448,23 @@ class DraftingUpdate(BaseModel):
     mentions: Optional[str] = None
     is_completed: Optional[bool] = None
     status_id: Optional[int] = None
+    
+    @field_validator('drafter_start_date', 'drafter_end_date', mode='before')
+    @classmethod
+    def remove_timezone(cls, v):
+        """Convert timezone-aware datetime to naive datetime"""
+        if v is None:
+            return v
+        if isinstance(v, str):
+            # Parse ISO format string and remove timezone
+            # Replace Z with +00:00 for fromisoformat
+            if v.endswith('Z'):
+                v = v[:-1] + '+00:00'
+            dt = datetime.fromisoformat(v)
+            return dt.replace(tzinfo=None)
+        if isinstance(v, datetime) and v.tzinfo is not None:
+            return v.replace(tzinfo=None)
+        return v
 
 
 # Clockwork Schemas
@@ -498,8 +515,8 @@ class DraftingCreate(BaseModel):
 
 
 class DraftingSubmitUpdate(BaseModel):
-    total_sqft_drafted: str = Field(..., description="Total square feet completed")
-    no_of_piece_drafted: str = Field(..., description="Number of pieces drafted")
+    total_sqft_drafted: float = Field(..., description="Total square feet completed")
+    no_of_piece_drafted: int = Field(..., description="Number of pieces drafted")
     draft_note: Optional[str] = Field(None, description="Draft notes")
     is_drafting_completed: bool = Field(default=False, description="Is drafting completed")
     mentions: Optional[str] = Field(None, description="Comma-separated list of user IDs to notify")
@@ -514,8 +531,8 @@ class DraftingResponse(BaseModel):
     drafter_start_date: Optional[datetime]
     drafter_end_date: Optional[datetime]
     total_sqft_required_to_draft: str
-    total_sqft_drafted: Optional[str]
-    no_of_piece_drafted: Optional[str]
+    total_sqft_drafted: Optional[float]
+    no_of_piece_drafted: Optional[int]
     draft_note: Optional[str]
     mentions: Optional[str]
     file_ids: Optional[str]
