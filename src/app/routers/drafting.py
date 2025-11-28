@@ -88,17 +88,26 @@ async def update_drafting(
     if not drafting:
         raise error_response("Drafting not found", 404)
     
-    # Update fields with mapping for frontend vs database field names
+    # Get update data
     update_data = drafting_data.model_dump(exclude_unset=True)
+    
+    # Check if is_complete is True BEFORE field mapping
+    is_complete = update_data.get('is_complete', False) or update_data.get('is_completed', False)
     
     # Map frontend fields to database fields
     field_mapping = {
         'total_sqft': 'total_sqft_drafted',
         'no_of_pieces': 'no_of_piece_drafted',
         'notes': 'draft_note',
+        'total_sqft_drafted': 'total_sqft_drafted',  # Keep the same
+        'no_of_piece_drafted': 'no_of_piece_drafted',  # Keep the same
     }
     
     for field, value in update_data.items():
+        # Skip is_complete/is_completed from field updates
+        if field in ['is_complete', 'is_completed']:
+            continue
+            
         # Use mapped field name if it exists, otherwise use original
         db_field = field_mapping.get(field, field)
         
@@ -106,8 +115,8 @@ async def update_drafting(
         if hasattr(drafting, db_field):
             setattr(drafting, db_field, value)
     
-    # Check if is_complete is True and update FAB stage
-    if update_data.get('is_completed') is True:
+    # Now handle completion
+    if is_complete:
         # Mark drafting as completed
         drafting.status_id = 3  # Completed status
         drafting.drafter_end_date = datetime.now()
@@ -121,6 +130,9 @@ async def update_drafting(
             fab.current_stage = fab.next_stage
             fab.updated_at = datetime.now()
             fab.updated_by = current_user.id
+            
+            # Log for debugging
+            print(f"DEBUG: FAB {fab.id} - current_stage updated to: {fab.current_stage}")
     
     drafting.updated_at = datetime.now()
     drafting.updated_by = current_user.id
