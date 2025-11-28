@@ -106,6 +106,37 @@ async def update_drafting(
         if hasattr(drafting, db_field):
             setattr(drafting, db_field, value)
     
+    # Check if is_complete is True and update FAB stage
+    if update_data.get('is_complete') is True:
+        # Mark drafting as completed
+        drafting.status_id = 3  # Completed status
+        drafting.drafter_end_date = datetime.now()
+        
+        # Get the associated FAB
+        fab_result = await db.execute(select(Fab).where(Fab.id == drafting.fab_id))
+        fab = fab_result.scalar_one_or_none()
+        
+        if fab:
+            # Move FAB to next stage
+            fab.current_stage = fab.next_stage  # Move to the next stage
+            
+            # Determine the new next_stage based on current workflow
+            stage_progression = {
+                'sales_ct': 'slab_smith',
+                'slab_smith': 'final_programming',
+                'final_programming': 'wj_programming',
+                'wj_programming': 'cut_list',
+                'cut_list': 'wj_scheduling',
+                'wj_scheduling': 'resurface_scheduling',
+                'resurface_scheduling': 'cost_of_stone',
+                'cost_of_stone': 'install_scheduling',
+                'install_scheduling': 'completed',
+            }
+            
+            fab.next_stage = stage_progression.get(fab.next_stage, 'completed')
+            fab.updated_at = datetime.now()
+            fab.updated_by = current_user.id
+    
     drafting.updated_at = datetime.now()
     drafting.updated_by = current_user.id
     
