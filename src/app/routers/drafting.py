@@ -4,6 +4,7 @@ from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends, Form, File, UploadFile
 from sqlalchemy import select
+import logging
 
 from src.app.database import get_db
 from src.app.database.user import User
@@ -22,6 +23,8 @@ from src.app.interface.business_schemas import (
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import error_response, success_response
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -83,6 +86,8 @@ async def update_drafting(
 ):
     """Update drafting entry"""
     
+    logger.info(f"🔵 Starting update for drafting_id: {drafting_id}")
+    
     # Fetch drafting AND fab in one query using join
     result = await db.execute(
         select(Drafting, Fab)
@@ -92,13 +97,20 @@ async def update_drafting(
     row = result.first()
     
     if not row:
+        logger.error(f"❌ Drafting {drafting_id} not found")
         raise error_response("Drafting not found", 404)
     
     drafting, fab = row
     
+    logger.info(f"📊 Found drafting: {drafting.id}, fab: {fab.id}")
+    logger.info(f"📊 Current FAB stage: {fab.current_stage}, next: {fab.next_stage}")
+    
     # Get update data
     update_data = drafting_data.model_dump(exclude_unset=True)
+    logger.info(f"📥 Received update data: {update_data}")
+    
     is_complete = update_data.get('is_complete', False) or update_data.get('is_completed', False)
+    logger.info(f"✅ is_complete status: {is_complete}")
     
     # Map frontend fields to database fields
     field_mapping = {
@@ -116,23 +128,40 @@ async def update_drafting(
         db_field = field_mapping.get(field, field)
         
         if hasattr(drafting, db_field):
+            logger.info(f"📝 Setting drafting.{db_field} = {value}")
             setattr(drafting, db_field, value)
+        else:
+            logger.warning(f"⚠️ Field {db_field} not found on Drafting model")
     
     # Handle completion
     if is_complete:
+        logger.info("🎯 Processing completion logic...")
         drafting.status_id = 3
         drafting.drafter_end_date = datetime.now()
+        logger.info(f"✅ Set drafting.status_id = 3, drafter_end_date = {drafting.drafter_end_date}")
         
         # Update FAB (already loaded from join)
+        logger.info(f"🔄 BEFORE: fab.current_stage = {fab.current_stage}, fab.next_stage = {fab.next_stage}")
+        
         fab.current_stage = fab.next_stage
         fab.updated_at = datetime.now()
         fab.updated_by = current_user.id
+        
+        logger.info(f"🔄 AFTER: fab.current_stage = {fab.current_stage}, fab.next_stage = {fab.next_stage}")
+        logger.info(f"✅ FAB updated: current_stage={fab.current_stage}, updated_by={current_user.id}")
+    else:
+        logger.info("⏭️ Skipping completion logic (is_complete=False)")
     
     drafting.updated_at = datetime.now()
     drafting.updated_by = current_user.id
     
+    logger.info("💾 Committing changes to database...")
     await db.commit()
+    
+    logger.info("🔄 Refreshing drafting object...")
     await db.refresh(drafting)
+    
+    logger.info(f"✅ Update completed successfully for drafting {drafting_id}")
     
     return success_response(drafting, "Drafting updated successfully")
 
