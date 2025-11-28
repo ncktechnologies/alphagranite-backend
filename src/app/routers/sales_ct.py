@@ -101,7 +101,7 @@ async def send_to_drafting(
     # Mark as revised and send back to drafting
     fab.revised = True
     fab.sct_completed = False
-    fab.current_stage = "drafting"
+    fab.current_stage = "revision"
     fab.next_stage = "sales_ct"  # After drafting, comes back to sales_ct
     fab.updated_at = datetime.now()
     fab.updated_by = current_user.id
