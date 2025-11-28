@@ -400,6 +400,10 @@ async def get_fabs(
         fab_notes = await get_fab_notes(db, fab_dict["id"])
         fab_dict["fab_notes"] = fab_notes
         
+        # Fetch draft data
+        draft_data = await get_draft_data(db, fab_dict["id"])
+        fab_dict["draft_data"] = draft_data
+        
         # Add stage completion status and stage-specific data
         stage_info = await get_stage_completion_data(db, fab_dict["id"], fab_dict.get("current_stage"))
         fab_dict["is_complete"] = stage_info["is_complete"]
@@ -577,6 +581,10 @@ async def get_fab(
     # Fetch fab_notes
     fab_notes = await get_fab_notes(db, fab_id)
     fab_dict["fab_notes"] = fab_notes
+    
+    # Fetch draft data
+    draft_data = await get_draft_data(db, fab_id)
+    fab_dict["draft_data"] = draft_data
     
     # Add stage completion status and stage-specific data
     stage_info = await get_stage_completion_data(db, fab_id, fab_dict.get("current_stage"))
@@ -1106,4 +1114,57 @@ async def get_all_stages(
         stages_data,
         f"Found {len(stages_data)} stages with {total_fabs} total FABs"
     )
+
+
+async def get_draft_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
+    """Get draft data for a given FAB"""
+    from src.app.database.drafting import Drafting
+    from sqlalchemy.orm import aliased
+    
+    DrafterUser = aliased(User)
+    UpdaterUser = aliased(User)
+    
+    query = select(
+        Drafting,
+        DrafterUser.first_name.label("drafter_first_name"),
+        DrafterUser.last_name.label("drafter_last_name"),
+        UpdaterUser.first_name.label("updater_first_name"),
+        UpdaterUser.last_name.label("updater_last_name")
+    ).where(Drafting.fab_id == fab_id)
+    
+    query = query.join(DrafterUser, Drafting.drafter_id == DrafterUser.id, isouter=True)
+    query = query.join(UpdaterUser, Drafting.updated_by == UpdaterUser.id, isouter=True)
+    query = query.order_by(Drafting.id.desc()).limit(1)  # Get latest drafting record
+    
+    result = await db.execute(query)
+    row = result.first()
+    
+    if not row:
+        return None
+    
+    drafting = row[0]
+    drafter_first = row[1]
+    drafter_last = row[2]
+    updater_first = row[3]
+    updater_last = row[4]
+    
+    draft_dict = {
+        "id": drafting.id,
+        "fab_id": drafting.fab_id,
+        "drafter_id": drafting.drafter_id,
+        "drafter_name": f"{drafter_first} {drafter_last}" if drafter_first else None,
+        "drafter_start_date": drafting.drafter_start_date.isoformat() if drafting.drafter_start_date else None,
+        "drafter_end_date": drafting.drafter_end_date.isoformat() if drafting.drafter_end_date else None,
+        "total_sqft_drafted": float(drafting.total_sqft_drafted) if drafting.total_sqft_drafted else None,
+        "no_of_piece_drafted": drafting.no_of_piece_drafted,
+        "draft_note": drafting.draft_note,
+        "mentions": drafting.mentions,
+        "status_id": drafting.status_id,
+        "created_at": drafting.created_at.isoformat() if drafting.created_at else None,
+        "updated_at": drafting.updated_at.isoformat() if drafting.updated_at else None,
+        "updated_by": drafting.updated_by,
+        "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
+    }
+    
+    return draft_dict
 

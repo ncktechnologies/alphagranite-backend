@@ -111,6 +111,10 @@ async def update_drafting(
         'notes': 'draft_note',
         'total_sqft_drafted': 'total_sqft_drafted',
         'no_of_piece_drafted': 'no_of_piece_drafted',
+        'draft_note': 'draft_note',
+        'mentions': 'mentions',
+        'drafter_start_date': 'drafter_start_date',
+        'drafter_end_date': 'drafter_end_date',
     }
     
     for field, value in update_data.items():
@@ -125,12 +129,17 @@ async def update_drafting(
     # Handle completion
     if is_complete:
         drafting.status_id = 3
-        drafting.drafter_end_date = datetime.now()
+        
+        # Only set drafter_end_date to now if not provided in request
+        if 'drafter_end_date' not in update_data:
+            drafting.drafter_end_date = datetime.now()
         
         # IMPORTANT: Add fab to session explicitly
         db.add(fab)
         
+        # Update fab stages and mark draft as completed
         fab.current_stage = fab.next_stage
+        fab.draft_completed = True
         fab.updated_at = datetime.now()
         fab.updated_by = current_user.id
     
