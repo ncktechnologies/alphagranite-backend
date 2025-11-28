@@ -112,28 +112,13 @@ async def update_drafting(
         drafting.status_id = 3  # Completed status
         drafting.drafter_end_date = datetime.now()
         
-        # Get the associated FAB
+        # Get the associated FAB using fab_id from drafting table
         fab_result = await db.execute(select(Fab).where(Fab.id == drafting.fab_id))
         fab = fab_result.scalar_one_or_none()
         
         if fab:
-            # Move FAB to next stage
-            fab.current_stage = fab.next_stage  # Move to the next stage
-            
-            # Determine the new next_stage based on current workflow
-            stage_progression = {
-                'sales_ct': 'slab_smith',
-                'slab_smith': 'final_programming',
-                'final_programming': 'wj_programming',
-                'wj_programming': 'cut_list',
-                'cut_list': 'wj_scheduling',
-                'wj_scheduling': 'resurface_scheduling',
-                'resurface_scheduling': 'cost_of_stone',
-                'cost_of_stone': 'install_scheduling',
-                'install_scheduling': 'completed',
-            }
-            
-            fab.next_stage = stage_progression.get(fab.next_stage, 'completed')
+            # Simply move next_stage to current_stage
+            fab.current_stage = fab.next_stage
             fab.updated_at = datetime.now()
             fab.updated_by = current_user.id
     
