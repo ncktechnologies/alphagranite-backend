@@ -3,6 +3,7 @@ from typing import List, Optional
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends, Form, File, UploadFile
+from sqlalchemy import select
 
 from src.app.database import get_db
 from src.app.database.user import User
@@ -82,16 +83,21 @@ async def update_drafting(
 ):
     """Update drafting entry"""
     
-    result = await db.execute(select(Drafting).where(Drafting.id == drafting_id))
-    drafting = result.scalar_one_or_none()
+    # Fetch drafting AND fab in one query using join
+    result = await db.execute(
+        select(Drafting, Fab)
+        .join(Fab, Drafting.fab_id == Fab.id)
+        .where(Drafting.id == drafting_id)
+    )
+    row = result.first()
     
-    if not drafting:
+    if not row:
         raise error_response("Drafting not found", 404)
+    
+    drafting, fab = row
     
     # Get update data
     update_data = drafting_data.model_dump(exclude_unset=True)
-    
-    # Check if is_complete is True BEFORE field mapping
     is_complete = update_data.get('is_complete', False) or update_data.get('is_completed', False)
     
     # Map frontend fields to database fields
@@ -99,40 +105,28 @@ async def update_drafting(
         'total_sqft': 'total_sqft_drafted',
         'no_of_pieces': 'no_of_piece_drafted',
         'notes': 'draft_note',
-        'total_sqft_drafted': 'total_sqft_drafted',  # Keep the same
-        'no_of_piece_drafted': 'no_of_piece_drafted',  # Keep the same
+        'total_sqft_drafted': 'total_sqft_drafted',
+        'no_of_piece_drafted': 'no_of_piece_drafted',
     }
     
     for field, value in update_data.items():
-        # Skip is_complete/is_completed from field updates
         if field in ['is_complete', 'is_completed']:
             continue
             
-        # Use mapped field name if it exists, otherwise use original
         db_field = field_mapping.get(field, field)
         
-        # Only set fields that exist on the model
         if hasattr(drafting, db_field):
             setattr(drafting, db_field, value)
     
-    # Now handle completion
+    # Handle completion
     if is_complete:
-        # Mark drafting as completed
-        drafting.status_id = 3  # Completed status
+        drafting.status_id = 3
         drafting.drafter_end_date = datetime.now()
         
-        # Get the associated FAB using fab_id from drafting table
-        fab_result = await db.execute(select(Fab).where(Fab.id == drafting.fab_id))
-        fab = fab_result.scalar_one_or_none()
-        
-        if fab:
-            # Simply move next_stage to current_stage
-            fab.current_stage = fab.next_stage
-            fab.updated_at = datetime.now()
-            fab.updated_by = current_user.id
-            
-            # Log for debugging
-            print(f"DEBUG: FAB {fab.id} - current_stage updated to: {fab.current_stage}")
+        # Update FAB (already loaded from join)
+        fab.current_stage = fab.next_stage
+        fab.updated_at = datetime.now()
+        fab.updated_by = current_user.id
     
     drafting.updated_at = datetime.now()
     drafting.updated_by = current_user.id
