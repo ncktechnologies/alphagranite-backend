@@ -1,3 +1,6 @@
+import os
+import uuid
+from pathlib import Path
 from datetime import datetime
 from typing import List, Optional
 from sqlmodel import Session, select
@@ -8,6 +11,7 @@ from src.app.database.fab import Fab
 from src.app.database.job import Job
 from src.app.database import get_db
 from src.app.database.drafting import Drafting
+from src.app.database.file import File  # ← Add this import
 from src.app.interface.generated_schemas import (
     JobTechnicianWorkflow, FinalProgramming, CutList,
     WorkStation, SalesCT, SlabSmith,
@@ -18,6 +22,14 @@ from src.app.utils.helpers import success_response, error_response
 from fastapi import APIRouter, Depends, Query, Form, UploadFile, File as FastAPIFile
 
 router = APIRouter()
+
+# Create upload directory
+UPLOAD_DIR = Path("uploads/drafting")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+# Base URL for file access (update with your actual domain/IP)
+BASE_URL = os.getenv("BASE_URL", "http://93.114.128.181:8000")
+
 
 @router.get("/jobs-with-fabs")
 def list_jobs_with_fabs(
@@ -353,33 +365,161 @@ def delete_file_from_slabsmith(slabsmith_id: int, file_id: str, db: Session = De
     return success_response({"file_ids": file_ids}, "File deleted from SlabSmith successfully")
 
 @router.post("/drafting/{drafting_id}/files")
-async def add_files_to_drafting(drafting_id: int, files: List[UploadFile] = FastAPIFile(...), db: AsyncSession = Depends(get_db)):
+async def add_files_to_drafting(
+    drafting_id: int, 
+    files: List[UploadFile] = FastAPIFile(...), 
+    db: AsyncSession = Depends(get_db)
+):
+    """Upload files to drafting, save to disk and database"""
+    
+    # Check if drafting exists
     result = await db.execute(async_select(Drafting).where(Drafting.id == drafting_id))
     drafting = result.scalar_one_or_none()
+    
     if not drafting:
         raise error_response("Drafting not found", 404)
-    file_ids = drafting.file_ids.split(",") if drafting.file_ids else []
-    new_file_ids = [f"file_{i+len(file_ids)+1}" for i, _ in enumerate(files)]
-    file_ids.extend(new_file_ids)
-    drafting.file_ids = ",".join(file_ids)
+    
+    uploaded_file_ids = []
+    uploaded_files_info = []
+    
+    for file in files:
+        # Generate unique filename
+        file_extension = Path(file.filename).suffix
+        unique_filename = f"{uuid.uuid4()}{file_extension}"
+        file_path = UPLOAD_DIR / unique_filename
+        
+        # Save file to disk
+        contents = await file.read()
+        with open(file_path, "wb") as f:
+            f.write(contents)
+        
+        # Create full URL for the file
+        file_url = f"{BASE_URL}/api/v1/files/download/{unique_filename}"
+        
+        # Create database record in files table
+        file_record = File(
+            filename=file.filename,
+            file_path=str(file_path),
+            file_size=len(contents),
+            mime_type=file.content_type,
+            uploaded_by=1,  # TODO: Get from current_user when auth is added
+            entity_type="drafting",
+            entity_id=drafting_id,
+            created_at=datetime.now()
+        )
+        
+        db.add(file_record)
+        await db.flush()  # Get the ID without committing
+        
+        uploaded_file_ids.append(file_record.id)
+        uploaded_files_info.append({
+            "id": file_record.id,
+            "filename": file.filename,
+            "file_url": file_url,
+            "size": len(contents),
+            "mime_type": file.content_type,
+            "uploaded_at": datetime.now().isoformat()
+        })
+    
+    # Update drafting.file_ids with new IDs
+    existing_file_ids = drafting.file_ids.split(",") if drafting.file_ids else []
+    existing_file_ids.extend([str(fid) for fid in uploaded_file_ids])
+    drafting.file_ids = ",".join(existing_file_ids)
+    
     await db.commit()
     await db.refresh(drafting)
-    return success_response({"file_ids": file_ids}, "Files added to drafting successfully")
+    
+    return success_response({
+        "file_ids": uploaded_file_ids,
+        "files": uploaded_files_info,
+        "total_files": len(existing_file_ids)
+    }, "Files uploaded successfully")
+
 
 @router.delete("/drafting/{drafting_id}/files/{file_id}")
-async def delete_file_from_drafting(drafting_id: int, file_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_file_from_drafting(
+    drafting_id: int, 
+    file_id: int,  # Changed from str to int
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete file from drafting (soft delete in database)"""
+    
+    # Get drafting
     result = await db.execute(async_select(Drafting).where(Drafting.id == drafting_id))
     drafting = result.scalar_one_or_none()
+    
     if not drafting:
         raise error_response("Drafting not found", 404)
+    
+    # Remove from drafting.file_ids
     file_ids = drafting.file_ids.split(",") if drafting.file_ids else []
-    if file_id not in file_ids:
+    file_id_str = str(file_id)
+    
+    if file_id_str not in file_ids:
         raise error_response("File not found in drafting", 404)
-    file_ids.remove(file_id)
+    
+    file_ids.remove(file_id_str)
     drafting.file_ids = ",".join(file_ids)
+    
+    # Soft delete the file record
+    file_result = await db.execute(async_select(File).where(File.id == file_id))
+    file_record = file_result.scalar_one_or_none()
+    
+    if file_record:
+        file_record.deleted_at = datetime.now()
+    
     await db.commit()
     await db.refresh(drafting)
-    return success_response({"file_ids": file_ids}, "File deleted from drafting successfully")
+    
+    return success_response({
+        "file_ids": file_ids,
+        "total_files": len(file_ids)
+    }, "File deleted successfully")
+
+
+@router.get("/files/download/{filename}")
+async def download_file(filename: str):
+    """Download a file by filename"""
+    from fastapi.responses import FileResponse
+    
+    file_path = UPLOAD_DIR / filename
+    
+    if not os.path.exists(file_path):
+        raise error_response("File not found on disk", 404)
+    
+    return FileResponse(
+        path=file_path,
+        filename=filename,
+        media_type="application/octet-stream"
+    )
+
+
+@router.get("/files/{file_id}")
+async def get_file_info(file_id: int, db: AsyncSession = Depends(get_db)):
+    """Get file information by ID"""
+    
+    result = await db.execute(async_select(File).where(File.id == file_id))
+    file_record = result.scalar_one_or_none()
+    
+    if not file_record or file_record.deleted_at is not None:
+        raise error_response("File not found", 404)
+    
+    # Generate download URL
+    filename = os.path.basename(file_record.file_path)
+    file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
+    
+    return success_response({
+        "id": file_record.id,
+        "filename": file_record.filename,
+        "file_url": file_url,
+        "file_size": file_record.file_size,
+        "mime_type": file_record.mime_type,
+        "uploaded_by": file_record.uploaded_by,
+        "entity_type": file_record.entity_type,
+        "entity_id": file_record.entity_id,
+        "created_at": file_record.created_at.isoformat() if file_record.created_at else None
+    }, "File info retrieved successfully")
+
 
 @router.post("/drafting/{drafting_id}/submit-review")
 def submit_draft_for_review(
