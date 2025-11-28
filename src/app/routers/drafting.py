@@ -143,6 +143,9 @@ async def update_drafting(
         # Update FAB (already loaded from join)
         logger.info(f"🔄 BEFORE: fab.current_stage = {fab.current_stage}, fab.next_stage = {fab.next_stage}")
         
+        # IMPORTANT: Add fab to session explicitly
+        db.add(fab)
+        
         fab.current_stage = fab.next_stage
         fab.updated_at = datetime.now()
         fab.updated_by = current_user.id
@@ -160,6 +163,10 @@ async def update_drafting(
     
     logger.info("🔄 Refreshing drafting object...")
     await db.refresh(drafting)
+    
+    # Also refresh fab to ensure we have latest state
+    await db.refresh(fab)
+    logger.info(f"🔄 After refresh - fab.current_stage: {fab.current_stage}")
     
     logger.info(f"✅ Update completed successfully for drafting {drafting_id}")
     
