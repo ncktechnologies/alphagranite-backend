@@ -396,16 +396,14 @@ async def add_files_to_drafting(
         # Create full URL for the file
         file_url = f"{BASE_URL}/api/v1/files/download/{unique_filename}"
         
-        # Create database record in files table
+        # Create database record matching the actual files table schema
         file_record = File(
-            filename=file.filename,
+            name=file.filename,                      # ← Changed from filename
             file_path=str(file_path),
-            file_size=len(contents),
-            mime_type=file.content_type,
-            uploaded_by=1,  # TODO: Get from current_user when auth is added
-            entity_type="drafting",
-            entity_id=drafting_id,
-            created_at=datetime.now()
+            file_type=file.content_type,             # ← Changed from mime_type
+            file_size=str(len(contents)),            # ← Convert to string
+            created_at=datetime.now(),
+            updated_at=datetime.now()
         )
         
         db.add(file_record)
@@ -501,7 +499,7 @@ async def get_file_info(file_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(async_select(File).where(File.id == file_id))
     file_record = result.scalar_one_or_none()
     
-    if not file_record or file_record.deleted_at is not None:
+    if not file_record:
         raise error_response("File not found", 404)
     
     # Generate download URL
@@ -510,14 +508,12 @@ async def get_file_info(file_id: int, db: AsyncSession = Depends(get_db)):
     
     return success_response({
         "id": file_record.id,
-        "filename": file_record.filename,
+        "filename": file_record.name,              # ← Changed from filename
         "file_url": file_url,
         "file_size": file_record.file_size,
-        "mime_type": file_record.mime_type,
-        "uploaded_by": file_record.uploaded_by,
-        "entity_type": file_record.entity_type,
-        "entity_id": file_record.entity_id,
-        "created_at": file_record.created_at.isoformat() if file_record.created_at else None
+        "file_type": file_record.file_type,        # ← Changed from mime_type
+        "created_at": file_record.created_at.isoformat() if file_record.created_at else None,
+        "updated_at": file_record.updated_at.isoformat() if file_record.updated_at else None
     }, "File info retrieved successfully")
 
 
