@@ -86,8 +86,6 @@ async def update_drafting(
 ):
     """Update drafting entry"""
     
-    print(f"🔵 Starting update for drafting_id: {drafting_id}")
-    
     # Fetch drafting AND fab in one query using join
     result = await db.execute(
         select(Drafting, Fab)
@@ -97,20 +95,14 @@ async def update_drafting(
     row = result.first()
     
     if not row:
-        print(f"❌ Drafting {drafting_id} not found")
         raise error_response("Drafting not found", 404)
     
     drafting, fab = row
     
-    print(f"📊 Found drafting: {drafting.id}, fab: {fab.id}")
-    print(f"📊 Current FAB stage: {fab.current_stage}, next: {fab.next_stage}")
-    
     # Get update data
     update_data = drafting_data.model_dump(exclude_unset=True)
-    print(f"📥 Received update data: {update_data}")
     
     is_complete = update_data.get('is_completed', False)
-    print(f"✅ is_complete status: {is_complete}")
     
     # Map frontend fields to database fields
     field_mapping = {
@@ -128,19 +120,12 @@ async def update_drafting(
         db_field = field_mapping.get(field, field)
         
         if hasattr(drafting, db_field):
-            print(f"📝 Setting drafting.{db_field} = {value}")
             setattr(drafting, db_field, value)
-        else:
-            print(f"⚠️ Field {db_field} not found on Drafting model")
     
     # Handle completion
     if is_complete:
-        print("🎯 Processing completion logic...")
         drafting.status_id = 3
         drafting.drafter_end_date = datetime.now()
-        print(f"✅ Set drafting.status_id = 3, drafter_end_date = {drafting.drafter_end_date}")
-        
-        print(f"🔄 BEFORE: fab.current_stage = {fab.current_stage}, fab.next_stage = {fab.next_stage}")
         
         # IMPORTANT: Add fab to session explicitly
         db.add(fab)
@@ -148,26 +133,16 @@ async def update_drafting(
         fab.current_stage = fab.next_stage
         fab.updated_at = datetime.now()
         fab.updated_by = current_user.id
-        
-        print(f"🔄 AFTER: fab.current_stage = {fab.current_stage}, fab.next_stage = {fab.next_stage}")
-        print(f"✅ FAB updated: current_stage={fab.current_stage}, updated_by={current_user.id}")
-    else:
-        print("⏭️ Skipping completion logic (is_complete=False)")
     
     drafting.updated_at = datetime.now()
     drafting.updated_by = current_user.id
     
-    print("💾 Committing changes to database...")
     await db.commit()
     
-    print("🔄 Refreshing drafting object...")
     await db.refresh(drafting)
     
     # Also refresh fab to ensure we have latest state
     await db.refresh(fab)
-    print(f"🔄 After refresh - fab.current_stage: {fab.current_stage}")
-    
-    print(f"✅ Update completed successfully for drafting {drafting_id}")
     
     return success_response(drafting, "Drafting updated successfully")
 
