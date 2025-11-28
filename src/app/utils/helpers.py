@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Dict, Optional, Callable, TypeVar, Awaitable
 from fastapi import HTTPException
 from pydantic import ValidationError
@@ -46,3 +47,9 @@ async def call_service(
     except Exception as e:
         logger.error(f"Unexpected error in service call: {str(e)}")
         raise error_response("Internal server error", 500)
+
+def strip_timezone(dt: Optional[datetime]) -> Optional[datetime]:
+    """Remove timezone info from datetime object"""
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=None) if dt.tzinfo else dt

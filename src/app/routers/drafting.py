@@ -22,7 +22,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
-from src.app.utils.helpers import error_response, success_response
+from src.app.utils.helpers import error_response, success_response, strip_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +53,8 @@ async def create_drafting(
     drafting = Drafting(
         fab_id=drafting_data.fab_id,
         drafter_id=drafting_data.drafter_id,
-        scheduled_start_date=drafting_data.scheduled_start_date,
-        scheduled_end_date=drafting_data.scheduled_end_date,
+        scheduled_start_date=strip_timezone(drafting_data.scheduled_start_date),
+        scheduled_end_date=strip_timezone(drafting_data.scheduled_end_date),
         total_sqft_required_to_draft=drafting_data.total_sqft_required_to_draft,
         drafter_start_date=None,
         drafter_end_date=None,
