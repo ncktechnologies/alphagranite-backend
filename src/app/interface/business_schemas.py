@@ -534,6 +534,7 @@ class DraftingResponse(BaseModel):
     total_sqft_required_to_draft: str
     total_sqft_drafted: Optional[float]
     no_of_piece_drafted: Optional[int]
+    total_hours_drafted: Optional[float]
     draft_note: Optional[str]
     mentions: Optional[str]
     file_ids: Optional[str]
