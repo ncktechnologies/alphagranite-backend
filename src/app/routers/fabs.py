@@ -1159,6 +1159,7 @@ async def get_draft_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
         "no_of_piece_drafted": drafting.no_of_piece_drafted,
         "draft_note": drafting.draft_note,
         "mentions": drafting.mentions,
+        "total_hours_drafted": float(drafting.total_hours_drafted) if drafting.total_hours_drafted else None,  # ← Add this
         "status_id": drafting.status_id,
         "created_at": drafting.created_at.isoformat() if drafting.created_at else None,
         "updated_at": drafting.updated_at.isoformat() if drafting.updated_at else None,

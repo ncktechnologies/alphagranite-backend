@@ -445,6 +445,7 @@ class DraftingUpdate(BaseModel):
     total_sqft_drafted: Optional[float] = None
     no_of_piece_drafted: Optional[int] = None
     draft_note: Optional[str] = None
+    total_hours_drafted: Optional[float] = None
     mentions: Optional[str] = None
     is_completed: Optional[bool] = None
     status_id: Optional[int] = None

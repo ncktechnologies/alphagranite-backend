@@ -60,6 +60,7 @@ async def create_drafting(
         drafter_end_date=None,
         total_sqft_drafted=None,
         no_of_piece_drafted=None,
+        total_hours_drafted=None,
         draft_note=None,
         mentions=None,
         file_ids=None,

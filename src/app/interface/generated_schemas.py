@@ -1,4 +1,3 @@
-
 from datetime import datetime
 from typing import Optional, List
 from sqlmodel import SQLModel, Field, Column
@@ -111,6 +110,7 @@ class Drafting(SQLModel, table=True):
     total_sqft_drafted: Optional[float] = Field(default=None)
     draft_note: Optional[str] = Field(default=None)
     mentions: Optional[str] = Field(default=None, description="List of user_ids of user to be notified of the draft submission")
+    total_hours_drafted: Optional[float] = Field(default=None, description="Total number of hours spent on drafting")
     is_redrafting: bool = Field(default=False)
     is_completed: bool = Field(default=False)
 
