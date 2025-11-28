@@ -52,6 +52,17 @@ from src.app.routers import install_completion
 
 # Import logging configuration
 from src.app.utils.logger import setup_logging
+import logging
+
+# Configure logging (add near the top of file)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+# Or if you have a specific logger setup:
+logger = logging.getLogger("src.app.routers.drafting")
+logger.setLevel(logging.INFO)
 
 # Load environment variables
 load_dotenv()
