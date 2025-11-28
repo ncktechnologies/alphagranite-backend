@@ -107,7 +107,7 @@ async def update_drafting(
             setattr(drafting, db_field, value)
     
     # Check if is_complete is True and update FAB stage
-    if update_data.get('is_complete') is True:
+    if update_data.get('is_completed') is True:
         # Mark drafting as completed
         drafting.status_id = 3  # Completed status
         drafting.drafter_end_date = datetime.now()
