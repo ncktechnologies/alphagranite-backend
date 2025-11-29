@@ -65,7 +65,7 @@ async def update_sct_review(
     
     # If SCT completed, move to next stage
     if review_data.sct_completed:
-        fab.current_stage = "slab_smith_request"
+        fab.current_stage = "cut_list"
         fab.next_stage = "final_programming"
     
     await db.commit()
