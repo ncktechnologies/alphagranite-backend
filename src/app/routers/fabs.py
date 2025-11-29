@@ -7,6 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
+import os
 
 from src.app.database import get_db
 from src.app.database.fab import Fab
@@ -44,6 +45,8 @@ FAB_STAGES = [
     "install_scheduling",       # Stage 13: Install Scheduling
     "install_completion"        # Stage 14: Install Completion (final stage)
 ]
+
+BASE_URL = os.getenv("BASE_URL", "https://api.ag.easybusiness.ng")
 
 def get_next_stage(current_stage: str) -> Optional[str]:
     """
@@ -1117,8 +1120,9 @@ async def get_all_stages(
 
 
 async def get_draft_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
-    """Get draft data for a given FAB"""
+    """Get draft data for a given FAB with file URLs"""
     from src.app.database.drafting import Drafting
+    from src.app.database.file import File
     from sqlalchemy.orm import aliased
     
     DrafterUser = aliased(User)
@@ -1148,6 +1152,31 @@ async def get_draft_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
     updater_first = row[3]
     updater_last = row[4]
     
+    # Get file information if file_ids exist
+    files_data = []
+    if drafting.file_ids:
+        file_id_list = [int(fid.strip()) for fid in drafting.file_ids.split(",") if fid.strip()]
+        
+        if file_id_list:
+            # Fetch all files by IDs
+            files_query = select(File).where(File.id.in_(file_id_list))
+            files_result = await db.execute(files_query)
+            files = files_result.scalars().all()
+            
+            for file in files:
+                # Extract filename from file_path
+                filename = os.path.basename(file.file_path)
+                file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
+                
+                files_data.append({
+                    "id": file.id,
+                    "name": file.name,
+                    "file_url": file_url,
+                    "file_type": file.file_type,
+                    "file_size": file.file_size,
+                    "created_at": file.created_at.isoformat() if file.created_at else None
+                })
+    
     draft_dict = {
         "id": drafting.id,
         "fab_id": drafting.fab_id,
@@ -1159,7 +1188,9 @@ async def get_draft_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
         "no_of_piece_drafted": drafting.no_of_piece_drafted,
         "draft_note": drafting.draft_note,
         "mentions": drafting.mentions,
-        "total_hours_drafted": float(drafting.total_hours_drafted) if drafting.total_hours_drafted else None,  # ← Add this
+        "total_hours_drafted": float(drafting.total_hours_drafted) if drafting.total_hours_drafted else None,
+        "file_ids": drafting.file_ids,
+        "files": files_data,  # ← Add file details with URLs
         "status_id": drafting.status_id,
         "created_at": drafting.created_at.isoformat() if drafting.created_at else None,
         "updated_at": drafting.updated_at.isoformat() if drafting.updated_at else None,
