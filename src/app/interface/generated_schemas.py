@@ -95,7 +95,7 @@ class Drafting(SQLModel, table=True):
     __tablename__ = "draftings"
     id: Optional[int] = Field(default=None, primary_key=True)
     drafter_id: int = Field()
-    fab_id: int = Field()
+    fab_id: int = Field(foreign_key="fabs.id", unique=True)  # ← Add unique=True
     scheduled_start_date: datetime = Field()
     scheduled_end_date: datetime = Field()
     drafter_start_date: Optional[datetime] = Field(default=None)
@@ -131,7 +131,7 @@ class PreDraftReview(SQLModel, table=True):
 class SalesCT(SQLModel, table=True):
     __tablename__ = "sales_cts"
     id: Optional[int] = Field(default=None, primary_key=True)
-    fab_id: int = Field()
+    fab_id: int = Field(foreign_key="fabs.id", unique=True)  # ← Add unique=True
     is_revision_needed: bool = Field()
     is_revision_completed: Optional[bool] = Field(default=None)
     is_completed: bool = Field(default=False)
@@ -299,7 +299,7 @@ class ResurfaceScheduling(SQLModel, table=True):
 class Revision(SQLModel, table=True):
     __tablename__ = "revisions"
     id: Optional[int] = Field(default=None, primary_key=True)
-    fab_id: int = Field()
+    fab_id: int = Field(foreign_key="fabs.id", unique=True)  # ← Add unique=True
     revision_type: str = Field(description="Type of revision needed")
     requested_by: int = Field()
     assigned_to: Optional[int] = Field(default=None)

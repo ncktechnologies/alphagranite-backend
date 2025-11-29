@@ -3,6 +3,7 @@ from typing import Optional
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends
+from sqlalchemy.exc import IntegrityError
 
 from src.app.database import get_db
 from src.app.database.user import User
@@ -225,29 +226,42 @@ async def create_sales_ct(
     if not fab_result.scalar_one_or_none():
         raise error_response("Fab not found", 404)
     
-    # Create sales CT
-    sales_ct = SalesCT(
-        fab_id=sales_ct_data.fab_id,
-        is_revision_needed=sales_ct_data.is_revision_needed,
-        is_revision_completed=None,
-        no_of_revisions=None,
-        current_revision_count=None,
-        status_id=1,
-        created_at=datetime.now(),
-        updated_at=None,
-        updated_by=None,
-        # Fields from model definition
-        slab_smith_type="",
-        drafter_id=0,
-        start_date=datetime.now(),
-        end_date=datetime.now(),
-        total_sqft_completed=None,
-        file_ids=None
+    # Check if Sales CT already exists for this fab
+    existing_sales_ct = await db.execute(
+        select(SalesCT).where(SalesCT.fab_id == sales_ct_data.fab_id)
     )
+    if existing_sales_ct.scalar_one_or_none():
+        raise error_response("Sales CT already exists for this FAB", 409)
     
-    db.add(sales_ct)
-    await db.commit()
-    await db.refresh(sales_ct)
+    try:
+        # Create sales CT
+        sales_ct = SalesCT(
+            fab_id=sales_ct_data.fab_id,
+            is_revision_needed=sales_ct_data.is_revision_needed,
+            revision_reason=sales_ct_data.revision_reason,
+            is_revision_completed=None,
+            no_of_revisions=None,
+            current_revision_count=None,
+            status_id=1,
+            created_at=datetime.now(),
+            updated_at=None,
+            updated_by=None,
+            # Fields from model definition
+            slab_smith_type="",
+            drafter_id=0,
+            start_date=datetime.now(),
+            end_date=datetime.now(),
+            total_sqft_completed=None,
+            file_ids=None
+        )
+        
+        db.add(sales_ct)
+        await db.commit()
+        await db.refresh(sales_ct)
+        
+    except IntegrityError:
+        await db.rollback()
+        raise error_response("Sales CT already exists for this FAB", 409)
     
     return success_response(sales_ct, "Sales CT created successfully")
 
