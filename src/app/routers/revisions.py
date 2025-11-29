@@ -107,6 +107,17 @@ async def update_revision(
     revision.updated_at = datetime.now()
     revision.updated_by = current_user.id
     
+    # If revision is completed, update fab stage to sales_ct
+    if update_data.is_completed:
+        fab_result = await db.execute(select(Fab).where(Fab.id == revision.fab_id))
+        fab = fab_result.scalar_one_or_none()
+        
+        if fab:
+            fab.current_stage = "sales_ct"
+            fab.next_stage = "cut_list"
+            fab.updated_at = datetime.now()
+            fab.updated_by = current_user.id
+    
     await db.commit()
     await db.refresh(revision)
     
