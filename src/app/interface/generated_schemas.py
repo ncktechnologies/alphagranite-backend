@@ -141,6 +141,7 @@ class SalesCT(SQLModel, table=True):
     updated_by: Optional[int] = Field(default=None)
     no_of_revisions: Optional[str] = Field(default=None)
     current_revision_count: Optional[str] = Field(default=None)
+    revision_reason: Optional[str] = Field(default=None)
     slab_smith_type: str = Field()
     drafter_id: int = Field()
     status_id: int = Field()

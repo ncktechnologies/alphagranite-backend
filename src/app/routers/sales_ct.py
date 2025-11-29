@@ -47,7 +47,11 @@ async def update_sct_review(
     
     # Update revenue if provided
     if review_data.revenue is not None:
-        fab.revenue = float(review_data.revenue)  # ← Add this
+        fab.revenue = float(review_data.revenue)
+    
+    # Update slab_smith_used if provided
+    if review_data.slab_smith_used is not None:
+        fab.slab_smith_used = review_data.slab_smith_used
     
     fab.updated_at = datetime.now()
     fab.updated_by = current_user.id
@@ -63,10 +67,14 @@ async def update_sct_review(
         )
         db.add(fab_note)
     
-    # If SCT completed, move to next stage
+    # If SCT completed, check if SlabSmith is needed to determine next stage
     if review_data.sct_completed:
-        fab.current_stage = "cut_list"
-        fab.next_stage = "final_programming"
+        if fab.slab_smith_ag_needed:  # ← Check if SlabSmith is needed
+            fab.current_stage = "slab_smith_request"
+            fab.next_stage = "cut_list"
+        else:
+            fab.current_stage = "cut_list"
+            fab.next_stage = "final_programming"
     
     await db.commit()
     await db.refresh(fab)
@@ -77,7 +85,9 @@ async def update_sct_review(
         "data": {
             "fab_id": fab.id,
             "sct_completed": fab.sct_completed,
-            "revenue": fab.revenue,  # ← Add to response
+            "revenue": fab.revenue,
+            "slab_smith_used": fab.slab_smith_used,
+            "slab_smith_ag_needed": fab.slab_smith_ag_needed,  # ← Add to response
             "current_stage": fab.current_stage,
             "next_stage": fab.next_stage
         }
@@ -145,7 +155,7 @@ async def approve_and_send_to_slabsmith(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Sales CT: Approve FAB and send to SlabSmith
+    Sales CT: Approve FAB and send to next stage based on SlabSmith requirement
     """
     # Get FAB
     result = await db.execute(select(Fab).where(Fab.id == fab_id))
@@ -157,10 +167,27 @@ async def approve_and_send_to_slabsmith(
             detail=f"FAB with ID {fab_id} not found"
         )
     
-    # Mark SCT as completed and move to SlabSmith
+    # Mark SCT as completed
     fab.sct_completed = approval_data.sct_completed
-    fab.current_stage = "slab_smith_request"
-    fab.next_stage = "final_programming"
+    
+    # Update revenue if provided
+    if approval_data.revenue is not None:
+        fab.revenue = float(approval_data.revenue)
+    
+    # Update slab_smith_used if provided
+    if approval_data.slab_smith_used is not None:
+        fab.slab_smith_used = approval_data.slab_smith_used
+    
+    # Check if SlabSmith is needed to determine next stage
+    if fab.slab_smith_ag_needed:  # ← Check if SlabSmith is needed
+        fab.current_stage = "slab_smith_request"
+        fab.next_stage = "cut_list"
+        message_suffix = "sent to SlabSmith"
+    else:
+        fab.current_stage = "cut_list"
+        fab.next_stage = "final_programming"
+        message_suffix = "sent to Cut List"
+    
     fab.updated_at = datetime.now()
     fab.updated_by = current_user.id
     
@@ -180,10 +207,13 @@ async def approve_and_send_to_slabsmith(
     
     return {
         "success": True,
-        "message": "FAB approved and sent to SlabSmith",
+        "message": f"FAB approved and {message_suffix}",  # ← Dynamic message
         "data": {
             "fab_id": fab.id,
             "sct_completed": fab.sct_completed,
+            "revenue": fab.revenue,
+            "slab_smith_used": fab.slab_smith_used,
+            "slab_smith_ag_needed": fab.slab_smith_ag_needed,  # ← Add to response
             "current_stage": fab.current_stage,
             "next_stage": fab.next_stage
         }

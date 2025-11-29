@@ -20,6 +20,7 @@ from src.app.database.stone_type import StoneType
 from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness
 from src.app.database.templating import Templating
+from src.app.database.sales_ct import SalesCT  # ← Add this import
 from src.app.interface.business_schemas import (
     FabCreate, FabUpdate, FabResponse,
 )
@@ -404,8 +405,12 @@ async def get_fabs(
         fab_dict["fab_notes"] = fab_notes
         
         # Fetch draft data
-        draft_data = await get_draft_data(db, fab_dict["id"])
-        fab_dict["draft_data"] = draft_data
+        draft_data = await get_draft_data(db, fab_dict["id"])  # ← Add this if missing
+        fab_dict["draft_data"] = draft_data  # ← Add this if missing
+        
+        # Fetch Sales CT data
+        sales_ct_data = await get_sales_ct_data(db, fab_dict["id"])  # ← Add this
+        fab_dict["sales_ct_data"] = sales_ct_data  # ← Add this
         
         # Add stage completion status and stage-specific data
         stage_info = await get_stage_completion_data(db, fab_dict["id"], fab_dict.get("current_stage"))
@@ -872,6 +877,14 @@ async def get_fabs_by_job(
     for fab_dict in fabs:
         fab_notes = await get_fab_notes(db, fab_dict["id"])
         fab_dict["fab_notes"] = fab_notes
+        
+        # Fetch draft data
+        draft_data = await get_draft_data(db, fab_dict["id"])  # ← Add this if missing
+        fab_dict["draft_data"] = draft_data  # ← Add this if missing
+        
+        # Fetch Sales CT data
+        sales_ct_data = await get_sales_ct_data(db, fab_dict["id"])  # ← Add this
+        fab_dict["sales_ct_data"] = sales_ct_data  # ← Add this
     
     return success_response(fabs, f"Found {len(fabs)} FABs for job {job_id}")
 
@@ -992,7 +1005,7 @@ async def get_fabs_by_stage(
         drafter_assigned_by_first_name = row[20]
         drafter_assigned_by_last_name = row[21]
         
-        # Build FAB dict
+        # Convert to dict and serialize datetime/date/Decimal objects
         fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
                     for k, v in fab.__dict__.items() if not k.startswith('_')}
         fab_dict["sales_person_name"] = f"{sales_person_first_name} {sales_person_last_name}" if sales_person_first_name else None
@@ -1038,16 +1051,7 @@ async def get_fabs_by_stage(
         fab_notes = await get_fab_notes(db, fab_dict["id"])
         fab_dict["fab_notes"] = fab_notes
     
-    # Return paginated response
-    response_data = {
-        "items": fabs,
-        "total": total,
-        "skip": skip,
-        "limit": limit,
-        "stage": stage_name
-    }
-    
-    return success_response(response_data, f"Found {len(fabs)} of {total} FABs in stage '{stage_name}'")
+    return success_response(fabs, f"Found {len(fabs)} of {total} FABs in stage '{stage_name}'")
 
 
 @router.get("/stages", response_model=SuccessResponse[List[dict]])
@@ -1199,4 +1203,88 @@ async def get_draft_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
     }
     
     return draft_dict
+
+
+async def get_sales_ct_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
+    """Get Sales CT data for a given FAB with revision reason and file URLs"""
+    from src.app.database.sales_ct import SalesCT
+    from src.app.database.file import File
+    from sqlalchemy.orm import aliased
+    
+    DrafterUser = aliased(User)
+    UpdaterUser = aliased(User)
+    
+    query = select(
+        SalesCT,
+        DrafterUser.first_name.label("drafter_first_name"),
+        DrafterUser.last_name.label("drafter_last_name"),
+        UpdaterUser.first_name.label("updater_first_name"),
+        UpdaterUser.last_name.label("updater_last_name")
+    ).where(SalesCT.fab_id == fab_id)
+    
+    query = query.join(DrafterUser, SalesCT.drafter_id == DrafterUser.id, isouter=True)
+    query = query.join(UpdaterUser, SalesCT.updated_by == UpdaterUser.id, isouter=True)
+    query = query.order_by(SalesCT.id.desc()).limit(1)  # Get latest Sales CT record
+    
+    result = await db.execute(query)
+    row = result.first()
+    
+    if not row:
+        return None
+    
+    sales_ct = row[0]
+    drafter_first = row[1]
+    drafter_last = row[2]
+    updater_first = row[3]
+    updater_last = row[4]
+    
+    # Get file information if file_ids exist
+    files_data = []
+    if sales_ct.file_ids:
+        file_id_list = [int(fid.strip()) for fid in sales_ct.file_ids.split(",") if fid.strip()]
+        
+        if file_id_list:
+            # Fetch all files by IDs
+            files_query = select(File).where(File.id.in_(file_id_list))
+            files_result = await db.execute(files_query)
+            files = files_result.scalars().all()
+            
+            for file in files:
+                # Extract filename from file_path
+                filename = os.path.basename(file.file_path)
+                file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
+                
+                files_data.append({
+                    "id": file.id,
+                    "name": file.name,
+                    "file_url": file_url,
+                    "file_type": file.file_type,
+                    "file_size": file.file_size,
+                    "created_at": file.created_at.isoformat() if file.created_at else None
+                })
+    
+    sales_ct_dict = {
+        "id": sales_ct.id,
+        "fab_id": sales_ct.fab_id,
+        "slab_smith_type": sales_ct.slab_smith_type,
+        "drafter_id": sales_ct.drafter_id,
+        "drafter_name": f"{drafter_first} {drafter_last}" if drafter_first else None,
+        "start_date": sales_ct.start_date.isoformat() if sales_ct.start_date else None,
+        "end_date": sales_ct.end_date.isoformat() if sales_ct.end_date else None,
+        "total_sqft_completed": sales_ct.total_sqft_completed,
+        "is_revision_needed": sales_ct.is_revision_needed,
+        "is_revision_completed": sales_ct.is_revision_completed,
+        "no_of_revisions": sales_ct.no_of_revisions,
+        "current_revision_count": sales_ct.current_revision_count,
+        "revision_reason": sales_ct.revision_reason,  # ← Include revision reason
+        "file_ids": sales_ct.file_ids,
+        "files": files_data,  # ← Include file details with URLs
+        "status_id": sales_ct.status_id,
+        "created_at": sales_ct.created_at.isoformat() if sales_ct.created_at else None,
+        "updated_at": sales_ct.updated_at.isoformat() if sales_ct.updated_at else None,
+        "updated_by": sales_ct.updated_by,
+        "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
+    }
+    
+    return sales_ct_dict
 

@@ -288,7 +288,6 @@ async def set_review_needed_no(
     
     return success_response(None, "Review set to No successfully")
 
-
 @router.put("/sales-ct/{sales_ct_id}/review-yes", response_model=SuccessResponse[None])
 async def set_review_needed_yes(
     sales_ct_id: int,
@@ -307,6 +306,7 @@ async def set_review_needed_yes(
     
     sales_ct.is_revision_needed = True
     sales_ct.is_revision_completed = False
+    sales_ct.revision_reason = revision_reason  # ← Add this
     
     # Increment revision count
     if sales_ct.current_revision_count:
@@ -324,6 +324,7 @@ async def set_review_needed_yes(
     await db.commit()
     
     return success_response(None, "Review set to Yes with revision reason added")
+
 
 
 @router.put("/sales-ct/{sales_ct_id}/revision", response_model=SuccessResponse[None])

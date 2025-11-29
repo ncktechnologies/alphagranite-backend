@@ -977,7 +977,8 @@ class InstallCompletionResponse(BaseModel):
 class SalesCTReviewUpdate(BaseModel):
     """Schema for Sales CT review update"""
     sct_completed: bool
-    revenue: Optional[Decimal] = None  # ← Add this
+    revenue: Optional[Decimal] = None
+    slab_smith_used: Optional[bool] = None  # ← Add this
     notes: Optional[str] = None
     
     class Config:
@@ -985,6 +986,7 @@ class SalesCTReviewUpdate(BaseModel):
             "example": {
                 "sct_completed": True,
                 "revenue": 15000.50,
+                "slab_smith_used": True,
                 "notes": "All measurements verified and approved"
             }
         }
@@ -998,7 +1000,19 @@ class SalesCTSendToDrafting(BaseModel):
 class SalesCTApprove(BaseModel):
     """Schema for approving FAB and sending to SlabSmith"""
     sct_completed: bool = Field(default=True, description="Mark SCT as complete")
-    notes: Optional[str] = Field(None, description="Approval notes")
+    revenue: Optional[Decimal] = None
+    slab_smith_used: Optional[bool] = None  # ← Add this
+    notes: Optional[str] = None
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sct_completed": True,
+                "revenue": 15000.50,
+                "slab_smith_used": True,
+                "notes": "Approved for production"
+            }
+        }
 
 
 # Cut List Schemas
