@@ -1,6 +1,7 @@
 from typing import Optional, List
 from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
+from decimal import Decimal
 
 
 # Job Schemas
@@ -974,9 +975,19 @@ class InstallCompletionResponse(BaseModel):
 
 # SalesCT Schemas
 class SalesCTReviewUpdate(BaseModel):
-    """Schema for Sales CT to review and mark FAB complete"""
-    sct_completed: bool = Field(..., description="Mark SCT review as complete")
-    notes: Optional[str] = Field(None, description="SCT review notes")
+    """Schema for Sales CT review update"""
+    sct_completed: bool
+    revenue: Optional[Decimal] = None  # ← Add this
+    notes: Optional[str] = None
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sct_completed": True,
+                "revenue": 15000.50,
+                "notes": "All measurements verified and approved"
+            }
+        }
 
 
 class SalesCTSendToDrafting(BaseModel):

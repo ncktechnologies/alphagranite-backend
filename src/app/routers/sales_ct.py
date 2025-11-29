@@ -30,7 +30,7 @@ async def update_sct_review(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Sales CT: Mark SCT review as complete
+    Sales CT: Mark SCT review as complete and update revenue
     """
     # Get FAB
     result = await db.execute(select(Fab).where(Fab.id == fab_id))
@@ -44,6 +44,11 @@ async def update_sct_review(
     
     # Update SCT completion status
     fab.sct_completed = review_data.sct_completed
+    
+    # Update revenue if provided
+    if review_data.revenue is not None:
+        fab.revenue = float(review_data.revenue)  # ← Add this
+    
     fab.updated_at = datetime.now()
     fab.updated_by = current_user.id
     
@@ -72,6 +77,7 @@ async def update_sct_review(
         "data": {
             "fab_id": fab.id,
             "sct_completed": fab.sct_completed,
+            "revenue": fab.revenue,  # ← Add to response
             "current_stage": fab.current_stage,
             "next_stage": fab.next_stage
         }
