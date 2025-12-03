@@ -1,5 +1,5 @@
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, date
 from pydantic import BaseModel, Field, field_validator
 from decimal import Decimal
 
@@ -349,13 +349,19 @@ class TemplatingScheduleCreate(BaseModel):
 
 
 class TemplatingScheduleUpdate(BaseModel):
-    technician_id: Optional[int] = Field(None, gt=0)
-    schedule_start_date: Optional[datetime] = None
-    schedule_due_date: Optional[datetime] = None
-    total_sqft: Optional[str] = None
+    """Schema for updating templating schedule"""
+    technician_id: Optional[int] = None
+    schedule_start_date: Optional[date] = None
+    schedule_due_date: Optional[date] = None
+    total_sqft: Optional[float] = None  # Make sure this field exists
     notes: Optional[List[str]] = None
-    is_completed: Optional[bool] = None
+    actual_start_date: Optional[date] = None
+    duration: Optional[float] = None
+    is_templating_schedule: Optional[bool] = None
     status_id: Optional[int] = None
+
+    class Config:
+        from_attributes = True
 
 
 class TemplatingCompleteRequest(BaseModel):

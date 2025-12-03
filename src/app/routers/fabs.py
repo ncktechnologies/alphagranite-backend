@@ -1,4 +1,4 @@
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import List, Optional
 from decimal import Decimal
 import sqlalchemy as sa
@@ -249,6 +249,7 @@ async def get_fabs(
     next_stage: Optional[str] = Query(None, description="Filter by next stage"),
     schedule_start_date: Optional[date] = Query(None, description="Filter FABs scheduled on or after this date (YYYY-MM-DD)"),
     schedule_due_date: Optional[date] = Query(None, description="Filter FABs scheduled on or before this date (YYYY-MM-DD)"),
+    date_filter: Optional[str] = Query(None, description="Predefined date filter: today, this_week, this_month, next_week, next_month, scheduled, unscheduled"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -323,7 +324,70 @@ async def get_fabs(
     if next_stage:
         query = query.where(Fab.next_stage == next_stage)
     
-    # Apply date range filters
+    # Apply predefined date filters
+    if date_filter:
+        today = date.today()
+        
+        if date_filter == "today":
+            query = query.where(latest_templating.c.schedule_start_date == today)
+        
+        elif date_filter == "this_week":
+            # Get start of week (Monday) and end of week (Sunday)
+            start_of_week = today - timedelta(days=today.weekday())
+            end_of_week = start_of_week + timedelta(days=6)
+            query = query.where(
+                latest_templating.c.schedule_start_date >= start_of_week,
+                latest_templating.c.schedule_start_date <= end_of_week
+            )
+        
+        elif date_filter == "this_month":
+            # Get first day and last day of current month
+            start_of_month = today.replace(day=1)
+            if today.month == 12:
+                end_of_month = today.replace(day=31)
+            else:
+                next_month = today.replace(month=today.month + 1, day=1)
+                end_of_month = next_month - timedelta(days=1)
+            query = query.where(
+                latest_templating.c.schedule_start_date >= start_of_month,
+                latest_templating.c.schedule_start_date <= end_of_month
+            )
+        
+        elif date_filter == "next_week":
+            # Get start of next week (next Monday) and end of next week (next Sunday)
+            start_of_next_week = today + timedelta(days=(7 - today.weekday()))
+            end_of_next_week = start_of_next_week + timedelta(days=6)
+            query = query.where(
+                latest_templating.c.schedule_start_date >= start_of_next_week,
+                latest_templating.c.schedule_start_date <= end_of_next_week
+            )
+        
+        elif date_filter == "next_month":
+            # Get first day and last day of next month
+            if today.month == 12:
+                start_of_next_month = date(today.year + 1, 1, 1)
+                end_of_next_month = date(today.year + 1, 1, 31)
+            else:
+                start_of_next_month = date(today.year, today.month + 1, 1)
+                if today.month == 11:
+                    end_of_next_month = date(today.year, 12, 31)
+                else:
+                    following_month = date(today.year, today.month + 2, 1)
+                    end_of_next_month = following_month - timedelta(days=1)
+            query = query.where(
+                latest_templating.c.schedule_start_date >= start_of_next_month,
+                latest_templating.c.schedule_start_date <= end_of_next_month
+            )
+        
+        elif date_filter == "scheduled":
+            # Return FABs that have a schedule_start_date
+            query = query.where(latest_templating.c.schedule_start_date.isnot(None))
+        
+        elif date_filter == "unscheduled":
+            # Return FABs with no schedule_start_date
+            query = query.where(latest_templating.c.schedule_start_date.is_(None))
+    
+    # Apply custom date range filters (if provided, override date_filter)
     if schedule_start_date is not None:
         query = query.where(latest_templating.c.schedule_start_date >= schedule_start_date)
     if schedule_due_date is not None:
@@ -441,6 +505,58 @@ async def get_fabs(
         count_query = count_query.where(Fab.current_stage == current_stage)
     if next_stage:
         count_query = count_query.where(Fab.next_stage == next_stage)
+    
+    # Apply predefined date filters to count query
+    if date_filter:
+        today = date.today()
+        
+        if date_filter == "today":
+            count_query = count_query.where(latest_templating.c.schedule_start_date == today)
+        elif date_filter == "this_week":
+            start_of_week = today - timedelta(days=today.weekday())
+            end_of_week = start_of_week + timedelta(days=6)
+            count_query = count_query.where(
+                latest_templating.c.schedule_start_date >= start_of_week,
+                latest_templating.c.schedule_start_date <= end_of_week
+            )
+        elif date_filter == "this_month":
+            start_of_month = today.replace(day=1)
+            if today.month == 12:
+                end_of_month = today.replace(day=31)
+            else:
+                next_month = today.replace(month=today.month + 1, day=1)
+                end_of_month = next_month - timedelta(days=1)
+            count_query = count_query.where(
+                latest_templating.c.schedule_start_date >= start_of_month,
+                latest_templating.c.schedule_start_date <= end_of_month
+            )
+        elif date_filter == "next_week":
+            start_of_next_week = today + timedelta(days=(7 - today.weekday()))
+            end_of_next_week = start_of_next_week + timedelta(days=6)
+            count_query = count_query.where(
+                latest_templating.c.schedule_start_date >= start_of_next_week,
+                latest_templating.c.schedule_start_date <= end_of_next_week
+            )
+        elif date_filter == "next_month":
+            if today.month == 12:
+                start_of_next_month = date(today.year + 1, 1, 1)
+                end_of_next_month = date(today.year + 1, 1, 31)
+            else:
+                start_of_next_month = date(today.year, today.month + 1, 1)
+                if today.month == 11:
+                    end_of_next_month = date(today.year, 12, 31)
+                else:
+                    following_month = date(today.year, today.month + 2, 1)
+                    end_of_next_month = following_month - timedelta(days=1)
+            count_query = count_query.where(
+                latest_templating.c.schedule_start_date >= start_of_next_month,
+                latest_templating.c.schedule_start_date <= end_of_next_month
+            )
+        elif date_filter == "scheduled":
+            count_query = count_query.where(latest_templating.c.schedule_start_date.isnot(None))
+        elif date_filter == "unscheduled":
+            count_query = count_query.where(latest_templating.c.schedule_start_date.is_(None))
+    
     if schedule_start_date is not None:
         count_query = count_query.where(latest_templating.c.schedule_start_date >= schedule_start_date)
     if schedule_due_date is not None:
@@ -476,6 +592,58 @@ async def get_fabs(
         totals_query = totals_query.where(Fab.current_stage == current_stage)
         if next_stage:
             totals_query = totals_query.where(Fab.next_stage == next_stage)
+        
+        # Apply predefined date filters to totals query
+        if date_filter:
+            today = date.today()
+            
+            if date_filter == "today":
+                totals_query = totals_query.where(latest_templating.c.schedule_start_date == today)
+            elif date_filter == "this_week":
+                start_of_week = today - timedelta(days=today.weekday())
+                end_of_week = start_of_week + timedelta(days=6)
+                totals_query = totals_query.where(
+                    latest_templating.c.schedule_start_date >= start_of_week,
+                    latest_templating.c.schedule_start_date <= end_of_week
+                )
+            elif date_filter == "this_month":
+                start_of_month = today.replace(day=1)
+                if today.month == 12:
+                    end_of_month = today.replace(day=31)
+                else:
+                    next_month = today.replace(month=today.month + 1, day=1)
+                    end_of_month = next_month - timedelta(days=1)
+                totals_query = totals_query.where(
+                    latest_templating.c.schedule_start_date >= start_of_month,
+                    latest_templating.c.schedule_start_date <= end_of_month
+                )
+            elif date_filter == "next_week":
+                start_of_next_week = today + timedelta(days=(7 - today.weekday()))
+                end_of_next_week = start_of_next_week + timedelta(days=6)
+                totals_query = totals_query.where(
+                    latest_templating.c.schedule_start_date >= start_of_next_week,
+                    latest_templating.c.schedule_start_date <= end_of_next_week
+                )
+            elif date_filter == "next_month":
+                if today.month == 12:
+                    start_of_next_month = date(today.year + 1, 1, 1)
+                    end_of_next_month = date(today.year + 1, 1, 31)
+                else:
+                    start_of_next_month = date(today.year, today.month + 1, 1)
+                    if today.month == 11:
+                        end_of_next_month = date(today.year, 12, 31)
+                    else:
+                        following_month = date(today.year, today.month + 2, 1)
+                        end_of_next_month = following_month - timedelta(days=1)
+                totals_query = totals_query.where(
+                    latest_templating.c.schedule_start_date >= start_of_next_month,
+                    latest_templating.c.schedule_start_date <= end_of_next_month
+                )
+            elif date_filter == "scheduled":
+                totals_query = totals_query.where(latest_templating.c.schedule_start_date.isnot(None))
+            elif date_filter == "unscheduled":
+                totals_query = totals_query.where(latest_templating.c.schedule_start_date.is_(None))
+        
         if schedule_start_date is not None:
             totals_query = totals_query.where(latest_templating.c.schedule_start_date >= schedule_start_date)
         if schedule_due_date is not None:

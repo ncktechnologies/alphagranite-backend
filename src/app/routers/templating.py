@@ -156,10 +156,11 @@ async def update_templating(
     if not templating:
         raise error_response("Templating not found", 404)
     
-    # Update fields
+    # Update fields - explicitly handle all fields including total_sqft
     update_data = templating_data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
-        setattr(templating, field, value)
+        if hasattr(templating, field):  # Only set if field exists on model
+            setattr(templating, field, value)
     
     templating.updated_at = datetime.now()
     templating.updated_by = current_user.id

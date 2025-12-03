@@ -186,31 +186,114 @@ def add_update_shop_schedule(
     return success_response(fab, "Shop schedule updated successfully")
 
 @router.post("/finalprogramming/{fp_id}/files")
-def add_files_to_final_programming(fp_id: int, files: List[UploadFile] = FastAPIFile(...), db: Session = Depends(get_db)):
-    fp = db.get(FinalProgramming, fp_id)
+async def add_files_to_final_programming(
+    fp_id: int, 
+    files: List[UploadFile] = FastAPIFile(...), 
+    db: AsyncSession = Depends(get_db)
+):
+    """Upload files to final programming, save to disk and database"""
+    
+    # Check if final programming exists
+    result = await db.execute(async_select(FinalProgramming).where(FinalProgramming.id == fp_id))
+    fp = result.scalar_one_or_none()
+    
     if not fp:
         raise error_response("FinalProgramming not found", 404)
-    file_ids = fp.file_ids.split(",") if fp.file_ids else []
-    new_file_ids = [f"file_{i+len(file_ids)+1}" for i, _ in enumerate(files)]
-    file_ids.extend(new_file_ids)
-    fp.file_ids = ",".join(file_ids)
-    db.commit()
-    db.refresh(fp)
-    return success_response({"file_ids": file_ids}, "Files added successfully")
+    
+    uploaded_file_ids = []
+    uploaded_files_info = []
+    
+    for file in files:
+        # Generate unique filename
+        file_extension = Path(file.filename).suffix
+        unique_filename = f"{uuid.uuid4()}{file_extension}"
+        file_path = UPLOAD_DIR / unique_filename
+        
+        # Save file to disk
+        contents = await file.read()
+        with open(file_path, "wb") as f:
+            f.write(contents)
+        
+        # Create full URL for the file
+        file_url = f"{BASE_URL}/api/v1/files/download/{unique_filename}"
+        
+        # Create database record matching the actual files table schema
+        file_record = File(
+            name=file.filename,
+            file_path=str(file_path),
+            file_type=file.content_type,
+            file_size=str(len(contents)),
+            created_at=datetime.now(),
+            updated_at=datetime.now()
+        )
+        
+        db.add(file_record)
+        await db.flush()  # Get the ID without committing
+        
+        uploaded_file_ids.append(file_record.id)
+        uploaded_files_info.append({
+            "id": file_record.id,
+            "filename": file.filename,
+            "file_url": file_url,
+            "size": len(contents),
+            "mime_type": file.content_type,
+            "uploaded_at": datetime.now().isoformat()
+        })
+    
+    # Update fp.file_ids with new IDs
+    existing_file_ids = fp.file_ids.split(",") if fp.file_ids else []
+    existing_file_ids.extend([str(fid) for fid in uploaded_file_ids])
+    fp.file_ids = ",".join(existing_file_ids)
+    
+    await db.commit()
+    await db.refresh(fp)
+    
+    return success_response({
+        "file_ids": uploaded_file_ids,
+        "files": uploaded_files_info,
+        "total_files": len(existing_file_ids)
+    }, "Files uploaded successfully")
+
 
 @router.delete("/finalprogramming/{fp_id}/files/{file_id}")
-def delete_file_from_final_programming(fp_id: int, file_id: str, db: Session = Depends(get_db)):
-    fp = db.get(FinalProgramming, fp_id)
+async def delete_file_from_final_programming(
+    fp_id: int, 
+    file_id: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete file from final programming (soft delete in database)"""
+    
+    # Get final programming
+    result = await db.execute(async_select(FinalProgramming).where(FinalProgramming.id == fp_id))
+    fp = result.scalar_one_or_none()
+    
     if not fp:
         raise error_response("FinalProgramming not found", 404)
+    
+    # Remove from fp.file_ids
     file_ids = fp.file_ids.split(",") if fp.file_ids else []
-    if file_id not in file_ids:
+    file_id_str = str(file_id)
+    
+    if file_id_str not in file_ids:
         raise error_response("File not found in final programming", 404)
-    file_ids.remove(file_id)
+    
+    file_ids.remove(file_id_str)
     fp.file_ids = ",".join(file_ids)
-    db.commit()
-    db.refresh(fp)
-    return success_response({"file_ids": file_ids}, "File deleted successfully")
+    
+    # Soft delete the file record
+    file_result = await db.execute(async_select(File).where(File.id == file_id))
+    file_record = file_result.scalar_one_or_none()
+    
+    if file_record:
+        file_record.deleted_at = datetime.now()
+    
+    await db.commit()
+    await db.refresh(fp)
+    
+    return success_response({
+        "file_ids": file_ids,
+        "total_files": len(file_ids)
+    }, "File deleted successfully")
 
 @router.post("/finalprogramming/{fp_id}/update")
 def update_final_programming(
