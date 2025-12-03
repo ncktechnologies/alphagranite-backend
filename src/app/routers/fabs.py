@@ -459,8 +459,6 @@ async def get_fabs(
             func.sum(Fab.edging_linft).label("edging_linft"),
             func.sum(Fab.cnc_linft).label("cnc_linft"),
             func.sum(Fab.miter_linft).label("miter_linft"),
-            func.sum(Fab.cost_of_stone).label("cost_of_stone"),
-            func.sum(Fab.revenue).label("revenue"),
             func.sum(Fab.no_of_pieces).label("no_of_pieces")
         ).select_from(Fab)
         
@@ -494,9 +492,7 @@ async def get_fabs(
                 "edging_linft": float(totals_row[2]) if totals_row[2] else 0.0,
                 "cnc_linft": float(totals_row[3]) if totals_row[3] else 0.0,
                 "miter_linft": float(totals_row[4]) if totals_row[4] else 0.0,
-                "cost_of_stone": float(totals_row[5]) if totals_row[5] else 0.0,
-                "revenue": float(totals_row[6]) if totals_row[6] else 0.0,
-                "no_of_pieces": int(totals_row[7]) if totals_row[7] else 0
+                "no_of_pieces": int(totals_row[5]) if totals_row[5] else 0
             }
     
     # Calculate pagination metadata
