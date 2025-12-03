@@ -372,25 +372,26 @@ class TemplatingCompleteRequest(BaseModel):
 
 
 class TemplatingResponse(BaseModel):
+    """Schema for templating response"""
     id: int
     fab_id: int
-    technician_id: Optional[int]
-    technician_name: Optional[str] = None  # Technician full name
-    schedule_start_date: Optional[datetime]
-    schedule_due_date: Optional[datetime]
-    total_sqft: Optional[str]
-    actual_start_date: Optional[datetime] = None
-    duration: Optional[int] = None
-    notes: Optional[List[str]]
-    is_templating_schedule: bool
-    is_completed: bool
-    status_id: int
-    status_name: Optional[str] = None  # Status description
-    current_stage: Optional[str] = None  # Current FAB stage
-    next_stage: Optional[str] = None  # Next FAB stage
-    created_at: datetime
-    updated_at: Optional[datetime]
-    updated_by: Optional[int]
+    technician_id: Optional[int] = None
+    technician_name: Optional[str] = None
+    schedule_start_date: Optional[date] = None
+    schedule_due_date: Optional[date] = None
+    total_sqft: Optional[str] = None  # Changed from float to str to match database
+    actual_start_date: Optional[date] = None
+    duration: Optional[float] = None
+    notes: Optional[List[str]] = None
+    is_templating_schedule: Optional[bool] = None
+    is_completed: Optional[bool] = None
+    status_id: Optional[int] = None
+    status_name: Optional[str] = None
+    current_stage: Optional[str] = None
+    next_stage: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[int] = None
 
     class Config:
         from_attributes = True

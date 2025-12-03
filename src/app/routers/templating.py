@@ -176,10 +176,7 @@ async def update_templating(
     technician = await db.get(User, templating.technician_id) if templating.technician_id else None
     status = await db.get(Status, templating.status_id)
     
-    # Convert total_sqft back to float for response
-    total_sqft_value = float(templating.total_sqft) if templating.total_sqft else None
-    
-    # Build enriched response
+    # Build enriched response - keep total_sqft as string (no conversion needed)
     response_data = TemplatingResponse(
         id=templating.id,
         fab_id=templating.fab_id,
@@ -187,7 +184,7 @@ async def update_templating(
         technician_name=f"{technician.first_name} {technician.last_name}" if technician else None,
         schedule_start_date=templating.schedule_start_date,
         schedule_due_date=templating.schedule_due_date,
-        total_sqft=total_sqft_value,
+        total_sqft=templating.total_sqft,  # Already a string from database
         actual_start_date=templating.actual_start_date,
         duration=templating.duration,
         notes=templating.notes,
