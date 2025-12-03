@@ -338,31 +338,114 @@ def mark_slabsmith_completed(slabsmith_id: int, db: Session = Depends(get_db), u
     return success_response(slabsmith, "SlabSmith marked as completed successfully")
 
 @router.post("/slabsmith/{slabsmith_id}/files")
-def add_files_to_slabsmith(slabsmith_id: int, files: List[UploadFile] = FastAPIFile(...), db: Session = Depends(get_db)):
-    slabsmith = db.get(SlabSmith, slabsmith_id)
+async def add_files_to_slabsmith(
+    slabsmith_id: int, 
+    files: List[UploadFile] = FastAPIFile(...), 
+    db: AsyncSession = Depends(get_db)
+):
+    """Upload files to SlabSmith, save to disk and database"""
+    
+    # Check if slabsmith exists
+    result = await db.execute(async_select(SlabSmith).where(SlabSmith.id == slabsmith_id))
+    slabsmith = result.scalar_one_or_none()
+    
     if not slabsmith:
         raise error_response("SlabSmith not found", 404)
-    file_ids = slabsmith.file_ids.split(",") if slabsmith.file_ids else []
-    new_file_ids = [f"file_{i+len(file_ids)+1}" for i, _ in enumerate(files)]
-    file_ids.extend(new_file_ids)
-    slabsmith.file_ids = ",".join(file_ids)
-    db.commit()
-    db.refresh(slabsmith)
-    return success_response({"file_ids": file_ids}, "Files added to SlabSmith successfully")
+    
+    uploaded_file_ids = []
+    uploaded_files_info = []
+    
+    for file in files:
+        # Generate unique filename
+        file_extension = Path(file.filename).suffix
+        unique_filename = f"{uuid.uuid4()}{file_extension}"
+        file_path = UPLOAD_DIR / unique_filename
+        
+        # Save file to disk
+        contents = await file.read()
+        with open(file_path, "wb") as f:
+            f.write(contents)
+        
+        # Create full URL for the file
+        file_url = f"{BASE_URL}/api/v1/files/download/{unique_filename}"
+        
+        # Create database record matching the actual files table schema
+        file_record = File(
+            name=file.filename,
+            file_path=str(file_path),
+            file_type=file.content_type,
+            file_size=str(len(contents)),
+            created_at=datetime.now(),
+            updated_at=datetime.now()
+        )
+        
+        db.add(file_record)
+        await db.flush()  # Get the ID without committing
+        
+        uploaded_file_ids.append(file_record.id)
+        uploaded_files_info.append({
+            "id": file_record.id,
+            "filename": file.filename,
+            "file_url": file_url,
+            "size": len(contents),
+            "mime_type": file.content_type,
+            "uploaded_at": datetime.now().isoformat()
+        })
+    
+    # Update slabsmith.file_ids with new IDs
+    existing_file_ids = slabsmith.file_ids.split(",") if slabsmith.file_ids else []
+    existing_file_ids.extend([str(fid) for fid in uploaded_file_ids])
+    slabsmith.file_ids = ",".join(existing_file_ids)
+    
+    await db.commit()
+    await db.refresh(slabsmith)
+    
+    return success_response({
+        "file_ids": uploaded_file_ids,
+        "files": uploaded_files_info,
+        "total_files": len(existing_file_ids)
+    }, "Files uploaded successfully")
+
 
 @router.delete("/slabsmith/{slabsmith_id}/files/{file_id}")
-def delete_file_from_slabsmith(slabsmith_id: int, file_id: str, db: Session = Depends(get_db)):
-    slabsmith = db.get(SlabSmith, slabsmith_id)
+async def delete_file_from_slabsmith(
+    slabsmith_id: int, 
+    file_id: int,  # Changed from str to int
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete file from SlabSmith (soft delete in database)"""
+    
+    # Get slabsmith
+    result = await db.execute(async_select(SlabSmith).where(SlabSmith.id == slabsmith_id))
+    slabsmith = result.scalar_one_or_none()
+    
     if not slabsmith:
         raise error_response("SlabSmith not found", 404)
+    
+    # Remove from slabsmith.file_ids
     file_ids = slabsmith.file_ids.split(",") if slabsmith.file_ids else []
-    if file_id not in file_ids:
-        raise error_response("File not found in slabsmith", 404)
-    file_ids.remove(file_id)
+    file_id_str = str(file_id)
+    
+    if file_id_str not in file_ids:
+        raise error_response("File not found in SlabSmith", 404)
+    
+    file_ids.remove(file_id_str)
     slabsmith.file_ids = ",".join(file_ids)
-    db.commit()
-    db.refresh(slabsmith)
-    return success_response({"file_ids": file_ids}, "File deleted from SlabSmith successfully")
+    
+    # Soft delete the file record
+    file_result = await db.execute(async_select(File).where(File.id == file_id))
+    file_record = file_result.scalar_one_or_none()
+    
+    if file_record:
+        file_record.deleted_at = datetime.now()
+    
+    await db.commit()
+    await db.refresh(slabsmith)
+    
+    return success_response({
+        "file_ids": file_ids,
+        "total_files": len(file_ids)
+    }, "File deleted successfully")
 
 @router.post("/drafting/{drafting_id}/files")
 async def add_files_to_drafting(
