@@ -71,9 +71,9 @@ async def schedule_shop_date(
     if schedule_data.revision_complete is not None:
         fab.revised = not schedule_data.revision_complete  # If revision complete, mark revised as False
     
-    # Move to next stage
-    fab.current_stage = "wj_scheduling"
-    fab.next_stage = "resurface_scheduling"
+    # Keep FAB in cut_list stage, but set next_stage to final_programming
+    fab.current_stage = "cut_list"  # ← Stay in cut_list
+    fab.next_stage = "final_programming"  # ← Next stage is final_programming
     
     # Add note about scheduling
     fab_note = FabNotes(

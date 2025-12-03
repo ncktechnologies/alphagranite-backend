@@ -247,6 +247,8 @@ async def get_fabs(
     status_id: Optional[int] = Query(None, description="Filter by status ID"),
     current_stage: Optional[str] = Query(None, description="Filter by current stage"),
     next_stage: Optional[str] = Query(None, description="Filter by next stage"),
+    schedule_start_date: Optional[date] = Query(None, description="Filter FABs scheduled on or after this date (YYYY-MM-DD)"),
+    schedule_due_date: Optional[date] = Query(None, description="Filter FABs scheduled on or before this date (YYYY-MM-DD)"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -320,6 +322,12 @@ async def get_fabs(
         query = query.where(Fab.current_stage == current_stage)
     if next_stage:
         query = query.where(Fab.next_stage == next_stage)
+    
+    # Apply date range filters
+    if schedule_start_date is not None:
+        query = query.where(latest_templating.c.schedule_start_date >= schedule_start_date)
+    if schedule_due_date is not None:
+        query = query.where(latest_templating.c.schedule_due_date <= schedule_due_date)
     
     # Apply pagination
     query = query.offset(skip).limit(limit).order_by(Fab.created_at.desc())
@@ -405,12 +413,12 @@ async def get_fabs(
         fab_dict["fab_notes"] = fab_notes
         
         # Fetch draft data
-        draft_data = await get_draft_data(db, fab_dict["id"])  # ← Add this if missing
-        fab_dict["draft_data"] = draft_data  # ← Add this if missing
+        draft_data = await get_draft_data(db, fab_dict["id"])
+        fab_dict["draft_data"] = draft_data
         
         # Fetch Sales CT data
-        sales_ct_data = await get_sales_ct_data(db, fab_dict["id"])  # ← Add this
-        fab_dict["sales_ct_data"] = sales_ct_data  # ← Add this
+        sales_ct_data = await get_sales_ct_data(db, fab_dict["id"])
+        fab_dict["sales_ct_data"] = sales_ct_data
         
         # Add stage completion status and stage-specific data
         stage_info = await get_stage_completion_data(db, fab_dict["id"], fab_dict.get("current_stage"))
@@ -419,6 +427,8 @@ async def get_fabs(
     
     # Count total FABs with same filters (without pagination)
     count_query = select(func.count(Fab.id)).select_from(Fab)
+    count_query = count_query.outerjoin(latest_templating, sa.literal(True))
+    
     if job_id is not None:
         count_query = count_query.where(Fab.job_id == job_id)
     if fab_type:
@@ -431,22 +441,82 @@ async def get_fabs(
         count_query = count_query.where(Fab.current_stage == current_stage)
     if next_stage:
         count_query = count_query.where(Fab.next_stage == next_stage)
+    if schedule_start_date is not None:
+        count_query = count_query.where(latest_templating.c.schedule_start_date >= schedule_start_date)
+    if schedule_due_date is not None:
+        count_query = count_query.where(latest_templating.c.schedule_due_date <= schedule_due_date)
     
     total_result = await db.execute(count_query)
     total = total_result.scalar()
     
+    # Calculate aggregated totals when current_stage filter is present
+    stage_totals = None
+    if current_stage:
+        # Build aggregation query with same filters (no pagination)
+        totals_query = select(
+            func.sum(Fab.total_sqft).label("total_sqft"),
+            func.sum(Fab.wj_linft).label("wj_linft"),
+            func.sum(Fab.edging_linft).label("edging_linft"),
+            func.sum(Fab.cnc_linft).label("cnc_linft"),
+            func.sum(Fab.miter_linft).label("miter_linft"),
+            func.sum(Fab.cost_of_stone).label("cost_of_stone"),
+            func.sum(Fab.revenue).label("revenue"),
+            func.sum(Fab.no_of_pieces).label("no_of_pieces")
+        ).select_from(Fab)
+        
+        totals_query = totals_query.outerjoin(latest_templating, sa.literal(True))
+        
+        # Apply same filters as count query
+        if job_id is not None:
+            totals_query = totals_query.where(Fab.job_id == job_id)
+        if fab_type:
+            totals_query = totals_query.where(Fab.fab_type.ilike(f"%{fab_type}%"))
+        if sales_person_id is not None:
+            totals_query = totals_query.where(Fab.sales_person_id == sales_person_id)
+        if status_id is not None:
+            totals_query = totals_query.where(Fab.status_id == status_id)
+        totals_query = totals_query.where(Fab.current_stage == current_stage)
+        if next_stage:
+            totals_query = totals_query.where(Fab.next_stage == next_stage)
+        if schedule_start_date is not None:
+            totals_query = totals_query.where(latest_templating.c.schedule_start_date >= schedule_start_date)
+        if schedule_due_date is not None:
+            totals_query = totals_query.where(latest_templating.c.schedule_due_date <= schedule_due_date)
+        
+        totals_result = await db.execute(totals_query)
+        totals_row = totals_result.first()
+        
+        if totals_row:
+            stage_totals = {
+                "stage": current_stage,
+                "total_sqft": float(totals_row[0]) if totals_row[0] else 0.0,
+                "wj_linft": float(totals_row[1]) if totals_row[1] else 0.0,
+                "edging_linft": float(totals_row[2]) if totals_row[2] else 0.0,
+                "cnc_linft": float(totals_row[3]) if totals_row[3] else 0.0,
+                "miter_linft": float(totals_row[4]) if totals_row[4] else 0.0,
+                "cost_of_stone": float(totals_row[5]) if totals_row[5] else 0.0,
+                "revenue": float(totals_row[6]) if totals_row[6] else 0.0,
+                "no_of_pieces": int(totals_row[7]) if totals_row[7] else 0
+            }
+    
     # Calculate pagination metadata
     page = (skip // limit) + 1 if limit > 0 else 1
+    
+    response_data = {
+        "total": total,
+        "page": page,
+        "per_page": limit,
+        "data": fabs
+    }
+    
+    # Add stage totals if present
+    if stage_totals:
+        response_data["stage_totals"] = stage_totals
     
     return {
         "success": True,
         "message": "FABs retrieved successfully",
-        "data": {
-            "total": total,
-            "page": page,
-            "per_page": limit,
-            "data": fabs
-        }
+        "data": response_data
     }
 
 
