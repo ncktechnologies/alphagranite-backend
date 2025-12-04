@@ -1294,13 +1294,25 @@ async def get_all_stages(
     current_user: User = Depends(get_current_user)
 ):
     """Get all workflow stages with FAB count for each stage"""
-    from sqlalchemy import func, case
+    from sqlalchemy import func, case, and_, or_
     
-    # Get count of FABs for each stage
+    # Get count of FABs for each stage with special logic for final_programming
     stage_counts_query = select(
-        Fab.current_stage,
+        case(
+            # If current_stage is cut_list AND shop_schedule_date is set AND final_programming_complete is False,
+            # count it as final_programming instead of cut_list
+            (
+                and_(
+                    Fab.current_stage == "cut_list",
+                    Fab.shop_schedule_date.isnot(None),
+                    Fab.final_programming_complete == False
+                ),
+                "final_programming"
+            ),
+            else_=Fab.current_stage
+        ).label("effective_stage"),
         func.count(Fab.id).label('count')
-    ).group_by(Fab.current_stage)
+    ).group_by("effective_stage")
     
     result = await db.execute(stage_counts_query)
     stage_counts_dict = {row[0]: row[1] for row in result.all()}
@@ -1310,8 +1322,35 @@ async def get_all_stages(
     for idx, stage_name in enumerate(FAB_STAGES):
         fab_count = stage_counts_dict.get(stage_name, 0)
         
-        # Get last 10 FAB IDs in this stage (most recent)
-        fab_ids_query = select(Fab.id).where(Fab.current_stage == stage_name).order_by(Fab.id.desc()).limit(10)
+        # Build query for FAB IDs with same logic
+        if stage_name == "final_programming":
+            # For final_programming: include both actual final_programming FABs 
+            # AND cut_list FABs that meet the criteria
+            fab_ids_query = select(Fab.id).where(
+                or_(
+                    Fab.current_stage == "final_programming",
+                    and_(
+                        Fab.current_stage == "cut_list",
+                        Fab.shop_schedule_date.isnot(None),
+                        Fab.final_programming_complete == False
+                    )
+                )
+            ).order_by(Fab.id.desc()).limit(10)
+        elif stage_name == "cut_list":
+            # For cut_list: EXCLUDE FABs that should be counted as final_programming
+            fab_ids_query = select(Fab.id).where(
+                and_(
+                    Fab.current_stage == "cut_list",
+                    or_(
+                        Fab.shop_schedule_date.is_(None),
+                        Fab.final_programming_complete == True
+                    )
+                )
+            ).order_by(Fab.id.desc()).limit(10)
+        else:
+            # Normal query for other stages
+            fab_ids_query = select(Fab.id).where(Fab.current_stage == stage_name).order_by(Fab.id.desc()).limit(10)
+        
         fab_ids_result = await db.execute(fab_ids_query)
         fab_ids = [row[0] for row in fab_ids_result.all()]
         
@@ -1328,7 +1367,20 @@ async def get_all_stages(
         Fab.current_stage,
         func.count(Fab.id).label('count')
     ).where(
-        Fab.current_stage.notin_(FAB_STAGES)
+        and_(
+            Fab.current_stage.notin_(FAB_STAGES),
+            # Exclude cut_list FABs that should be in final_programming
+            or_(
+                Fab.current_stage != "cut_list",
+                and_(
+                    Fab.current_stage == "cut_list",
+                    or_(
+                        Fab.shop_schedule_date.is_(None),
+                        Fab.final_programming_complete == True
+                    )
+                )
+            )
+        )
     ).group_by(Fab.current_stage)
     
     other_result = await db.execute(all_stages_query)
