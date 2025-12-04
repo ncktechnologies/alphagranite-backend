@@ -1284,8 +1284,236 @@ async def get_fabs_by_stage(
     for fab_dict in fabs:
         fab_notes = await get_fab_notes(db, fab_dict["id"])
         fab_dict["fab_notes"] = fab_notes
+        
+        # Fetch draft data
+        draft_data = await get_draft_data(db, fab_dict["id"])  # ← Add this if missing
+        fab_dict["draft_data"] = draft_data  # ← Add this if missing
+        
+        # Fetch Sales CT data
+        sales_ct_data = await get_sales_ct_data(db, fab_dict["id"])  # ← Add this
+        fab_dict["sales_ct_data"] = sales_ct_data  # ← Add this
     
-    return success_response(fabs, f"Found {len(fabs)} of {total} FABs in stage '{stage_name}'")
+    return success_response(fabs, f"Found {len(fabs)} FABs in stage '{stage_name}'")
+
+
+@router.get("/stages/final_programming/pending", response_model=SuccessResponse[dict])
+async def get_pending_final_programming_fabs(
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
+    job_id: Optional[int] = Query(None, description="Filter by job ID"),
+    status_id: Optional[int] = Query(None, description="Filter by status ID"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get FABs that should be in final programming stage.
+    
+    Criteria:
+    - current_stage == "final_programming" OR
+    - (current_stage == "cut_list" AND shop_schedule_date IS NOT NULL AND final_programming_complete == False)
+    """
+    from sqlalchemy.orm import aliased
+    from sqlalchemy import and_, or_, func
+    
+    # Aliases for different user roles
+    TechnicianUser = aliased(User)
+    DrafterUser = aliased(User)
+    DrafterAssignedByUser = aliased(User)
+    
+    # Subquery for latest templating
+    latest_templating = (
+        select(Templating)
+        .where(Templating.fab_id == Fab.id)
+        .order_by(Templating.id.desc())
+        .limit(1)
+        .lateral("latest_templating")
+    )
+    
+    # Build base query with all joins
+    query = select(
+        Fab,
+        User.first_name.label("sales_person_first_name"),
+        User.last_name.label("sales_person_last_name"),
+        StoneType.name.label("stone_type_name"),
+        StoneColor.name.label("stone_color_name"),
+        StoneThickness.thickness.label("stone_thickness_value"),
+        Edge.name.label("edge_name"),
+        latest_templating.c.schedule_start_date.label("templating_schedule_start_date"),
+        latest_templating.c.schedule_due_date.label("templating_schedule_due_date"),
+        latest_templating.c.notes.label("templating_notes"),
+        TechnicianUser.first_name.label("technician_first_name"),
+        TechnicianUser.last_name.label("technician_last_name"),
+        BusinessJob,
+        Account.name.label("account_name"),
+        Account.account_number.label("account_number"),
+        Account.contact_person.label("account_contact_person"),
+        Account.email.label("account_email"),
+        Account.phone.label("account_phone"),
+        DrafterUser.first_name.label("drafter_first_name"),
+        DrafterUser.last_name.label("drafter_last_name"),
+        DrafterAssignedByUser.first_name.label("drafter_assigned_by_first_name"),
+        DrafterAssignedByUser.last_name.label("drafter_assigned_by_last_name")
+    ).select_from(Fab)\
+        .outerjoin(User, Fab.sales_person_id == User.id)\
+        .outerjoin(StoneType, Fab.stone_type_id == StoneType.id)\
+        .outerjoin(StoneColor, Fab.stone_color_id == StoneColor.id)\
+        .outerjoin(StoneThickness, Fab.stone_thickness_id == StoneThickness.id)\
+        .outerjoin(Edge, Fab.edge_id == Edge.id)\
+        .outerjoin(latest_templating, sa.literal(True))\
+        .outerjoin(TechnicianUser, latest_templating.c.technician_id == TechnicianUser.id)\
+        .outerjoin(BusinessJob, Fab.job_id == BusinessJob.id)\
+        .outerjoin(Account, BusinessJob.account_id == Account.id)\
+        .outerjoin(DrafterUser, Fab.drafter_id == DrafterUser.id)\
+        .outerjoin(DrafterAssignedByUser, Fab.drafter_assigned_by == DrafterAssignedByUser.id)
+    
+    # Apply final programming criteria
+    query = query.where(
+        or_(
+            Fab.current_stage == "final_programming",
+            and_(
+                Fab.current_stage == "cut_list",
+                Fab.shop_schedule_date.isnot(None),
+                Fab.final_programming_complete == False
+            )
+        )
+    )
+    
+    # Apply optional filters
+    if job_id:
+        query = query.where(Fab.job_id == job_id)
+    if status_id:
+        query = query.where(Fab.status_id == status_id)
+    
+    # Get total count before pagination
+    count_query = select(func.count()).select_from(Fab).where(
+        or_(
+            Fab.current_stage == "final_programming",
+            and_(
+                Fab.current_stage == "cut_list",
+                Fab.shop_schedule_date.isnot(None),
+                Fab.final_programming_complete == False
+            )
+        )
+    )
+    if job_id:
+        count_query = count_query.where(Fab.job_id == job_id)
+    if status_id:
+        count_query = count_query.where(Fab.status_id == status_id)
+    
+    total_result = await db.execute(count_query)
+    total = total_result.scalar()
+    
+    # Apply pagination and ordering
+    query = query.offset(skip).limit(limit).order_by(Fab.shop_schedule_date.asc().nullslast(), Fab.id.desc())
+    
+    result = await db.execute(query)
+    rows = result.all()
+    
+    fabs = []
+    for row in rows:
+        fab = row[0]
+        sales_person_first_name = row[1]
+        sales_person_last_name = row[2]
+        stone_type_name = row[3]
+        stone_color_name = row[4]
+        stone_thickness_value = row[5]
+        edge_name = row[6]
+        templating_schedule_start_date = row[7]
+        templating_schedule_due_date = row[8]
+        templating_notes = row[9]
+        technician_first_name = row[10]
+        technician_last_name = row[11]
+        business_job = row[12]
+        account_name = row[13]
+        account_number = row[14]
+        account_contact_person = row[15]
+        account_email = row[16]
+        account_phone = row[17]
+        drafter_first_name = row[18]
+        drafter_last_name = row[19]
+        drafter_assigned_by_first_name = row[20]
+        drafter_assigned_by_last_name = row[21]
+        
+        # Convert to dict and serialize datetime/date/Decimal objects
+        fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
+                    for k, v in fab.__dict__.items() if not k.startswith('_')}
+        
+        # Ensure notes is always a list
+        if fab_dict.get("notes") and not isinstance(fab_dict["notes"], list):
+            fab_dict["notes"] = [fab_dict["notes"]] if fab_dict["notes"] else None
+        
+        fab_dict["sales_person_name"] = f"{sales_person_first_name} {sales_person_last_name}" if sales_person_first_name else None
+        fab_dict["stone_type_name"] = stone_type_name
+        fab_dict["stone_color_name"] = stone_color_name
+        fab_dict["stone_thickness_value"] = stone_thickness_value
+        fab_dict["edge_name"] = edge_name
+        
+        # Add job details
+        if business_job:
+            job_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
+                       for k, v in business_job.__dict__.items() if not k.startswith('_')}
+            fab_dict["job_details"] = job_dict
+            fab_dict["account_id"] = business_job.account_id
+        else:
+            fab_dict["job_details"] = None
+            fab_dict["account_id"] = None
+
+        # Add account data
+        fab_dict["account_name"] = account_name
+        fab_dict["account_number"] = account_number
+        fab_dict["account_contact_person"] = account_contact_person
+        fab_dict["account_email"] = account_email
+        fab_dict["account_phone"] = account_phone
+        
+        # Add templating data
+        fab_dict["templating_schedule_start_date"] = templating_schedule_start_date.isoformat() if templating_schedule_start_date else None
+        fab_dict["templating_schedule_due_date"] = templating_schedule_due_date.isoformat() if templating_schedule_due_date else None
+        fab_dict["templating_notes"] = templating_notes
+        fab_dict["technician_name"] = f"{technician_first_name} {technician_last_name}" if technician_first_name else None
+        
+        # Add drafter information
+        fab_dict["drafter_name"] = f"{drafter_first_name} {drafter_last_name}" if drafter_first_name else None
+        fab_dict["drafter_assigned_by_name"] = f"{drafter_assigned_by_first_name} {drafter_assigned_by_last_name}" if drafter_assigned_by_first_name else None
+        
+        # Add effective stage indicator
+        fab_dict["effective_stage"] = "final_programming"
+        fab_dict["is_from_cut_list"] = fab_dict.get("current_stage") == "cut_list"
+        fab_dict["next_stage"] = get_next_stage("final_programming")
+        
+        fabs.append(fab_dict)
+    
+    # Fetch fab_notes and stage data for all FABs
+    for fab_dict in fabs:
+        fab_notes = await get_fab_notes(db, fab_dict["id"])
+        fab_dict["fab_notes"] = fab_notes
+        
+        # Fetch draft data
+        draft_data = await get_draft_data(db, fab_dict["id"])
+        fab_dict["draft_data"] = draft_data
+        
+        # Fetch Sales CT data
+        sales_ct_data = await get_sales_ct_data(db, fab_dict["id"])
+        fab_dict["sales_ct_data"] = sales_ct_data
+        
+        # Add stage completion status and stage-specific data
+        stage_info = await get_stage_completion_data(db, fab_dict["id"], "final_programming")
+        fab_dict["is_complete"] = stage_info["is_complete"]
+        fab_dict["stage_data"] = stage_info["stage_data"]
+    
+    # Calculate pagination metadata
+    page = (skip // limit) + 1 if limit > 0 else 1
+    
+    response_data = {
+        "total": total,
+        "page": page,
+        "per_page": limit,
+        "data": fabs
+    }
+    
+    return success_response(
+        response_data,
+        f"Found {total} FABs requiring final programming ({len(fabs)} returned)"
+    )
 
 
 @router.get("/stages", response_model=SuccessResponse[List[dict]])
