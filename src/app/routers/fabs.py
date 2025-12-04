@@ -1299,12 +1299,12 @@ async def get_all_stages(
     # Get count of FABs for each stage with special logic for final_programming
     stage_counts_query = select(
         case(
-            # If current_stage is cut_list AND shop_schedule_date is set AND final_programming_complete is False,
+            # If current_stage is cut_list AND shop_date_schedule is set AND final_programming_complete is False,
             # count it as final_programming instead of cut_list
             (
                 and_(
                     Fab.current_stage == "cut_list",
-                    Fab.shop_schedule_date.isnot(None),
+                    Fab.shop_date_schedule.isnot(None),
                     Fab.final_programming_complete == False
                 ),
                 "final_programming"
@@ -1331,7 +1331,7 @@ async def get_all_stages(
                     Fab.current_stage == "final_programming",
                     and_(
                         Fab.current_stage == "cut_list",
-                        Fab.shop_schedule_date.isnot(None),
+                        Fab.shop_date_schedule.isnot(None),
                         Fab.final_programming_complete == False
                     )
                 )
@@ -1342,7 +1342,7 @@ async def get_all_stages(
                 and_(
                     Fab.current_stage == "cut_list",
                     or_(
-                        Fab.shop_schedule_date.is_(None),
+                        Fab.shop_date_schedule.is_(None),
                         Fab.final_programming_complete == True
                     )
                 )
@@ -1375,7 +1375,7 @@ async def get_all_stages(
                 and_(
                     Fab.current_stage == "cut_list",
                     or_(
-                        Fab.shop_schedule_date.is_(None),
+                        Fab.shop_date_schedule.is_(None),
                         Fab.final_programming_complete == True
                     )
                 )
