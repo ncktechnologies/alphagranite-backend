@@ -1310,7 +1310,7 @@ async def get_pending_final_programming_fabs(
     
     Criteria:
     - current_stage == "final_programming" OR
-    - (current_stage == "cut_list" AND shop_schedule_date IS NOT NULL AND final_programming_complete == False)
+    - (current_stage == "cut_list" AND shop_date_schedule IS NOT NULL AND final_programming_complete == False)
     """
     from sqlalchemy.orm import aliased
     from sqlalchemy import and_, or_, func
@@ -1372,7 +1372,7 @@ async def get_pending_final_programming_fabs(
             Fab.current_stage == "final_programming",
             and_(
                 Fab.current_stage == "cut_list",
-                Fab.shop_schedule_date.isnot(None),
+                Fab.shop_date_schedule.isnot(None),
                 Fab.final_programming_complete == False
             )
         )
@@ -1390,7 +1390,7 @@ async def get_pending_final_programming_fabs(
             Fab.current_stage == "final_programming",
             and_(
                 Fab.current_stage == "cut_list",
-                Fab.shop_schedule_date.isnot(None),
+                Fab.shop_date_schedule.isnot(None),
                 Fab.final_programming_complete == False
             )
         )
@@ -1404,7 +1404,7 @@ async def get_pending_final_programming_fabs(
     total = total_result.scalar()
     
     # Apply pagination and ordering
-    query = query.offset(skip).limit(limit).order_by(Fab.shop_schedule_date.asc().nullslast(), Fab.id.desc())
+    query = query.offset(skip).limit(limit).order_by(Fab.shop_date_schedule.asc().nullslast(), Fab.id.desc())
     
     result = await db.execute(query)
     rows = result.all()
