@@ -15,7 +15,7 @@ class Fab(SQLModel, table=True):
     stone_color_id: int = Field(foreign_key="stone_colors.id")
     stone_thickness_id: int = Field(foreign_key="stone_thickness.id")
     edge_id: int = Field(foreign_key="edges.id")
-    input_area: Optional[float] = Field(default=None)
+    input_area: Optional[str] = Field(default=None)
     total_sqft: float
     notes: Optional[List[str]] = Field(default=None, sa_column=Column(JSONB))
     
