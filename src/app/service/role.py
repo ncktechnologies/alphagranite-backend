@@ -241,7 +241,7 @@ class RoleService:
             role.status = status
         
         role.updated_at = datetime.now()
-        role.updated_by = current_user_id
+        # role.updated_by = current_user_id
         
         # Handle permissions update via action_menu_permissions
         if action_menu_permissions is not None:
