@@ -155,7 +155,7 @@ async def get_role(
 async def update_role(
     data: RoleUpdate,
     role_id: int = Path(..., ge=1),
-    current_user: User = Depends(PermissionChecker("roles", "update")),
+    current_user: User = Depends(get_current_user),  # Changed from PermissionChecker
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -169,7 +169,49 @@ async def update_role(
     - user_ids: New list of user IDs to assign to this role
     - permission_ids: New list of permission IDs (alternative to action_menu_permissions)
     - status: New role status (1=Active, 2=Inactive)
+    
+    Permission Requirements:
+    - User must have can_update=True for "roles" action menu
+    - If updating action_menu_permissions, user must have can_create=True for "roles" action menu
+    - If updating user_ids (assigning/removing members), user must have can_create=True for "roles" action menu
     """
+    from src.app.service.permission import PermissionService
+    from src.app.utils.exceptions import error_response
+    
+    # Check if user has update permission for roles
+    has_update = await PermissionService.check_permission(
+        db=db,
+        user_id=current_user.id,
+        action_menu_name="roles",
+        action="update"
+    )
+    
+    if not has_update:
+        raise error_response("You don't have permission to update roles", 403)
+    
+    # Check if user is trying to update permissions or members
+    is_updating_permissions = data.action_menu_permissions is not None or data.permission_ids is not None
+    is_updating_members = data.user_ids is not None
+    
+    # If updating permissions or members, check for create permission
+    if is_updating_permissions or is_updating_members:
+        has_create = await PermissionService.check_permission(
+            db=db,
+            user_id=current_user.id,
+            action_menu_name="roles",
+            action="create"
+        )
+        
+        if not has_create:
+            error_parts = []
+            if is_updating_permissions:
+                error_parts.append("modify role permissions")
+            if is_updating_members:
+                error_parts.append("assign/remove role members")
+            
+            error_message = f"You don't have permission to {' and '.join(error_parts)}. You need 'can_create' permission for roles."
+            raise error_response(error_message, 403)
+    
     # Convert action_menu_permissions to dicts if provided
     action_menu_permissions_dicts = None
     if data.action_menu_permissions:
