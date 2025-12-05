@@ -111,7 +111,7 @@ async def update_drafting(
     if not has_permission and not current_user.is_super_admin:
         raise HTTPException(
             status_code=403,
-            detail="You don't have permission to update drafting entries. Required: 'templater_drafting_permission' with can_update=True"
+            detail="You don't have permission to update a draft."
         )
     
     # Fetch drafting AND fab in one query using join

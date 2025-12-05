@@ -186,176 +186,182 @@ class RoleService:
     
     @staticmethod
     async def update_role(
-        db: AsyncSession, 
-        role_id: int, 
+        db: AsyncSession,
+        role_id: int,
         name: Optional[str] = None,
-        description: Optional[str] = None, 
-        action_menu_permissions: Optional[List[Dict[str, Any]]] = None,
+        description: Optional[str] = None,
+        action_menu_permissions: Optional[List[dict]] = None,
         user_ids: Optional[List[int]] = None,
-        permission_ids: Optional[List[int]] = None, 
+        permission_ids: Optional[List[int]] = None,
         status: Optional[int] = None,
         current_user_id: int = None
     ):
         """
-        Update an existing role
+        Update role with permissions and members
         
-        Args:
-            db: Database session
-            role_id: ID of the role to update
-            name: New role name (optional)
-            description: New role description (optional)
-            action_menu_permissions: New list of action menus with CRUD permissions (optional)
-            user_ids: New list of user IDs to assign to this role (optional)
-            permission_ids: New list of permission IDs (optional)
-            status: New role status (optional)
-            current_user_id: ID of the user updating the role
-            
-        Returns:
-            The updated role with its associated permissions
-            
-        Raises:
-            HTTPException: If role doesn't exist, name is already taken, or if there are database errors
+        This method updates a role's details including:
+        - Basic info (name, description, status)
+        - Permissions via action_menu_permissions or permission_ids
+        - Members via user_ids
         """
-        from src.app.service.background import save_audit_trail
+        from sqlalchemy import select, delete, and_
+        from src.app.database.role import Role
+        from src.app.database.permission import Permission
+        from src.app.database.role_permission import RolePermission
+        from src.app.database.user_role import UserRole
+        from src.app.database.action_menu import ActionMenu
+        from datetime import datetime
         
         # Get existing role
-        role_query = await db.execute(select(Role).where(Role.id == role_id))
-        role = role_query.scalar_one_or_none()
+        result = await db.execute(select(Role).where(Role.id == role_id))
+        role = result.scalar_one_or_none()
+        
         if not role:
-            raise error_response(
-                message=f"Role with ID {role_id} not found",
-                status_code=404
-            )
+            raise ValueError(f"Role with id {role_id} not found")
         
-        # Check if new name already exists (if name is being updated)
+        # Check if new name is unique (if provided)
         if name and name != role.name:
-            existing_role = await db.execute(select(Role).where(Role.name == name))
-            if existing_role.scalar_one_or_none():
-                raise error_response(
-                    message=f"Role with name '{name}' already exists",
-                    status_code=400
+            existing_result = await db.execute(
+                select(Role).where(
+                    and_(
+                        Role.name == name,
+                        Role.id != role_id
+                    )
                 )
+            )
+            if existing_result.scalar_one_or_none():
+                raise ValueError(f"Role name '{name}' already exists")
         
-        try:
-            # Update role fields if provided
-            if name is not None:
-                role.name = name
-            if description is not None:
-                role.description = description
-            if status is not None:
-                role.status = status
-            
-            role.updated_at = datetime.now()
-            
-            # Update permissions using action_menu_permissions if provided
-            if action_menu_permissions is not None:
-                # Delete existing role_permissions
-                from sqlalchemy import delete
-                await db.execute(
-                    delete(RolePermission).where(RolePermission.role_id == role_id)
-                )
-                
-                # Create permissions from action menu permissions (similar to create_role)
-                for amp in action_menu_permissions:
-                    # Check if a permission with this exact configuration already exists
-                    permission_name = f"{role.name} - Menu {amp['action_menu_id']}"
-                    existing_perm = await db.execute(
-                        select(Permission).where(
-                            Permission.can_create == amp.get('can_create', False),
-                            Permission.can_read == amp.get('can_read', False),
-                            Permission.can_update == amp.get('can_update', False),
-                            Permission.can_delete == amp.get('can_delete', False)
-                        ).limit(1)
-                    )
-                    permission = existing_perm.scalar_one_or_none()
-                    
-                    if not permission:
-                        # Create new permission only if no matching permission exists
-                        permission = Permission(
-                            name=permission_name,
-                            description=f"Auto-generated permission for role {role.name}",
-                            can_create=amp.get('can_create', False),
-                            can_read=amp.get('can_read', False),
-                            can_update=amp.get('can_update', False),
-                            can_delete=amp.get('can_delete', False)
-                        )
-                        db.add(permission)
-                        await db.flush()  # Get permission ID
-                    
-                    # Link permission to role with action menu
-                    role_permission = RolePermission(
-                        role_id=role_id,
-                        permission_id=permission.id,
-                        action_menu_id=amp['action_menu_id']
-                    )
-                    db.add(role_permission)
-            
-            # Update permissions using permission_ids if provided (alternative method)
-            elif permission_ids is not None:
-                # Verify all permissions exist
-                permissions_count = await db.execute(
-                    select(func.count(Permission.id)).where(Permission.id.in_(permission_ids))
-                )
-                if permissions_count.scalar_one() != len(permission_ids):
-                    raise error_response(
-                        message="One or more permission IDs do not exist",
-                        status_code=400
-                    )
-                
-                # Delete existing role_permissions
-                from sqlalchemy import delete
-                await db.execute(
-                    delete(RolePermission).where(RolePermission.role_id == role_id)
-                )
-                
-                # Create new role_permissions
-                for permission_id in permission_ids:
-                    role_permission = RolePermission(
-                        role_id=role_id,
-                        permission_id=permission_id
-                    )
-                    db.add(role_permission)
-            
-            # Update user assignments if provided
-            if user_ids is not None:
-                # Delete existing user-role assignments
-                from sqlalchemy import delete
-                await db.execute(
-                    delete(UserRole).where(UserRole.role_id == role_id)
-                )
-                
-                # Create new user-role assignments
-                for user_id in user_ids:
-                    user_role = UserRole(
-                        user_id=user_id,
-                        role_id=role_id,
-                        created_at=datetime.now()
-                    )
-                    db.add(user_role)
-            
-            await db.commit()
-            await db.refresh(role)
-            
-            # Save audit trail
-            await save_audit_trail(
-                db=db,
-                activity="role_updated",
-                user_id=current_user_id,
-                message=f"Updated role '{role.name}' (ID: {role.id})",
-                activity_trace_id=role.id
+        # Update basic fields
+        if name is not None:
+            role.name = name
+        if description is not None:
+            role.description = description
+        if status is not None:
+            role.status = status
+        
+        role.updated_at = datetime.now()
+        role.updated_by = current_user_id
+        
+        # Handle permissions update via action_menu_permissions
+        if action_menu_permissions is not None:
+            # Delete existing role_permissions
+            await db.execute(
+                delete(RolePermission).where(RolePermission.role_id == role_id)
             )
             
-            # Retrieve role with permissions for response
-            role_with_permissions = await RoleService.get_role_with_permissions(db, role_id)
-            return role_with_permissions
+            # Create or reuse permissions for each action menu
+            for amp in action_menu_permissions:
+                action_menu_id = amp.get("action_menu_id")
+                can_create = amp.get("can_create", False)
+                can_read = amp.get("can_read", False)
+                can_update = amp.get("can_update", False)
+                can_delete = amp.get("can_delete", False)
+                
+                # Get action menu name
+                action_menu_result = await db.execute(
+                    select(ActionMenu).where(ActionMenu.id == action_menu_id)
+                )
+                action_menu = action_menu_result.scalar_one_or_none()
+                if not action_menu:
+                    raise ValueError(f"Action menu with id {action_menu_id} not found")
+                
+                # Generate permission name
+                permission_name = f"{role.name} - {action_menu.name}"
+                
+                # Check if permission with this name already exists
+                existing_perm_result = await db.execute(
+                    select(Permission).where(Permission.name == permission_name)
+                )
+                existing_permission = existing_perm_result.scalar_one_or_none()
+                
+                if existing_permission:
+                    # Update existing permission
+                    existing_permission.can_create = can_create
+                    existing_permission.can_read = can_read
+                    existing_permission.can_update = can_update
+                    existing_permission.can_delete = can_delete
+                    existing_permission.updated_at = datetime.now()
+                    permission = existing_permission
+                else:
+                    # Create new permission
+                    permission = Permission(
+                        name=permission_name,
+                        description=f"Auto-generated permission for role {role.name}",
+                        can_create=can_create,
+                        can_read=can_read,
+                        can_update=can_update,
+                        can_delete=can_delete,
+                        created_at=datetime.now(),
+                        updated_at=datetime.now()
+                    )
+                    db.add(permission)
+                    await db.flush()  # Flush to get permission.id
             
-        except IntegrityError as e:
-            await db.rollback()
-            raise error_response(
-                message=f"Database error: {str(e)}",
-                status_code=400
-            )
+                # Create role_permission link
+                role_permission = RolePermission(
+                    role_id=role_id,
+                    permission_id=permission.id,
+                    action_menu_id=action_menu_id,
+                    created_at=datetime.now(),
+                    updated_at=datetime.now()
+                )
+                db.add(role_permission)
     
+        # Handle permissions update via permission_ids
+        elif permission_ids is not None:
+            # Delete existing role_permissions
+            await db.execute(
+                delete(RolePermission).where(RolePermission.role_id == role_id)
+            )
+            
+            # Create new role_permission records
+            for permission_id in permission_ids:
+                # Verify permission exists
+                perm_result = await db.execute(
+                    select(Permission).where(Permission.id == permission_id)
+                )
+                if not perm_result.scalar_one_or_none():
+                    raise ValueError(f"Permission with id {permission_id} not found")
+                
+                role_permission = RolePermission(
+                    role_id=role_id,
+                    permission_id=permission_id,
+                    created_at=datetime.now(),
+                    updated_at=datetime.now()
+                )
+                db.add(role_permission)
+    
+        # Handle members update
+        if user_ids is not None:
+            # Delete existing user_role assignments
+            await db.execute(
+                delete(UserRole).where(UserRole.role_id == role_id)
+            )
+            
+            # Create new user_role records
+            for user_id in user_ids:
+                # Verify user exists
+                from src.app.database.user import User
+                user_result = await db.execute(
+                    select(User).where(User.id == user_id)
+                )
+                if not user_result.scalar_one_or_none():
+                    raise ValueError(f"User with id {user_id} not found")
+                
+                user_role = UserRole(
+                    user_id=user_id,
+                    role_id=role_id,
+                    created_at=datetime.now()
+                )
+                db.add(user_role)
+    
+        await db.commit()
+        await db.refresh(role)
+        
+        # Return updated role with permissions and members
+        return await RoleService.get_role_with_permissions(db, role_id)
+
     @staticmethod
     async def change_role_status(
         db: AsyncSession, 
