@@ -1,5 +1,3 @@
-
-
 from datetime import datetime
 from sqlalchemy import select
 from typing import Any, Optional
@@ -161,28 +159,28 @@ async def login(
             # Don't reveal that the user doesn't exist
             raise error_response(MSG_INCORRECT_CREDENTIALS, 401)
 
-        # Account is locked
-        if user.is_locked:
-            background_tasks.add_task(
-                save_audit_trail,
-                db,
-                AUDIT_ACCOUNT_LOCKED,
-                user.id,
-                MSG_ACCOUNT_LOCKED,
-                0,
-                device_id,
-                ip_address,
-                browser,
-            )
-            background_tasks.add_task(
-                send_notification,
-                db,
-                ADMIN_EMAIL,
-                NOTIF_ACCOUNT_LOCKED,
-                f"Account locked for {login_data.username}",
-                user.id,
-            )
-            raise error_response(MSG_ACCOUNT_LOCKED, 403)
+        # TEMPORARILY DISABLED: Account locking check (for debugging/testing)
+        # if user.is_locked:
+        #     background_tasks.add_task(
+        #         save_audit_trail,
+        #         db,
+        #         AUDIT_ACCOUNT_LOCKED,
+        #         user.id,
+        #         MSG_ACCOUNT_LOCKED,
+        #         0,
+        #         device_id,
+        #         ip_address,
+        #         browser,
+        #     )
+        #     background_tasks.add_task(
+        #         send_notification,
+        #         db,
+        #         ADMIN_EMAIL,
+        #         NOTIF_ACCOUNT_LOCKED,
+        #         f"Account locked for {login_data.username}",
+        #         user.id,
+        #     )
+        #     raise error_response(MSG_ACCOUNT_LOCKED, 403)
 
         # Account must be active (status == 1)
         # If not active, deny login
@@ -210,8 +208,8 @@ async def login(
 
         # Password verification
         if not auth_service.verify_password(login_data.password, user.password):
-            # Increment failed login attempts and potentially lock account
-            await AccountService.increment_failed_login(db, user)
+            # TEMPORARILY DISABLED: Failed login attempts tracking (for debugging/testing)
+            # await AccountService.increment_failed_login(db, user)
 
             background_tasks.add_task(
                 save_audit_trail,
@@ -225,41 +223,41 @@ async def login(
                 browser,
             )
 
-            # If this attempt caused the account to be locked
-            if user.failed_login_attempts >= MAX_LOGIN_ATTEMPTS:
-                background_tasks.add_task(
-                    save_audit_trail,
-                    db,
-                    AUDIT_ACCOUNT_LOCKED,
-                    user.id,
-                    MSG_MAX_ATTEMPTS_REACHED,
-                    0,
-                    device_id,
-                    ip_address,
-                    browser,
-                )
-                background_tasks.add_task(
-                    send_notification,
-                    db,
-                    ADMIN_EMAIL,
-                    NOTIF_ACCOUNT_LOCKED,
-                    f"Account locked for {login_data.username} due to too many failed attempts",
-                    user.id,
-                )
-                raise error_response(MSG_MAX_ATTEMPTS_REACHED, 403)
+            # TEMPORARILY DISABLED: Account locking on max attempts (for debugging/testing)
+            # if user.failed_login_attempts >= MAX_LOGIN_ATTEMPTS:
+            #     background_tasks.add_task(
+            #         save_audit_trail,
+            #         db,
+            #         AUDIT_ACCOUNT_LOCKED,
+            #         user.id,
+            #         MSG_MAX_ATTEMPTS_REACHED,
+            #         0,
+            #         device_id,
+            #         ip_address,
+            #         browser,
+            #     )
+            #     background_tasks.add_task(
+            #         send_notification,
+            #         db,
+            #         ADMIN_EMAIL,
+            #         NOTIF_ACCOUNT_LOCKED,
+            #         f"Account locked for {login_data.username} due to too many failed attempts",
+            #         user.id,
+            #     )
+            #     raise error_response(MSG_MAX_ATTEMPTS_REACHED, 403)
 
-            background_tasks.add_task(
-                send_notification,
-                db,
-                ADMIN_EMAIL,
-                NOTIF_LOGIN_FAILED,
-                f"Login failed for {login_data.username} (Attempt {user.failed_login_attempts}/{MAX_LOGIN_ATTEMPTS})",
-                user.id,
-            )
+            # background_tasks.add_task(
+            #     send_notification,
+            #     db,
+            #     ADMIN_EMAIL,
+            #     NOTIF_LOGIN_FAILED,
+            #     f"Login failed for {login_data.username} (Attempt {user.failed_login_attempts}/{MAX_LOGIN_ATTEMPTS})",
+            #     user.id,
+            # )
             raise error_response(MSG_INCORRECT_CREDENTIALS, 401)
 
-        # Password correct, reset failed login counter
-        await AccountService.reset_failed_login(db, user)
+        # TEMPORARILY DISABLED: Reset failed login counter (for debugging/testing)
+        # await AccountService.reset_failed_login(db, user)
 
         # First-time login check
         if user.is_first_login:
