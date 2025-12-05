@@ -1,6 +1,6 @@
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import APIRouter, Depends, Path, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, Path, Query, BackgroundTasks, HTTPException
 
 from src.app.database.user import User
 from src.app.utils.config import get_db
@@ -151,6 +151,11 @@ async def get_role(
         message="Role retrieved successfully"
     )
 
+def permission_denied(message: str, status_code: int = 403):
+    """Helper to raise permission denied errors with consistent format"""
+    raise HTTPException(status_code=status_code, detail=message)
+
+
 @role_router.put("/{role_id}")
 async def update_role(
     data: RoleUpdate,
@@ -175,7 +180,6 @@ async def update_role(
     - If updating action_menu_permissions, user must have can_create=True for "roles" action menu
     - If updating user_ids (assigning/removing members), user must have can_create=True for "roles" action menu
     """
-    from src.app.utils.exceptions import error_response
     from src.app.utils.permissions import has_permission
     
     # Check if user has update permission for roles
@@ -187,7 +191,7 @@ async def update_role(
     )
     
     if not has_update:
-        raise error_response("You don't have permission to update roles", 403)
+        permission_denied("You don't have permission to update roles")
     
     # Check if user is trying to update permissions or members
     is_updating_permissions = data.action_menu_permissions is not None or data.permission_ids is not None
@@ -210,7 +214,7 @@ async def update_role(
                 error_parts.append("assign/remove role members")
             
             error_message = f"You don't have permission to {' and '.join(error_parts)}. You need 'can_create' permission for roles."
-            raise error_response(error_message, 403)
+            permission_denied(error_message)
     
     # Convert action_menu_permissions to dicts if provided
     action_menu_permissions_dicts = None
