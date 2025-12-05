@@ -86,6 +86,33 @@ async def update_drafting(
     current_user: User = Depends(get_current_user)
 ):
     """Update drafting entry"""
+    from fastapi import HTTPException
+    from sqlalchemy import and_
+    from src.app.database.permission import Permission
+    from src.app.database.role_permission import RolePermission
+    from src.app.database.user_role import UserRole
+    
+    # Check if user has "templater_drafting_permission" with can_update=True
+    permission_check_query = select(Permission).join(
+        RolePermission, RolePermission.permission_id == Permission.id
+    ).join(
+        UserRole, UserRole.role_id == RolePermission.role_id
+    ).where(
+        and_(
+            UserRole.user_id == current_user.id,
+            Permission.name == "templater_drafting_permission",
+            Permission.can_update == True
+        )
+    )
+    
+    permission_result = await db.execute(permission_check_query)
+    has_permission = permission_result.scalar_one_or_none()
+    
+    if not has_permission and not current_user.is_super_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="You don't have permission to update drafting entries. Required: 'templater_drafting_permission' with can_update=True"
+        )
     
     # Fetch drafting AND fab in one query using join
     result = await db.execute(
