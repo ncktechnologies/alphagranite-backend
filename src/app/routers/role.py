@@ -155,7 +155,7 @@ async def get_role(
 async def update_role(
     data: RoleUpdate,
     role_id: int = Path(..., ge=1),
-    current_user: User = Depends(get_current_user),  # Changed from PermissionChecker
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -175,15 +175,15 @@ async def update_role(
     - If updating action_menu_permissions, user must have can_create=True for "roles" action menu
     - If updating user_ids (assigning/removing members), user must have can_create=True for "roles" action menu
     """
-    from src.app.service.permission import PermissionService
     from src.app.utils.exceptions import error_response
+    from src.app.utils.permissions import has_permission
     
     # Check if user has update permission for roles
-    has_update = await PermissionService.check_permission(
+    has_update = await has_permission(
         db=db,
         user_id=current_user.id,
         action_menu_name="roles",
-        action="update"
+        permission_type="update"
     )
     
     if not has_update:
@@ -195,11 +195,11 @@ async def update_role(
     
     # If updating permissions or members, check for create permission
     if is_updating_permissions or is_updating_members:
-        has_create = await PermissionService.check_permission(
+        has_create = await has_permission(
             db=db,
             user_id=current_user.id,
             action_menu_name="roles",
-            action="create"
+            permission_type="create"
         )
         
         if not has_create:

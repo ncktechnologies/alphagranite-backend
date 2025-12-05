@@ -112,3 +112,63 @@ def PermissionChecker(resource: str, action: str):
         )
 
     return dependency
+
+
+async def has_permission(
+    db: AsyncSession,
+    user_id: int,
+    action_menu_name: str,
+    permission_type: str  # "create", "read", "update", "delete"
+) -> bool:
+    """
+    Check if a user has a specific permission for an action menu.
+    
+    Args:
+        db: Database session
+        user_id: ID of the user
+        action_menu_name: Name of the action menu (e.g., "roles", "users")
+        permission_type: Type of permission ("create", "read", "update", "delete")
+    
+    Returns:
+        bool: True if user has permission, False otherwise
+    """
+    from sqlalchemy import select, and_
+    from src.app.database.user import User
+    from src.app.database.role import Role
+    from src.app.database.user_role import UserRole
+    from src.app.database.role_permission import RolePermission
+    from src.app.database.permission import Permission
+    from src.app.database.action_menu import ActionMenu
+    
+    # Get user
+    user_result = await db.execute(select(User).where(User.id == user_id))
+    user = user_result.scalar_one_or_none()
+    
+    if not user:
+        return False
+    
+    # Super admin has all permissions
+    if user.is_super_admin:
+        return True
+    
+    # Check if user has the permission through their role
+    permission_column = f"can_{permission_type}"
+    
+    query = select(Permission).join(
+        RolePermission, RolePermission.permission_id == Permission.id
+    ).join(
+        UserRole, UserRole.role_id == RolePermission.role_id
+    ).join(
+        ActionMenu, RolePermission.action_menu_id == ActionMenu.id
+    ).where(
+        and_(
+            UserRole.user_id == user_id,
+            ActionMenu.name == action_menu_name,
+            getattr(Permission, permission_column) == True
+        )
+    )
+    
+    result = await db.execute(query)
+    permission = result.scalar_one_or_none()
+    
+    return permission is not None
