@@ -18,11 +18,12 @@ FAB_DEPENDENT_RESOURCES = {
 def PermissionChecker(resource: str, action: str):
     from src.app.utils.config import get_db
     from src.app.routers.auth import get_current_user
+    from src.app.database.user import User  # ✅ Import inside function
     
     async def dependency(
         db: AsyncSession = Depends(get_db),
-        current_user: "User" = Depends(get_current_user)
-    ) -> "User":
+        current_user: User = Depends(get_current_user)  
+    ) -> User:
         from src.app.database.permission import Permission
         from src.app.database.action_menu import ActionMenu
         from src.app.database.role_permission import RolePermission
