@@ -167,35 +167,51 @@ async def update_employee(
     Update employee details with optional profile image upload
     """
     
+    # Debug logging
+    print(f"[UPDATE ROUTER] Received update request for employee {employee_id}")
+    print(f"[UPDATE ROUTER] home_address: {home_address}")
+    print(f"[UPDATE ROUTER] profile_image: {profile_image}")
+    print(f"[UPDATE ROUTER] profile_image type: {type(profile_image)}")
+    if profile_image:
+        print(f"[UPDATE ROUTER] profile_image.filename: {profile_image.filename}")
+        print(f"[UPDATE ROUTER] profile_image.size: {profile_image.size if hasattr(profile_image, 'size') else 'N/A'}")
+    
     # Convert empty strings to None
-    dep_id = int(department_id) if department_id not in (None, "") else None
-    r_id = int(role_id) if role_id not in (None, "") else None
-   
+    dep_id = int(department_id) if department_id not in (None, "", "null") else None
+    r_id = int(role_id) if role_id not in (None, "", "null") else None
     
-    # Handle profile image upload if provided (BEFORE creating data object)
+    # Handle profile image upload if provided
     profile_image_id = None
-    if profile_image and  hasattr(profile_image, 'file'):
-        print(f"[UPDATE ROUTER] Uploading profile image: {profile_image.filename}")
-        file_data = await call_service(
-            FileService.upload_file,
-            db=db,
-            file=profile_image,
-            user_id=current_user.id
-        )
-        profile_image_id = file_data["id"]
-        print(f"[UPDATE ROUTER] Profile image uploaded with ID: {profile_image_id}")
+    if profile_image and profile_image.filename:  # Check for filename instead of file attribute
+        # Also check that the file is not empty
+        if profile_image.size > 0:
+            print(f"[UPDATE ROUTER] Uploading profile image: {profile_image.filename}, size: {profile_image.size}")
+            file_data = await call_service(
+                FileService.upload_file,
+                db=db,
+                file=profile_image,
+                user_id=current_user.id
+            )
+            profile_image_id = file_data["id"]
+            print(f"[UPDATE ROUTER] Profile image uploaded with ID: {profile_image_id}")
+        else:
+            print(f"[UPDATE ROUTER] Profile image file is empty, skipping upload")
     
+    # Create update data object
+    # Only include fields that are actually provided (not None or empty string)
     data = EmployeeUpdate(
-        first_name=first_name if first_name else None,
-        last_name=last_name if last_name else None,
-        email=email if email else None,
-        phone_number=phone_number if phone_number else None,
+        first_name=first_name if first_name not in (None, "", "null") else None,
+        last_name=last_name if last_name not in (None, "", "null") else None,
+        email=email if email not in (None, "", "null") else None,
+        phone_number=phone_number if phone_number not in (None, "", "null") else None,
         department_id=dep_id,
-        gender=gender if gender else None,
-        home_address=home_address if home_address else None,
+        gender=gender if gender not in (None, "", "null") else None,
+        home_address=home_address if home_address not in (None, "", "null") else None,
         profile_image_id=profile_image_id,
         role_id=r_id
     )
+    
+    print(f"[UPDATE ROUTER] EmployeeUpdate data: {data.model_dump(exclude_unset=True)}")
     
     # Call service using helper for error handling
     result = await call_service(
