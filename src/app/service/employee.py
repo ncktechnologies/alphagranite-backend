@@ -191,6 +191,7 @@ class EmployeeService:
             if not dept_result.scalars().first():
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Department does not exist")
         
+        # Update fields that are provided
         if data.first_name is not None:
             employee.first_name = data.first_name
         if data.last_name is not None:
@@ -201,6 +202,11 @@ class EmployeeService:
             employee.phone = data.phone_number
         if data.department_id is not None:
             employee.department = data.department_id
+        if data.gender is not None:
+            employee.gender = data.gender
+        if data.home_address is not None:  # ← ADD THIS LINE
+            employee.home_address = data.home_address
+            logger.info(f"[UPDATE] Setting home_address to: '{data.home_address}'")
         if data.role_id is not None:
             employee.role_id = data.role_id
             # Update the role assignment in user_roles table
@@ -234,7 +240,7 @@ class EmployeeService:
             except Exception:
                 # don't block the update if user_role insertion fails; log and continue
                 logger.exception(f"Failed to update UserRole for user {employee.id} role {data.role_id}")
-        
+    
         # Update profile_image_id if provided (use final_profile_image_id which prioritizes data object)
         if final_profile_image_id is not None:
             employee.profile_image_id = final_profile_image_id
@@ -242,11 +248,14 @@ class EmployeeService:
         
         employee.updated_at = datetime.now()
         
+        logger.info(f"[UPDATE] home_address before commit: '{employee.home_address}'")
+        
         try:
             db.add(employee)
             await db.commit()
             await db.refresh(employee)
             logger.info(f"[UPDATE] Employee after update: {employee}")
+            logger.info(f"[UPDATE] home_address after commit: '{employee.home_address}'")
             
             await save_audit_trail(
                 db=db,

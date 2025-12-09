@@ -151,13 +151,13 @@ async def get_employee(
 @employee_router.put("/{employee_id}")
 async def update_employee(
     employee_id: int = Path(..., ge=1),
-    first_name: str = Form(None),
-    last_name: str = Form(None),
-    email: str = Form(None),
-    phone_number: str = Form(None),
+    first_name: Optional[str] = Form(None),
+    last_name: Optional[str] = Form(None),
+    email: Optional[str] = Form(None),
+    phone_number: Optional[str] = Form(None),
     department_id: Optional[str] = Form(None),
-    gender: str = Form(None),
-    home_address: str = Form(None),
+    gender: Optional[str] = Form(None),
+    home_address: Optional[str] = Form(None),
     role_id: Optional[str] = Form(None),
     profile_image: UploadFile = File(None),
     current_user: User = Depends(PermissionChecker("employees", "update")),
@@ -167,13 +167,10 @@ async def update_employee(
     Update employee details with optional profile image upload
     """
     
-    # Debug logging - Enhanced
+    # Debug logging
     print(f"\n{'='*80}")
     print(f"[UPDATE ROUTER] Received update request for employee {employee_id}")
     print(f"[UPDATE ROUTER] Raw home_address: '{home_address}'")
-    print(f"[UPDATE ROUTER] home_address type: {type(home_address)}")
-    print(f"[UPDATE ROUTER] home_address length: {len(home_address) if home_address else 0}")
-    print(f"[UPDATE ROUTER] profile_image: {profile_image}")
     print(f"{'='*80}\n")
     
     # Convert empty strings to None
@@ -184,7 +181,7 @@ async def update_employee(
     profile_image_id = None
     if profile_image and profile_image.filename:
         if profile_image.size > 0:
-            print(f"[UPDATE ROUTER] Uploading profile image: {profile_image.filename}, size: {profile_image.size}")
+            print(f"[UPDATE ROUTER] Uploading profile image: {profile_image.filename}")
             file_data = await call_service(
                 FileService.upload_file,
                 db=db,
@@ -193,38 +190,37 @@ async def update_employee(
             )
             profile_image_id = file_data["id"]
             print(f"[UPDATE ROUTER] Profile image uploaded with ID: {profile_image_id}")
-        else:
-            print(f"[UPDATE ROUTER] Profile image file is empty, skipping upload")
     
-    # Process home_address - DETAILED DEBUG
-    processed_home_address = home_address if home_address not in (None, "", "null") else None
-    print(f"\n[UPDATE ROUTER] Home Address Processing:")
-    print(f"  - Original: '{home_address}'")
-    print(f"  - Processed: '{processed_home_address}'")
-    print(f"  - Is None check: {home_address is None}")
-    print(f"  - Is empty string: {home_address == ''}")
-    print(f"  - Is 'null' string: {home_address == 'null'}")
-    print(f"  - In exclusion list: {home_address in (None, '', 'null')}")
-    print(f"  - Will be set: {processed_home_address is not None}")
+    # Build update dict ONLY with fields that were actually provided
+    update_dict = {}
     
-    # Create update data object
-    data = EmployeeUpdate(
-        first_name=first_name if first_name not in (None, "", "null") else None,
-        last_name=last_name if last_name not in (None, "", "null") else None,
-        email=email if email not in (None, "", "null") else None,
-        phone_number=phone_number if phone_number not in (None, "", "null") else None,
-        department_id=dep_id,
-        gender=gender if gender not in (None, "", "null") else None,
-        home_address=processed_home_address,
-        profile_image_id=profile_image_id,
-        role_id=r_id
-    )
+    if first_name not in (None, "", "null"):
+        update_dict["first_name"] = first_name
+    if last_name not in (None, "", "null"):
+        update_dict["last_name"] = last_name
+    if email not in (None, "", "null"):
+        update_dict["email"] = email
+    if phone_number not in (None, "", "null"):
+        update_dict["phone_number"] = phone_number
+    if dep_id is not None:
+        update_dict["department_id"] = dep_id
+    if gender not in (None, "", "null"):
+        update_dict["gender"] = gender
+    if home_address not in (None, "", "null"):  # ← This is the key fix!
+        update_dict["home_address"] = home_address
+        print(f"[UPDATE ROUTER] Adding home_address to update: '{home_address}'")
+    if r_id is not None:
+        update_dict["role_id"] = r_id
+    if profile_image_id is not None:
+        update_dict["profile_image_id"] = profile_image_id
+    
+    # Create update data object using parse_obj to only set provided fields
+    data = EmployeeUpdate(**update_dict)
     
     print(f"\n[UPDATE ROUTER] EmployeeUpdate Schema:")
-    print(f"  - Full dump: {data.model_dump()}")
+    print(f"  - Update dict: {update_dict}")
     print(f"  - Exclude unset: {data.model_dump(exclude_unset=True)}")
-    print(f"  - home_address value: '{data.home_address}'")
-    print(f"  - home_address in model: {'home_address' in data.model_dump(exclude_unset=True)}")
+    print(f"  - home_address in data: '{data.home_address if hasattr(data, 'home_address') else 'NOT SET'}'")
     
     # Call service using helper for error handling
     print(f"\n[UPDATE ROUTER] Calling EmployeeService.update_employee...")
@@ -239,7 +235,8 @@ async def update_employee(
     
     print(f"\n[UPDATE ROUTER] Service returned:")
     print(f"  - Type: {type(result)}")
-    print(f"  - home_address in result: '{result.get('home_address') if isinstance(result, dict) else 'N/A'}'")
+    if hasattr(result, 'home_address'):
+        print(f"  - home_address: '{result.home_address}'")
     
     # Enrich employee with profile image URL
     enriched_employee = await enrich_employee_with_profile_image(db, result)
