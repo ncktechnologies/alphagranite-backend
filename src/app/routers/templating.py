@@ -307,6 +307,7 @@ async def mark_templating_received(
 ):
     """
     Mark templating as received, which automatically moves the fab to predraft review state
+    and sets template_received to True
     """
     
     result = await db.execute(select(Templating).where(Templating.id == templating_id))
@@ -326,6 +327,9 @@ async def mark_templating_received(
     templating.status_id = 2
     templating.updated_at = datetime.now()
     templating.updated_by = current_user.id
+    
+    # ✅ Set template_received to True
+    fab.template_received = True
     
     # Move fab to predraft review stage and set next stage to drafting
     fab.current_stage = "pre_draft_review"

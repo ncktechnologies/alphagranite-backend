@@ -316,10 +316,13 @@ async def complete_final_programming(
         fab.drafter_assigned_by = current_user.id
         fab.drafter_assigned_at = datetime.now()
     
-    # Move to next stage if completed
-    if completion_data.final_programming_complete:
-        fab.current_stage = "wj_programming"
-        fab.next_stage = "cut_list"
+    # ❌ REMOVED: Do NOT change current_stage
+    # if completion_data.final_programming_complete:
+    #     fab.current_stage = "wj_programming"
+    #     fab.next_stage = "cut_list"
+    
+    # ✅ Keep current_stage at "cut_list" (don't change it)
+    # The stage remains "cut_list" after final programming is complete
     
     # Add completion notes
     note_text = f"Final programming {'completed' if completion_data.final_programming_complete else 'updated'}"
@@ -345,7 +348,7 @@ async def complete_final_programming(
             "fab_id": fab.id,
             "final_programming_complete": fab.final_programming_complete,
             "wj_time_minutes": fab.wj_time_minutes,
-            "current_stage": fab.current_stage,
+            "current_stage": fab.current_stage,  # Remains "cut_list"
             "next_stage": fab.next_stage
         }
     }
