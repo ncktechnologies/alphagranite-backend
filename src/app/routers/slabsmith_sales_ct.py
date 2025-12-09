@@ -238,7 +238,7 @@ async def create_sales_ct(
         sales_ct = SalesCT(
             fab_id=sales_ct_data.fab_id,
             is_revision_needed=sales_ct_data.is_revision_needed,
-            revision_reason=sales_ct_data.revision_reason,
+            revision_reason=sales_ct_data.revision_reason,  # ✅ Now this works
             is_revision_completed=None,
             no_of_revisions=None,
             current_revision_count=None,
@@ -263,7 +263,16 @@ async def create_sales_ct(
         await db.rollback()
         raise error_response("Sales CT already exists for this FAB", 409)
     
-    return success_response(sales_ct, "Sales CT created successfully")
+    # Convert to response format with datetime serialization
+    from datetime import datetime as dt, date
+    
+    sales_ct_dict = {
+        k: (v.isoformat() if isinstance(v, (dt, date)) else v)
+        for k, v in sales_ct.__dict__.items()
+        if not k.startswith('_')
+    }
+    
+    return success_response(sales_ct_dict, "Sales CT created successfully")
 
 
 @router.put("/sales-ct/{sales_ct_id}/review-no", response_model=SuccessResponse[None])

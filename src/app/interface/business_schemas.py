@@ -615,8 +615,12 @@ class SlabSmithResponse(BaseModel):
 
 # Sales CT / Review Schemas
 class SalesCTCreate(BaseModel):
-    fab_id: int = Field(..., gt=0)
-    is_revision_needed: bool = Field(default=False)
+    fab_id: int = Field(..., description="FAB ID")
+    is_revision_needed: bool = Field(..., description="Whether revision is needed")
+    revision_reason: Optional[str] = Field(None, description="Reason for revision if needed")  # ✅ Add this field
+    
+    class Config:
+        from_attributes = True
 
 
 class SalesCTUpdate(BaseModel):
@@ -644,14 +648,23 @@ class SalesCTResponse(BaseModel):
     id: int
     fab_id: int
     is_revision_needed: bool
-    is_revision_completed: Optional[bool]
-    is_completed: bool
-    no_of_revisions: Optional[str]
-    current_revision_count: Optional[str]
+    revision_reason: Optional[str] = None
+    is_revision_completed: Optional[bool] = None
+    no_of_revisions: Optional[str] = None
+    current_revision_count: Optional[str] = None
     status_id: int
-    created_at: datetime
-    updated_at: Optional[datetime]
-    updated_by: Optional[int]
+    slab_smith_type: Optional[str] = None
+    drafter_id: Optional[int] = None
+    start_date: Optional[str] = None  # ISO format string
+    end_date: Optional[str] = None  # ISO format string
+    total_sqft_completed: Optional[float] = None
+    file_ids: Optional[str] = None
+    created_at: Optional[str] = None  # ISO format string
+    updated_at: Optional[str] = None  # ISO format string
+    updated_by: Optional[int] = None
+    
+    class Config:
+        from_attributes = True
 
 
 # File Management Schemas
