@@ -86,8 +86,8 @@ async def get_fab_notes_list(
             "note": fab_note.note,
             "created_by": fab_note.created_by,
             "created_by_name": f"{creator_first} {creator_last}" if creator_first else None,
-            "created_at": fab_note.created_at,
-            "updated_at": fab_note.updated_at,
+            "created_at": fab_note.created_at.isoformat() if fab_note.created_at else None,  # ✅ Convert to string
+            "updated_at": fab_note.updated_at.isoformat() if fab_note.updated_at else None,  # ✅ Convert to string
             "updated_by": fab_note.updated_by,
             "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
         }
@@ -136,8 +136,8 @@ async def create_fab_note(
         "note": fab_note.note,
         "created_by": fab_note.created_by,
         "created_by_name": f"{creator.first_name} {creator.last_name}" if creator else None,
-        "created_at": fab_note.created_at,
-        "updated_at": fab_note.updated_at,
+        "created_at": fab_note.created_at.isoformat() if fab_note.created_at else None,  # ✅ Convert to string
+        "updated_at": fab_note.updated_at.isoformat() if fab_note.updated_at else None,  # ✅ Convert to string
         "updated_by": fab_note.updated_by,
         "updated_by_name": None
     }
@@ -184,8 +184,8 @@ async def update_fab_note(
         "note": fab_note.note,
         "created_by": fab_note.created_by,
         "created_by_name": f"{creator.first_name} {creator.last_name}" if creator else None,
-        "created_at": fab_note.created_at,
-        "updated_at": fab_note.updated_at,
+        "created_at": fab_note.created_at.isoformat() if fab_note.created_at else None,  # ✅ Convert to string
+        "updated_at": fab_note.updated_at.isoformat() if fab_note.updated_at else None,  # ✅ Convert to string
         "updated_by": fab_note.updated_by,
         "updated_by_name": f"{updater.first_name} {updater.last_name}" if updater else None
     }

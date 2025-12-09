@@ -48,27 +48,38 @@ async def schedule_templating(
     if not tech_result.scalar_one_or_none():
         raise error_response("Technician not found", 404)
     
-    # Check if templating already scheduled for this fab
-    existing = await db.execute(
+    # Check if templating already exists for this fab
+    existing_result = await db.execute(
         select(Templating).where(Templating.fab_id == templating_data.fab_id)
     )
-    if existing.scalar_one_or_none():
+    existing_templating = existing_result.scalar_one_or_none()
+
+    # If templating exists and is already scheduled, return error
+    if existing_templating and existing_templating.is_templating_schedule:
         raise error_response("Templating already scheduled for this fab", 400)
-    
-    # Create templating schedule
-    templating = Templating(
-        fab_id=templating_data.fab_id,
-        technician_id=templating_data.technician_id,
-        schedule_start_date=templating_data.schedule_start_date,
-        schedule_due_date=templating_data.schedule_due_date,
-        total_sqft=templating_data.total_sqft,
-        notes=templating_data.notes,
-        is_templating_schedule=True,
-        status_id=1,  # Active status
-        created_at=datetime.now(),
-        updated_at=None,
-        updated_by=None
-    )
+
+    # If templating exists but was unscheduled, update it instead of creating new
+    if existing_templating:
+        # Re-schedule the existing templating
+        existing_templating.is_templating_schedule = True  # ✅ Set back to True
+        # Update other fields...
+        templating = existing_templating
+    else:
+        # Create new templating schedule
+        templating = Templating(
+            fab_id=templating_data.fab_id,
+            technician_id=templating_data.technician_id,
+            schedule_start_date=templating_data.schedule_start_date,
+            schedule_due_date=templating_data.schedule_due_date,
+            total_sqft=templating_data.total_sqft,
+            notes=templating_data.notes,
+            is_templating_schedule=True,
+            status_id=1,  # Active status
+            created_at=datetime.now(),
+            updated_at=None,
+            updated_by=None
+        )
+        db.add(templating)
     
     # Update fab: move to templating stage and set next stage to pre_draft_review
     fab.current_stage = "templating"
@@ -76,7 +87,6 @@ async def schedule_templating(
     fab.updated_at = datetime.now()
     fab.updated_by = current_user.id
     
-    db.add(templating)
     await db.commit()
     await db.refresh(templating)
     
