@@ -27,6 +27,18 @@ from src.app.utils.helpers import error_response, success_response
 router = APIRouter()
 
 
+# ============ HELPER FUNCTIONS ============
+
+def serialize_datetime_fields(obj) -> dict:
+    """Convert SQLAlchemy model to dict with datetime fields as ISO strings"""
+    from datetime import datetime as dt, date
+    return {
+        k: (v.isoformat() if isinstance(v, (dt, date)) else v)
+        for k, v in obj.__dict__.items()
+        if not k.startswith('_')
+    }
+
+
 # ============ SLAB SMITH ENDPOINTS ============
 
 @router.post("/slabsmith", response_model=SuccessResponse[SlabSmithResponse], status_code=201)
@@ -66,7 +78,7 @@ async def create_slabsmith(
     await db.commit()
     await db.refresh(slabsmith)
     
-    return success_response(slabsmith, "Slab smith created successfully")
+    return success_response(serialize_datetime_fields(slabsmith), "Slab smith created successfully")
 
 
 @router.put("/slabsmith/{slabsmith_id}", response_model=SuccessResponse[SlabSmithResponse])
@@ -95,7 +107,7 @@ async def update_slabsmith(
     await db.commit()
     await db.refresh(slabsmith)
     
-    return success_response(slabsmith, "Slab smith updated successfully")
+    return success_response(serialize_datetime_fields(slabsmith), "Slab smith updated successfully")
 
 
 @router.post("/slabsmith/{slabsmith_id}/complete", response_model=SuccessResponse[None])
@@ -208,7 +220,7 @@ async def get_slabsmith_by_fab(
     if not slabsmith:
         raise error_response("Slab smith not found for this fab", 404)
     
-    return success_response(slabsmith, "Slab smith fetched successfully")
+    return success_response(serialize_datetime_fields(slabsmith), "Slab smith fetched successfully")
 
 
 # ============ SALES CT / REVIEW ENDPOINTS ============
@@ -238,7 +250,7 @@ async def create_sales_ct(
         sales_ct = SalesCT(
             fab_id=sales_ct_data.fab_id,
             is_revision_needed=sales_ct_data.is_revision_needed,
-            revision_reason=sales_ct_data.revision_reason,  # ✅ Now this works
+            revision_reason=sales_ct_data.revision_reason,
             is_revision_completed=None,
             no_of_revisions=None,
             current_revision_count=None,
@@ -263,16 +275,7 @@ async def create_sales_ct(
         await db.rollback()
         raise error_response("Sales CT already exists for this FAB", 409)
     
-    # Convert to response format with datetime serialization
-    from datetime import datetime as dt, date
-    
-    sales_ct_dict = {
-        k: (v.isoformat() if isinstance(v, (dt, date)) else v)
-        for k, v in sales_ct.__dict__.items()
-        if not k.startswith('_')
-    }
-    
-    return success_response(sales_ct_dict, "Sales CT created successfully")
+    return success_response(serialize_datetime_fields(sales_ct), "Sales CT created successfully")
 
 
 @router.put("/sales-ct/{sales_ct_id}/review-no", response_model=SuccessResponse[None])
@@ -403,4 +406,4 @@ async def get_sales_ct_by_fab(
     if not sales_ct:
         raise error_response("Sales CT not found for this fab", 404)
     
-    return success_response(sales_ct, "Sales CT fetched successfully")
+    return success_response(serialize_datetime_fields(sales_ct), "Sales CT fetched successfully")
