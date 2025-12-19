@@ -5,7 +5,7 @@ from src.app.middleware.request_logger import RequestLoggerMiddleware
 
 
 import os
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Request
 # New routers for business logic
 from src.app.routers import job_extras
 from src.app.routers import workstation
@@ -90,6 +90,16 @@ app.add_middleware(RequestLoggerMiddleware)
 
 # Add JWT authentication middleware
 app.add_middleware(JWTAuthMiddleware)
+
+
+@app.middleware("http")
+async def authentication_middleware(request: Request, call_next):
+    # Skip authentication for public paths
+    if request.url.path.startswith("/api/v1/files/download"):
+        return await call_next(request)
+    
+    # Apply authentication for other routes
+    return await call_next(request)
 
 
 def custom_openapi():
@@ -183,6 +193,10 @@ app.include_router(shop_planning_section.router, prefix="/api/v1", tags=["Shop P
 app.include_router(operator_workflow.router, prefix="/api/v1", tags=["Operator Workflows"])
 
 # Register public routes WITHOUT authentication
-app.include_router(public_files.router, prefix="/api/v1", tags=["public"])
+app.include_router(
+    public_files.router, 
+    prefix="/api/v1", 
+    tags=["public"]
+)
 
 
