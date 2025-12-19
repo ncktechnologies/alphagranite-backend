@@ -643,9 +643,10 @@ async def delete_file_from_drafting(
 
 @router.get("/files/download/{filename}")
 async def download_file(
-    filename: str
+    filename: str,
+    db: AsyncSession = Depends(get_db)
 ):
-    """Download a file by filename - Public endpoint"""
+    """Download a file by filename"""
     from fastapi.responses import FileResponse
     
     file_path = UPLOAD_DIR / filename
