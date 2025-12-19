@@ -119,7 +119,7 @@ class PreDraftReview(SQLModel, table=True):
     __tablename__ = "pre_draft_reviews"
     id: Optional[int] = Field(default=None, primary_key=True)
     fab_id: int = Field()
-    draft_notes: int = Field()
+    draft_notes: str = Field()
     is_redrafting_needed: int = Field()
     is_completed: bool = Field(default=False)
     created_at: datetime = Field()
