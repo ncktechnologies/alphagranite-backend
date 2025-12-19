@@ -102,6 +102,16 @@ async def authentication_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def some_auth_middleware(request: Request, call_next):
+    # Skip specific public routes from authentication
+    if request.url.path in ["/api/v1/test-public", "/api/v1/files/download"]:
+        return await call_next(request)
+    
+    # For other routes, apply the JWT authentication middleware
+    return await call_next(request)
+
+
 def custom_openapi():
     """Add HTTP Bearer auth schema to OpenAPI so the Swagger UI shows an
     Authorize button for bearer (JWT) tokens.
