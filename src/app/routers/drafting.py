@@ -320,25 +320,18 @@ async def create_pre_draft_review(
     if not fab:
         raise error_response("Fab not found", 404)
     
-    # Handle draft_notes - convert to int or set to 0 if it's a text note
-    # If draft_notes is numeric string, convert it; otherwise store 0
-    draft_notes_value = 0
+    # Handle draft_notes - keep as string or convert to empty string
+    draft_notes_value = ""
     if review_data.draft_notes:
-        if isinstance(review_data.draft_notes, int):
+        if isinstance(review_data.draft_notes, str):
             draft_notes_value = review_data.draft_notes
-        elif isinstance(review_data.draft_notes, str):
-            # Try to convert to int, if it fails, just use 0
-            try:
-                draft_notes_value = int(review_data.draft_notes)
-            except ValueError:
-                # If draft_notes contains text, you might want to store it elsewhere
-                # For now, we'll just set it to 0
-                draft_notes_value = 0
+        elif isinstance(review_data.draft_notes, int):
+            draft_notes_value = str(review_data.draft_notes)
     
     # Create pre-draft review
     review = PreDraftReview(
         fab_id=review_data.fab_id,
-        draft_notes=draft_notes_value,
+        draft_notes=draft_notes_value,  # Now stores as string
         is_redrafting_needed=1 if not review_data.is_completed else 0,
         is_completed=review_data.is_completed if hasattr(review_data, 'is_completed') else False,
         status_id=1,
@@ -400,7 +393,7 @@ async def mark_predraft_review_completed(
         fab.updated_by = current_user.id
     
     if notes:
-        review.draft_notes = int(notes) if notes.isdigit() else 0  # Model expects int
+        review.draft_notes = notes  # Store as string
     
     review.updated_at = datetime.now()
     review.updated_by = current_user.id
@@ -430,7 +423,7 @@ async def set_predraft_to_redraft(
     
     # Mark as needs redrafting
     review.is_redrafting_needed = 1
-    review.draft_notes = int(redraft_notes) if redraft_notes.isdigit() else 0
+    review.draft_notes = redraft_notes  # Store as string
     review.updated_at = datetime.now()
     review.updated_by = current_user.id
     
