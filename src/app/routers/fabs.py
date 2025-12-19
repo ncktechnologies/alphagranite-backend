@@ -423,15 +423,20 @@ async def get_fabs(
         query = query.where(Fab.id.in_(templating_fab_ids))
     
     # Apply pagination with conditional ordering
-    # If filtering by templating stage, order by schedule_start_date (nulls last), then by created_at
+    # If filtering by templating stage, order by schedule_start_date (nulls last), then by updated_at
     if current_stage == "templating":
         query = query.offset(skip).limit(limit).order_by(
             latest_templating.c.schedule_start_date.asc().nullslast(),
-            Fab.created_at.desc()
+            Fab.updated_at.asc().nullsfirst(),  # Older updates first, null (never updated) first
+            Fab.created_at.asc()  # Tie-breaker: older FABs first
         )
     else:
-        # Default ordering for other stages
-        query = query.offset(skip).limit(limit).order_by(Fab.created_at.desc())
+        # Default ordering: Sort by updated_at ascending (older updates first)
+        # FABs that have never been updated (updated_at IS NULL) appear first
+        query = query.offset(skip).limit(limit).order_by(
+            Fab.updated_at.asc().nullsfirst(),  # Older updates first, null first
+            Fab.created_at.asc()  # Tie-breaker: older FABs first
+        )
     
     result = await db.execute(query)
     rows = result.all()
