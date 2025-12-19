@@ -41,7 +41,7 @@ FAB_STAGES = [
     "cut_list",                 # Stage 8: Cut List
     "wj_scheduling",            # Stage 9: WJ Scheduling
     "resurface_scheduling",     # Stage 10: Resurface Scheduling
-    "revisions",                # Stage 11: Revisions
+    "revision",                # Stage 11: Revisions
     "cost_of_stone",            # Stage 12: Cost of Stone
     "install_scheduling",       # Stage 13: Install Scheduling
     "install_completion"        # Stage 14: Install Completion (final stage)
@@ -249,21 +249,23 @@ async def get_fabs(
     next_stage: Optional[str] = Query(None, description="Filter by next stage"),
     schedule_start_date: Optional[date] = Query(None, description="Filter FABs scheduled on or after this date (YYYY-MM-DD)"),
     schedule_due_date: Optional[date] = Query(None, description="Filter FABs scheduled on or before this date (YYYY-MM-DD)"),
-    date_filter: Optional[str] = Query(None, description="Predefined date filter: today, this_week, this_month, next_week, next_month, scheduled, unscheduled"),
+    schedule_status: Optional[str] = Query(None, description="Filter by schedule status: scheduled or unscheduled"),
+    date_filter: Optional[str] = Query(None, description="Predefined date filter: today, this_week, this_month, next_week, next_month"),
+    search: Optional[str] = Query(None, description="Search by FAB ID, Job Name, or Job Number"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Get list of fabs with optional filtering and pagination"""
     
     from sqlalchemy.orm import aliased
-    from sqlalchemy import and_
+    from sqlalchemy import and_, or_
     TechnicianUser = aliased(User)
     DrafterUser = aliased(User)
     DrafterAssignedByUser = aliased(User)
     
     # First, get FAB IDs that match the templating date filters (if applicable)
     templating_fab_ids = None
-    if schedule_start_date or schedule_due_date or date_filter:
+    if schedule_start_date or schedule_due_date or date_filter or schedule_status:
         templating_query = select(Templating.fab_id).distinct()
         
         # Apply custom date range filters
@@ -271,6 +273,13 @@ async def get_fabs(
             templating_query = templating_query.where(Templating.schedule_start_date >= schedule_start_date)
         if schedule_due_date is not None:
             templating_query = templating_query.where(Templating.schedule_due_date <= schedule_due_date)
+        
+        # Apply schedule status filter (separate from date_filter)
+        if schedule_status:
+            if schedule_status == "scheduled":
+                templating_query = templating_query.where(Templating.schedule_start_date.isnot(None))
+            elif schedule_status == "unscheduled":
+                templating_query = templating_query.where(Templating.schedule_start_date.is_(None))
         
         # Apply predefined date filters
         if date_filter:
@@ -318,17 +327,13 @@ async def get_fabs(
                     Templating.schedule_start_date >= start_of_next_month,
                     Templating.schedule_start_date <= end_of_next_month
                 )
-            elif date_filter == "scheduled":
-                templating_query = templating_query.where(Templating.schedule_start_date.isnot(None))
-            elif date_filter == "unscheduled":
-                templating_query = templating_query.where(Templating.schedule_start_date.is_(None))
         
         # Execute to get matching FAB IDs
         templating_result = await db.execute(templating_query)
         templating_fab_ids = [row[0] for row in templating_result.all()]
         
-        # If no FABs match the date filter, return empty result
-        if not templating_fab_ids and date_filter != "unscheduled":
+        # If no FABs match the filters, return empty result (except for unscheduled)
+        if not templating_fab_ids and schedule_status != "unscheduled":
             return {
                 "success": True,
                 "message": "FABs retrieved successfully",
@@ -401,6 +406,17 @@ async def get_fabs(
         query = query.where(Fab.current_stage == current_stage)
     if next_stage:
         query = query.where(Fab.next_stage == next_stage)
+    
+    # Apply search filter (FAB ID, Job Name, or Job Number)
+    if search:
+        search_term = f"%{search}%"
+        query = query.where(
+            or_(
+                sa.cast(Fab.id, sa.String).ilike(search_term),  # Search by FAB ID
+                BusinessJob.job_name.ilike(search_term),  # Search by Job Name
+                BusinessJob.job_number.ilike(search_term)  # Search by Job Number
+            )
+        )
     
     # Apply templating date filter if we have matching FAB IDs
     if templating_fab_ids is not None:
@@ -504,6 +520,7 @@ async def get_fabs(
     
     # Count total FABs with same filters (without pagination)
     count_query = select(func.count(Fab.id)).select_from(Fab)
+    count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
     count_query = count_query.outerjoin(latest_templating, sa.literal(True))
     
     if job_id is not None:
@@ -519,6 +536,16 @@ async def get_fabs(
     if next_stage:
         count_query = count_query.where(Fab.next_stage == next_stage)
     
+    # Apply search filter to count query
+    if search:
+        search_term = f"%{search}%"
+        count_query = count_query.where(
+            or_(
+                sa.cast(Fab.id, sa.String).ilike(search_term),
+                BusinessJob.job_name.ilike(search_term),
+                BusinessJob.job_number.ilike(search_term)
+            )
+        )
     # Apply predefined date filters to count query
     if date_filter:
         today = date.today()
@@ -565,11 +592,6 @@ async def get_fabs(
                 latest_templating.c.schedule_start_date >= start_of_next_month,
                 latest_templating.c.schedule_start_date <= end_of_next_month
             )
-        elif date_filter == "scheduled":
-            count_query = count_query.where(latest_templating.c.schedule_start_date.isnot(None))
-        elif date_filter == "unscheduled":
-            count_query = count_query.where(latest_templating.c.schedule_start_date.is_(None))
-    
     if schedule_start_date is not None:
         count_query = count_query.where(latest_templating.c.schedule_start_date >= schedule_start_date)
     if schedule_due_date is not None:
@@ -591,6 +613,7 @@ async def get_fabs(
             func.sum(Fab.no_of_pieces).label("no_of_pieces")
         ).select_from(Fab)
         
+        totals_query = totals_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
         totals_query = totals_query.outerjoin(latest_templating, sa.literal(True))
         
         # Apply same filters as count query
@@ -605,6 +628,17 @@ async def get_fabs(
         totals_query = totals_query.where(Fab.current_stage == current_stage)
         if next_stage:
             totals_query = totals_query.where(Fab.next_stage == next_stage)
+        
+        # Apply search filter to totals query
+        if search:
+            search_term = f"%{search}%"
+            totals_query = totals_query.where(
+                or_(
+                    sa.cast(Fab.id, sa.String).ilike(search_term),
+                    BusinessJob.job_name.ilike(search_term),
+                    BusinessJob.job_number.ilike(search_term)
+                )
+            )
         
         # Apply predefined date filters to totals query
         if date_filter:
@@ -652,10 +686,6 @@ async def get_fabs(
                     latest_templating.c.schedule_start_date >= start_of_next_month,
                     latest_templating.c.schedule_start_date <= end_of_next_month
                 )
-            elif date_filter == "scheduled":
-                totals_query = totals_query.where(latest_templating.c.schedule_start_date.isnot(None))
-            elif date_filter == "unscheduled":
-                totals_query = totals_query.where(latest_templating.c.schedule_start_date.is_(None))
         
         if schedule_start_date is not None:
             totals_query = totals_query.where(latest_templating.c.schedule_start_date >= schedule_start_date)
@@ -1789,7 +1819,6 @@ async def get_sales_ct_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
                     "file_size": file.file_size,
                     "created_at": file.created_at.isoformat() if file.created_at else None
                 })
-    
     sales_ct_dict = {
         "id": sales_ct.id,
         "fab_id": sales_ct.fab_id,

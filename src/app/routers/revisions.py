@@ -54,7 +54,7 @@ async def create_revision(
     )
     
     # Update fab stage
-    fab.current_stage = "revisions"
+    fab.current_stage = "revision"
     fab.updated_at = datetime.now()
     fab.updated_by = current_user.id
     
