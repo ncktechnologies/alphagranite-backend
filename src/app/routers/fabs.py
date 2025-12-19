@@ -255,12 +255,90 @@ async def get_fabs(
 ):
     """Get list of fabs with optional filtering and pagination"""
     
-    # Use aliased User for sales_person, technician, drafter, and drafter_assigned_by to avoid conflicts
     from sqlalchemy.orm import aliased
     from sqlalchemy import and_
     TechnicianUser = aliased(User)
     DrafterUser = aliased(User)
     DrafterAssignedByUser = aliased(User)
+    
+    # First, get FAB IDs that match the templating date filters (if applicable)
+    templating_fab_ids = None
+    if schedule_start_date or schedule_due_date or date_filter:
+        templating_query = select(Templating.fab_id).distinct()
+        
+        # Apply custom date range filters
+        if schedule_start_date is not None:
+            templating_query = templating_query.where(Templating.schedule_start_date >= schedule_start_date)
+        if schedule_due_date is not None:
+            templating_query = templating_query.where(Templating.schedule_due_date <= schedule_due_date)
+        
+        # Apply predefined date filters
+        if date_filter:
+            today = date.today()
+            
+            if date_filter == "today":
+                templating_query = templating_query.where(Templating.schedule_start_date == today)
+            elif date_filter == "this_week":
+                start_of_week = today - timedelta(days=today.weekday())
+                end_of_week = start_of_week + timedelta(days=6)
+                templating_query = templating_query.where(
+                    Templating.schedule_start_date >= start_of_week,
+                    Templating.schedule_start_date <= end_of_week
+                )
+            elif date_filter == "this_month":
+                start_of_month = today.replace(day=1)
+                if today.month == 12:
+                    end_of_month = today.replace(day=31)
+                else:
+                    next_month = today.replace(month=today.month + 1, day=1)
+                    end_of_month = next_month - timedelta(days=1)
+                templating_query = templating_query.where(
+                    Templating.schedule_start_date >= start_of_month,
+                    Templating.schedule_start_date <= end_of_month
+                )
+            elif date_filter == "next_week":
+                start_of_next_week = today + timedelta(days=(7 - today.weekday()))
+                end_of_next_week = start_of_next_week + timedelta(days=6)
+                templating_query = templating_query.where(
+                    Templating.schedule_start_date >= start_of_next_week,
+                    Templating.schedule_start_date <= end_of_next_week
+                )
+            elif date_filter == "next_month":
+                if today.month == 12:
+                    start_of_next_month = date(today.year + 1, 1, 1)
+                    end_of_next_month = date(today.year + 1, 1, 31)
+                else:
+                    start_of_next_month = date(today.year, today.month + 1, 1)
+                    if today.month == 11:
+                        end_of_next_month = date(today.year, 12, 31)
+                    else:
+                        following_month = date(today.year, today.month + 2, 1)
+                        end_of_next_month = following_month - timedelta(days=1)
+                templating_query = templating_query.where(
+                    Templating.schedule_start_date >= start_of_next_month,
+                    Templating.schedule_start_date <= end_of_next_month
+                )
+            elif date_filter == "scheduled":
+                templating_query = templating_query.where(Templating.schedule_start_date.isnot(None))
+            elif date_filter == "unscheduled":
+                templating_query = templating_query.where(Templating.schedule_start_date.is_(None))
+        
+        # Execute to get matching FAB IDs
+        templating_result = await db.execute(templating_query)
+        templating_fab_ids = [row[0] for row in templating_result.all()]
+        
+        # If no FABs match the date filter, return empty result
+        if not templating_fab_ids and date_filter != "unscheduled":
+            return {
+                "success": True,
+                "message": "FABs retrieved successfully",
+                "data": {
+                    "total": 0,
+                    "page": 1,
+                    "per_page": limit,
+                    "data": []
+                }
+            }
     
     # Subquery to get the latest templating record for each FAB
     latest_templating = (
@@ -285,7 +363,7 @@ async def get_fabs(
         latest_templating.c.notes.label("templating_notes"),
         TechnicianUser.first_name.label("technician_first_name"),
         TechnicianUser.last_name.label("technician_last_name"),
-        BusinessJob,  # Include full BusinessJob object
+        BusinessJob,
         Account.name.label("account_name"),
         Account.account_number.label("account_number"),
         Account.contact_person.label("account_contact_person"),
@@ -324,74 +402,9 @@ async def get_fabs(
     if next_stage:
         query = query.where(Fab.next_stage == next_stage)
     
-    # Apply predefined date filters
-    if date_filter:
-        today = date.today()
-        
-        if date_filter == "today":
-            query = query.where(latest_templating.c.schedule_start_date == today)
-        
-        elif date_filter == "this_week":
-            # Get start of week (Monday) and end of week (Sunday)
-            start_of_week = today - timedelta(days=today.weekday())
-            end_of_week = start_of_week + timedelta(days=6)
-            query = query.where(
-                latest_templating.c.schedule_start_date >= start_of_week,
-                latest_templating.c.schedule_start_date <= end_of_week
-            )
-        
-        elif date_filter == "this_month":
-            # Get first day and last day of current month
-            start_of_month = today.replace(day=1)
-            if today.month == 12:
-                end_of_month = today.replace(day=31)
-            else:
-                next_month = today.replace(month=today.month + 1, day=1)
-                end_of_month = next_month - timedelta(days=1)
-            query = query.where(
-                latest_templating.c.schedule_start_date >= start_of_month,
-                latest_templating.c.schedule_start_date <= end_of_month
-            )
-        
-        elif date_filter == "next_week":
-            # Get start of next week (next Monday) and end of next week (next Sunday)
-            start_of_next_week = today + timedelta(days=(7 - today.weekday()))
-            end_of_next_week = start_of_next_week + timedelta(days=6)
-            query = query.where(
-                latest_templating.c.schedule_start_date >= start_of_next_week,
-                latest_templating.c.schedule_start_date <= end_of_next_week
-            )
-        
-        elif date_filter == "next_month":
-            # Get first day and last day of next month
-            if today.month == 12:
-                start_of_next_month = date(today.year + 1, 1, 1)
-                end_of_next_month = date(today.year + 1, 1, 31)
-            else:
-                start_of_next_month = date(today.year, today.month + 1, 1)
-                if today.month == 11:
-                    end_of_next_month = date(today.year, 12, 31)
-                else:
-                    following_month = date(today.year, today.month + 2, 1)
-                    end_of_next_month = following_month - timedelta(days=1)
-            query = query.where(
-                latest_templating.c.schedule_start_date >= start_of_next_month,
-                latest_templating.c.schedule_start_date <= end_of_next_month
-            )
-        
-        elif date_filter == "scheduled":
-            # Return FABs that have a schedule_start_date
-            query = query.where(latest_templating.c.schedule_start_date.isnot(None))
-        
-        elif date_filter == "unscheduled":
-            # Return FABs with no schedule_start_date
-            query = query.where(latest_templating.c.schedule_start_date.is_(None))
-    
-    # Apply custom date range filters (if provided, override date_filter)
-    if schedule_start_date is not None:
-        query = query.where(latest_templating.c.schedule_start_date >= schedule_start_date)
-    if schedule_due_date is not None:
-        query = query.where(latest_templating.c.schedule_due_date <= schedule_due_date)
+    # Apply templating date filter if we have matching FAB IDs
+    if templating_fab_ids is not None:
+        query = query.where(Fab.id.in_(templating_fab_ids))
     
     # Apply pagination
     query = query.offset(skip).limit(limit).order_by(Fab.created_at.desc())
