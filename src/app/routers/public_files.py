@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 from fastapi import APIRouter
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from src.app.utils.helpers import error_response
 
 router = APIRouter()
@@ -13,6 +13,22 @@ UPLOAD_DIRS = [
     Path("uploads/finalprogramming"),
     Path("uploads"),  # Generic uploads folder
 ]
+
+@router.get("/test-public")
+async def test_public_route():
+    """Test endpoint to verify public access without authentication"""
+    return JSONResponse(
+        status_code=200,
+        content={
+            "success": True,
+            "message": "Public route is working! No authentication required.",
+            "data": {
+                "authenticated": False,
+                "timestamp": str(os.times()),
+                "upload_dirs": [str(d) for d in UPLOAD_DIRS]
+            }
+        }
+    )
 
 @router.get("/files/download/{filename}")
 async def download_file(filename: str):
