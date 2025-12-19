@@ -6,13 +6,9 @@ from src.app.utils.helpers import error_response
 
 router = APIRouter()
 
-# Define multiple possible upload directories
-UPLOAD_DIRS = [
-    Path("uploads/drafting"),
-    Path("uploads/slabsmith"),
-    Path("uploads/finalprogramming"),
-    Path("uploads"),  # Generic uploads folder
-]
+# Get the project root directory
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+UPLOAD_DIR = PROJECT_ROOT / "static" / "uploads"
 
 @router.get("/test-public")
 async def test_public_route():
@@ -24,45 +20,23 @@ async def test_public_route():
             "message": "Public route is working! No authentication required.",
             "data": {
                 "authenticated": False,
-                "timestamp": str(os.times()),
-                "upload_dirs": [str(d) for d in UPLOAD_DIRS]
+                "upload_dir": str(UPLOAD_DIR),
+                "upload_dir_exists": UPLOAD_DIR.exists()
             }
         }
     )
 
-# @router.get("/files/download/{filename}")
-# async def download_file(filename: str):
-#     """Public endpoint to download files without authentication"""
+@router.get("/files/download/{filename}")
+async def download_file(filename: str):
+    """Public endpoint to download files without authentication"""
     
-#     # Search for file in all possible directories
-#     for upload_dir in UPLOAD_DIRS:
-#         file_path = upload_dir / filename
-#         if os.path.exists(file_path):
-#             return FileResponse(
-#                 path=file_path,
-#                 filename=filename,
-#                 media_type="application/octet-stream"
-#             )
+    file_path = UPLOAD_DIR / filename
     
-#     # File not found in any directory
-#     raise error_response("File not found on disk", 404)
-
-
-# @router.get("/files/download/{filename}")
-# async def download_file(
-#     filename: str,
-#     db: AsyncSession = Depends(get_db)
-# ):
-#     """Download a file by filename"""
-#     from fastapi.responses import FileResponse
+    if not os.path.exists(file_path):
+        raise error_response("File not found on disk", 404)
     
-#     file_path = UPLOAD_DIR / filename
-    
-#     if not os.path.exists(file_path):
-#         raise error_response("File not found on disk", 404)
-    
-#     return FileResponse(
-#         path=file_path,
-#         filename=filename,
-#         media_type="application/octet-stream"
-#     )
+    return FileResponse(
+        path=file_path,
+        filename=filename,
+        media_type="application/octet-stream"
+    )

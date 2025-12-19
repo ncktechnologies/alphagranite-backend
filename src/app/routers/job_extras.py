@@ -23,8 +23,9 @@ from fastapi import APIRouter, Depends, Query, Form, UploadFile, File as FastAPI
 
 router = APIRouter()
 
-# Create upload directory
-UPLOAD_DIR = Path("uploads/drafting")
+# Get the project root directory (where your app runs from)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+UPLOAD_DIR = PROJECT_ROOT / "static" / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # Base URL for file access (update with your actual domain/IP)
