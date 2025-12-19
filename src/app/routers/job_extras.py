@@ -641,24 +641,24 @@ async def delete_file_from_drafting(
     }, "File deleted successfully")
 
 
-# @router.get("/files/download/{filename}")
-# async def download_file(
-#     filename: str,
-#     db: AsyncSession = Depends(get_db)
-# ):
-#     """Download a file by filename"""
-#     from fastapi.responses import FileResponse
+@router.get("/files/download/{filename}")
+async def download_file(
+    filename: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """Download a file by filename"""
+    from fastapi.responses import FileResponse
     
-#     file_path = UPLOAD_DIR / filename
+    file_path = UPLOAD_DIR / filename
     
-#     if not os.path.exists(file_path):
-#         raise error_response("File not found on disk", 404)
+    if not os.path.exists(file_path):
+        raise error_response("File not found on disk", 404)
     
-#     return FileResponse(
-#         path=file_path,
-#         filename=filename,
-#         media_type="application/octet-stream"
-#     )
+    return FileResponse(
+        path=file_path,
+        filename=filename,
+        media_type="application/octet-stream"
+    )
 
 
 @router.get("/files/{file_id}")
