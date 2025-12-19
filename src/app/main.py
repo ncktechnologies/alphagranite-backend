@@ -5,7 +5,7 @@ from src.app.middleware.request_logger import RequestLoggerMiddleware
 
 
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 # New routers for business logic
 from src.app.routers import job_extras
 from src.app.routers import workstation
@@ -49,6 +49,7 @@ from src.app.routers import revisions
 from src.app.routers import cost_of_stone
 from src.app.routers import install_scheduling
 from src.app.routers import install_completion  
+from src.app.routers import public_files
 
 # Import logging configuration
 from src.app.utils.logger import setup_logging
@@ -181,7 +182,7 @@ app.include_router(shop_planning.router, prefix="/api/v1", tags=["Shop Planning"
 app.include_router(shop_planning_section.router, prefix="/api/v1", tags=["Shop Planning Sections"])
 app.include_router(operator_workflow.router, prefix="/api/v1", tags=["Operator Workflows"])
 
-# Mount static files directory
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+# Register public routes WITHOUT authentication
+app.include_router(public_files.router, prefix="/api/v1", tags=["public"])
 
 

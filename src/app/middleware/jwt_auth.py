@@ -1,3 +1,4 @@
+
 from fastapi.responses import JSONResponse
 from src.app.service.auth import AuthService
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -84,12 +85,6 @@ from src.app.database.user import User
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-# Add public routes that don't require authentication
-PUBLIC_ROUTES = [
-    "/api/v1/files/download",  # Allow all file downloads
-]
-
-
 async def get_current_user(request: Request, db: AsyncSession = Depends(get_db)):
     """Dependency that returns the current User instance based on the token
 
@@ -97,10 +92,6 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
     returned None when used as a dependency. This version directly implements
     the dependency and raises HTTPException on any authentication problem.
     """
-    # Check if route is public
-    if any(request.url.path.startswith(route) for route in PUBLIC_ROUTES):
-        return None  # or skip authentication
-
     if hasattr(request.state, "user"):
         payload = request.state.user
         user_id = payload.get("user_id")
