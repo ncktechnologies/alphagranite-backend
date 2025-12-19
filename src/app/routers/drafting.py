@@ -316,14 +316,31 @@ async def create_pre_draft_review(
     
     # Validate fab exists
     fab_result = await db.execute(select(Fab).where(Fab.id == review_data.fab_id))
-    if not fab_result.scalar_one_or_none():
+    fab = fab_result.scalar_one_or_none()
+    if not fab:
         raise error_response("Fab not found", 404)
+    
+    # Handle draft_notes - convert to int or set to 0 if it's a text note
+    # If draft_notes is numeric string, convert it; otherwise store 0
+    draft_notes_value = 0
+    if review_data.draft_notes:
+        if isinstance(review_data.draft_notes, int):
+            draft_notes_value = review_data.draft_notes
+        elif isinstance(review_data.draft_notes, str):
+            # Try to convert to int, if it fails, just use 0
+            try:
+                draft_notes_value = int(review_data.draft_notes)
+            except ValueError:
+                # If draft_notes contains text, you might want to store it elsewhere
+                # For now, we'll just set it to 0
+                draft_notes_value = 0
     
     # Create pre-draft review
     review = PreDraftReview(
         fab_id=review_data.fab_id,
-        draft_notes=review_data.draft_notes if review_data.draft_notes else 0,  # Model expects int
+        draft_notes=draft_notes_value,
         is_redrafting_needed=1 if not review_data.is_completed else 0,
+        is_completed=review_data.is_completed if hasattr(review_data, 'is_completed') else False,
         status_id=1,
         created_at=datetime.now(),
         updated_at=datetime.now(),
@@ -331,6 +348,15 @@ async def create_pre_draft_review(
     )
     
     db.add(review)
+    
+    # If review is completed, move fab to next stage
+    if review_data.is_completed:
+        db.add(fab)
+        fab.current_stage = "drafting"
+        fab.next_stage = "sales_ct"
+        fab.updated_at = datetime.now()
+        fab.updated_by = current_user.id
+    
     await db.commit()
     await db.refresh(review)
     

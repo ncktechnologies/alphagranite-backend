@@ -422,8 +422,16 @@ async def get_fabs(
     if templating_fab_ids is not None:
         query = query.where(Fab.id.in_(templating_fab_ids))
     
-    # Apply pagination
-    query = query.offset(skip).limit(limit).order_by(Fab.created_at.desc())
+    # Apply pagination with conditional ordering
+    # If filtering by templating stage, order by schedule_start_date (nulls last), then by created_at
+    if current_stage == "templating":
+        query = query.offset(skip).limit(limit).order_by(
+            latest_templating.c.schedule_start_date.asc().nullslast(),
+            Fab.created_at.desc()
+        )
+    else:
+        # Default ordering for other stages
+        query = query.offset(skip).limit(limit).order_by(Fab.created_at.desc())
     
     result = await db.execute(query)
     rows = result.all()
@@ -1587,6 +1595,8 @@ async def get_all_stages(
     
     result = await db.execute(stage_counts_query)
     stage_counts_dict = {row[0]: row[1] for row in result.all()}
+    
+   
     
     # Build response with all defined stages
     stages_data = []
