@@ -196,6 +196,7 @@ class FabCreate(BaseModel):
     stone_color_id: int = Field(..., gt=0)
     stone_thickness_id: int = Field(..., gt=0)
     edge_id: int = Field(..., gt=0)
+    revenue: Optional[float] = Field(None, description="Revenue amount")
     input_area: Optional[str] = Field(None, description="Description of input area (e.g., 'Kitchen countertop and island')")
     total_sqft: Optional[float] = Field(default=1.0, gt=0)  # Default to 1 if unknown (client requirement)
     notes: Optional[str] = None

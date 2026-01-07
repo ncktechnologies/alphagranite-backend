@@ -430,6 +430,13 @@ async def get_fabs(
             Fab.updated_at.asc().nullsfirst(),  # Older updates first, null (never updated) first
             Fab.created_at.asc()  # Tie-breaker: older FABs first
         )
+    elif current_stage == "cut_list":
+        # For cut_list stage: order by shop_date_schedule ascending (nulls first)
+        query = query.offset(skip).limit(limit).order_by(
+            Fab.shop_date_schedule.asc().nullsfirst(),  # Nulls first, then oldest dates
+            Fab.updated_at.asc().nullsfirst(),  # Tie-breaker: older updates first
+            Fab.created_at.asc()  # Tie-breaker: older FABs first
+        )
     else:
         # Default ordering: Sort by updated_at ascending (older updates first)
         # FABs that have never been updated (updated_at IS NULL) appear first
