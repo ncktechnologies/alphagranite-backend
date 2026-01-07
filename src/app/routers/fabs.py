@@ -414,7 +414,7 @@ async def get_fabs(
             or_(
                 sa.cast(Fab.id, sa.String).ilike(search_term),  # Search by FAB ID
                 BusinessJob.name.ilike(search_term),  # Search by Job Name
-                BusinessJob.number.ilike(search_term)  # Search by Job Number
+                BusinessJob.job_number.ilike(search_term)  # Search by Job Number
             )
         )
     
@@ -556,7 +556,7 @@ async def get_fabs(
             or_(
                 sa.cast(Fab.id, sa.String).ilike(search_term),
                 BusinessJob.name.ilike(search_term),
-                BusinessJob.number.ilike(search_term)
+                BusinessJob.job_number.ilike(search_term)
             )
         )
     
@@ -654,7 +654,7 @@ async def get_fabs(
                 or_(
                     sa.cast(Fab.id, sa.String).ilike(search_term),
                     BusinessJob.name.ilike(search_term),
-                    BusinessJob.number.ilike(search_term)
+                    BusinessJob.job_number.ilike(search_term)
                 )
             )
         
