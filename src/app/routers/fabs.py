@@ -413,8 +413,8 @@ async def get_fabs(
         query = query.where(
             or_(
                 sa.cast(Fab.id, sa.String).ilike(search_term),  # Search by FAB ID
-                BusinessJob.job_name.ilike(search_term),  # Search by Job Name
-                BusinessJob.job_number.ilike(search_term)  # Search by Job Number
+                BusinessJob.name.ilike(search_term),  # Search by Job Name
+                BusinessJob.number.ilike(search_term)  # Search by Job Number
             )
         )
     
@@ -555,8 +555,8 @@ async def get_fabs(
         count_query = count_query.where(
             or_(
                 sa.cast(Fab.id, sa.String).ilike(search_term),
-                BusinessJob.job_name.ilike(search_term),
-                BusinessJob.job_number.ilike(search_term)
+                BusinessJob.name.ilike(search_term),
+                BusinessJob.number.ilike(search_term)
             )
         )
     
@@ -653,8 +653,8 @@ async def get_fabs(
             totals_query = totals_query.where(
                 or_(
                     sa.cast(Fab.id, sa.String).ilike(search_term),
-                    BusinessJob.job_name.ilike(search_term),
-                    BusinessJob.job_number.ilike(search_term)
+                    BusinessJob.name.ilike(search_term),
+                    BusinessJob.number.ilike(search_term)
                 )
             )
         
