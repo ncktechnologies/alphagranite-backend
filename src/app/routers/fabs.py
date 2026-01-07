@@ -549,7 +549,7 @@ async def get_fabs(
     if next_stage:
         count_query = count_query.where(Fab.next_stage == next_stage)
     
-    # Apply search filter to count query
+    # Apply search filter to count query - use distinct to avoid duplicate counts from joins
     if search:
         search_term = f"%{search}%"
         count_query = count_query.where(
@@ -559,6 +559,11 @@ async def get_fabs(
                 BusinessJob.job_number.ilike(search_term)
             )
         )
+    
+    # Apply templating date filter to count query if applicable
+    if templating_fab_ids is not None:
+        count_query = count_query.where(Fab.id.in_(templating_fab_ids))
+    
     # Apply predefined date filters to count query
     if date_filter:
         today = date.today()
@@ -1602,7 +1607,6 @@ async def get_all_stages(
     stage_counts_dict = {row[0]: row[1] for row in result.all()}
     
    
-    
     # Build response with all defined stages
     stages_data = []
     for idx, stage_name in enumerate(FAB_STAGES):
