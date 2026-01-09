@@ -368,3 +368,41 @@ class InstallCompletion(SQLModel, table=True):
     updated_at: Optional[datetime] = Field(default=None)
     updated_by: Optional[int] = Field(default=None)
     file_ids: Optional[str] = Field(default=None, description="Photos or documents from installation")
+
+# --- Drafting Sessions ---
+class DraftingSession(SQLModel, table=True):
+    __tablename__ = "drafting_sessions"
+    
+    id: Optional[int] = Field(default=None, primary_key=True)
+    fab_id: int = Field(index=True)
+    drafter_id: int = Field()
+    status: str = Field(default="drafting")  # drafting, paused, on_hold, completed
+    
+    # Session timing
+    session_start_time: datetime = Field()
+    session_end_time: Optional[datetime] = Field(default=None)
+    current_pause_start_time: Optional[datetime] = Field(default=None)
+    total_pause_duration: int = Field(default=0)  # in seconds
+    total_time_spent: int = Field(default=0)  # in seconds (excluding pauses)
+    
+    # Progress tracking
+    cumulative_sqft_drafted: Optional[str] = Field(default="0")
+    work_percentage_done: int = Field(default=0)
+    
+    # Metadata
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: Optional[datetime] = Field(default=None)
+
+
+class DraftingSessionNote(SQLModel, table=True):
+    __tablename__ = "drafting_session_notes"
+    
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: int = Field(index=True)
+    fab_id: int = Field(index=True)
+    action: str = Field()  # start, pause, resume, on_hold, end
+    timestamp: datetime = Field()
+    note: Optional[str] = Field(default=None)
+    sqft_drafted: Optional[str] = Field(default=None)
+    work_percentage_done: Optional[int] = Field(default=None)
+    created_at: datetime = Field(default_factory=datetime.now)

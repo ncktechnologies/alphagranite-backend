@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import List, Optional
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import APIRouter, Depends, Form, File, UploadFile
+from fastapi import APIRouter, Depends, Form, File, UploadFile, HTTPException, status
 from sqlalchemy import select
 import logging
 
@@ -11,6 +11,7 @@ from src.app.database.user import User
 from src.app.database.fab import Fab
 from src.app.database.drafting import Drafting
 from src.app.database.pre_draft_review import PreDraftReview
+from src.app.database.drafting_session import DraftingSession, DraftingSessionNote
 from src.app.interface.business_schemas import (
     DraftingCreate,
     DraftingUpdate,
@@ -19,6 +20,10 @@ from src.app.interface.business_schemas import (
     PreDraftReviewCreate,
     PreDraftReviewUpdate,
     PreDraftReviewResponse,
+    DraftingSessionAction,
+    DraftingSessionResponse,
+    DraftingSessionNoteResponse,
+    DraftingSessionHistoryResponse,
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
@@ -27,6 +32,414 @@ from src.app.utils.helpers import error_response, success_response, strip_timezo
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# ============ DRAFTING SESSION ENDPOINTS ============
+
+@router.post("/drafting/{fab_id}/session", response_model=SuccessResponse[DraftingSessionResponse])
+async def manage_drafting_session(
+    fab_id: int,
+    session_data: DraftingSessionAction,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Manage drafting session: start, pause, resume, on_hold, or end
+    """
+    # Validate fab exists
+    fab_result = await db.execute(select(Fab).where(Fab.id == fab_id))
+    fab = fab_result.scalar_one_or_none()
+    if not fab:
+        raise error_response("Fab not found", 404)
+    
+    # Validate drafter exists
+    drafter_result = await db.execute(select(User).where(User.id == session_data.drafter_id))
+    if not drafter_result.scalar_one_or_none():
+        raise error_response("Drafter not found", 404)
+    
+    action = session_data.action.lower()
+    timestamp = session_data.timestamp or datetime.now()
+    
+    # Get active session for this fab
+    active_session_result = await db.execute(
+        select(DraftingSession)
+        .where(DraftingSession.fab_id == fab_id)
+        .where(DraftingSession.status.in_(["drafting", "paused", "on_hold"]))
+        .order_by(DraftingSession.created_at.desc())
+    )
+    active_session = active_session_result.scalar_one_or_none()
+    
+    if action == "start":
+        if active_session:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="An active session already exists for this fab"
+            )
+        
+        # Create new session
+        session = DraftingSession(
+            fab_id=fab_id,
+            drafter_id=session_data.drafter_id,
+            status="drafting",
+            session_start_time=session_data.session_start_time or timestamp,
+            cumulative_sqft_drafted=session_data.sqft_drafted or "0",
+            work_percentage_done=session_data.work_percentage_done or 0,
+            created_at=datetime.now()
+        )
+        db.add(session)
+        await db.flush()
+        
+        # Create session note
+        note = DraftingSessionNote(
+            session_id=session.id,
+            fab_id=fab_id,
+            action="start",
+            timestamp=timestamp,
+            note=session_data.note,
+            sqft_drafted=session_data.sqft_drafted,
+            work_percentage_done=session_data.work_percentage_done,
+            created_at=datetime.now()
+        )
+        db.add(note)
+        
+        message = "Drafting session started"
+    
+    elif action == "pause":
+        if not active_session:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No active session found to pause"
+            )
+        if active_session.status != "drafting":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Session is already {active_session.status}"
+            )
+        
+        # Update time spent before pausing
+        if active_session.current_pause_start_time is None:
+            # Calculate time since last resume or start
+            active_session.total_time_spent += int((timestamp - active_session.session_start_time).total_seconds()) - active_session.total_pause_duration
+        
+        active_session.status = "paused"
+        active_session.current_pause_start_time = timestamp
+        active_session.updated_at = datetime.now()
+        
+        if session_data.sqft_drafted:
+            active_session.cumulative_sqft_drafted = session_data.sqft_drafted
+        if session_data.work_percentage_done is not None:
+            active_session.work_percentage_done = session_data.work_percentage_done
+        
+        session = active_session
+        
+        # Create session note
+        note = DraftingSessionNote(
+            session_id=session.id,
+            fab_id=fab_id,
+            action="pause",
+            timestamp=timestamp,
+            note=session_data.note,
+            sqft_drafted=session_data.sqft_drafted,
+            work_percentage_done=session_data.work_percentage_done,
+            created_at=datetime.now()
+        )
+        db.add(note)
+        
+        message = "Drafting session paused"
+    
+    elif action == "resume":
+        if not active_session:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No session found to resume"
+            )
+        if active_session.status not in ["paused", "on_hold"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Session is not paused or on hold"
+            )
+        
+        # Calculate pause duration
+        if active_session.current_pause_start_time:
+            pause_duration = int((timestamp - active_session.current_pause_start_time).total_seconds())
+            active_session.total_pause_duration += pause_duration
+        
+        active_session.status = "drafting"
+        active_session.current_pause_start_time = None
+        active_session.updated_at = datetime.now()
+        
+        session = active_session
+        
+        # Create session note
+        note = DraftingSessionNote(
+            session_id=session.id,
+            fab_id=fab_id,
+            action="resume",
+            timestamp=timestamp,
+            note=session_data.note,
+            sqft_drafted=session_data.sqft_drafted,
+            work_percentage_done=session_data.work_percentage_done,
+            created_at=datetime.now()
+        )
+        db.add(note)
+        
+        message = "Drafting session resumed"
+    
+    elif action == "on_hold":
+        if not active_session:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No active session found to put on hold"
+            )
+        
+        # Similar to pause but with different status
+        if active_session.current_pause_start_time is None and active_session.status == "drafting":
+            active_session.current_pause_start_time = timestamp
+        
+        active_session.status = "on_hold"
+        active_session.updated_at = datetime.now()
+        
+        if session_data.sqft_drafted:
+            active_session.cumulative_sqft_drafted = session_data.sqft_drafted
+        if session_data.work_percentage_done is not None:
+            active_session.work_percentage_done = session_data.work_percentage_done
+        
+        session = active_session
+        
+        # Create session note
+        note = DraftingSessionNote(
+            session_id=session.id,
+            fab_id=fab_id,
+            action="on_hold",
+            timestamp=timestamp,
+            note=session_data.note,
+            sqft_drafted=session_data.sqft_drafted,
+            work_percentage_done=session_data.work_percentage_done,
+            created_at=datetime.now()
+        )
+        db.add(note)
+        
+        message = "Drafting session put on hold"
+    
+    elif action == "end":
+        if not active_session:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No active session found to end"
+            )
+        
+        # Calculate final time
+        end_time = session_data.session_end_time or timestamp
+        
+        if active_session.current_pause_start_time:
+            # Was paused, add pause duration
+            pause_duration = int((end_time - active_session.current_pause_start_time).total_seconds())
+            active_session.total_pause_duration += pause_duration
+        
+        total_elapsed = int((end_time - active_session.session_start_time).total_seconds())
+        active_session.total_time_spent = total_elapsed - active_session.total_pause_duration
+        
+        active_session.status = "completed"
+        active_session.session_end_time = end_time
+        active_session.current_pause_start_time = None
+        active_session.updated_at = datetime.now()
+        
+        if session_data.sqft_drafted:
+            active_session.cumulative_sqft_drafted = session_data.sqft_drafted
+        if session_data.work_percentage_done is not None:
+            active_session.work_percentage_done = session_data.work_percentage_done
+        
+        session = active_session
+        
+        # Create session note
+        note = DraftingSessionNote(
+            session_id=session.id,
+            fab_id=fab_id,
+            action="end",
+            timestamp=timestamp,
+            note=session_data.note,
+            sqft_drafted=session_data.sqft_drafted,
+            work_percentage_done=session_data.work_percentage_done,
+            created_at=datetime.now()
+        )
+        db.add(note)
+        
+        message = f"Drafting session ended. Total time: {active_session.total_time_spent} seconds"
+    
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid action: {action}. Must be 'start', 'pause', 'resume', 'on_hold', or 'end'"
+        )
+    
+    await db.commit()
+    await db.refresh(session)
+    
+    # Fetch notes for response
+    notes_result = await db.execute(
+        select(DraftingSessionNote)
+        .where(DraftingSessionNote.session_id == session.id)
+        .order_by(DraftingSessionNote.timestamp.asc())
+    )
+    notes = notes_result.scalars().all()
+    
+    response_data = DraftingSessionResponse(
+        session_id=session.id,
+        fab_id=session.fab_id,
+        drafter_id=session.drafter_id,
+        status=session.status,
+        current_session_start_time=session.session_start_time,
+        last_action_time=timestamp,
+        total_time_spent=session.total_time_spent,
+        cumulative_sqft_drafted=session.cumulative_sqft_drafted or "0",
+        work_percentage_done=session.work_percentage_done,
+        current_pause_start_time=session.current_pause_start_time,
+        total_pause_duration=session.total_pause_duration,
+        notes=[
+            DraftingSessionNoteResponse(
+                timestamp=n.timestamp,
+                action=n.action,
+                note=n.note,
+                sqft_drafted=n.sqft_drafted,
+                work_percentage_done=n.work_percentage_done
+            ) for n in notes
+        ]
+    )
+    
+    return success_response(response_data, message)
+
+
+@router.get("/drafting/{fab_id}/session", response_model=SuccessResponse[DraftingSessionResponse])
+async def get_current_drafting_session(
+    fab_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get current active drafting session for a fab
+    """
+    # Get active or most recent session
+    session_result = await db.execute(
+        select(DraftingSession)
+        .where(DraftingSession.fab_id == fab_id)
+        .order_by(DraftingSession.created_at.desc())
+        .limit(1)
+    )
+    session = session_result.scalar_one_or_none()
+    
+    if not session:
+        raise error_response("No drafting session found for this fab", 404)
+    
+    # Fetch notes
+    notes_result = await db.execute(
+        select(DraftingSessionNote)
+        .where(DraftingSessionNote.session_id == session.id)
+        .order_by(DraftingSessionNote.timestamp.asc())
+    )
+    notes = notes_result.scalars().all()
+    
+    # Calculate current time spent if session is active
+    total_time = session.total_time_spent
+    if session.status == "drafting":
+        # Session is active, calculate current elapsed time
+        current_elapsed = int((datetime.now() - session.session_start_time).total_seconds())
+        total_time = current_elapsed - session.total_pause_duration
+    
+    # Get last action time from notes
+    last_action_time = notes[-1].timestamp if notes else session.session_start_time
+    
+    response_data = DraftingSessionResponse(
+        session_id=session.id,
+        fab_id=session.fab_id,
+        drafter_id=session.drafter_id,
+        status=session.status,
+        current_session_start_time=session.session_start_time,
+        last_action_time=last_action_time,
+        total_time_spent=total_time,
+        cumulative_sqft_drafted=session.cumulative_sqft_drafted or "0",
+        work_percentage_done=session.work_percentage_done,
+        current_pause_start_time=session.current_pause_start_time,
+        total_pause_duration=session.total_pause_duration,
+        notes=[
+            DraftingSessionNoteResponse(
+                timestamp=n.timestamp,
+                action=n.action,
+                note=n.note,
+                sqft_drafted=n.sqft_drafted,
+                work_percentage_done=n.work_percentage_done
+            ) for n in notes
+        ]
+    )
+    
+    return success_response(response_data, "Drafting session fetched successfully")
+
+
+@router.get("/drafting/{fab_id}/session/history", response_model=SuccessResponse[DraftingSessionHistoryResponse])
+async def get_drafting_session_history(
+    fab_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get all drafting sessions history for a fab
+    """
+    # Validate fab exists
+    fab_result = await db.execute(select(Fab).where(Fab.id == fab_id))
+    if not fab_result.scalar_one_or_none():
+        raise error_response("Fab not found", 404)
+    
+    # Get all sessions for this fab
+    sessions_result = await db.execute(
+        select(DraftingSession)
+        .where(DraftingSession.fab_id == fab_id)
+        .order_by(DraftingSession.created_at.desc())
+    )
+    sessions = sessions_result.scalars().all()
+    
+    session_responses = []
+    for session in sessions:
+        # Fetch notes for each session
+        notes_result = await db.execute(
+            select(DraftingSessionNote)
+            .where(DraftingSessionNote.session_id == session.id)
+            .order_by(DraftingSessionNote.timestamp.asc())
+        )
+        notes = notes_result.scalars().all()
+        
+        last_action_time = notes[-1].timestamp if notes else session.session_start_time
+        
+        session_responses.append(
+            DraftingSessionResponse(
+                session_id=session.id,
+                fab_id=session.fab_id,
+                drafter_id=session.drafter_id,
+                status=session.status,
+                current_session_start_time=session.session_start_time,
+                last_action_time=last_action_time,
+                total_time_spent=session.total_time_spent,
+                cumulative_sqft_drafted=session.cumulative_sqft_drafted or "0",
+                work_percentage_done=session.work_percentage_done,
+                current_pause_start_time=session.current_pause_start_time,
+                total_pause_duration=session.total_pause_duration,
+                notes=[
+                    DraftingSessionNoteResponse(
+                        timestamp=n.timestamp,
+                        action=n.action,
+                        note=n.note,
+                        sqft_drafted=n.sqft_drafted,
+                        work_percentage_done=n.work_percentage_done
+                    ) for n in notes
+                ]
+            )
+        )
+    
+    response_data = DraftingSessionHistoryResponse(
+        fab_id=fab_id,
+        sessions=session_responses,
+        total_sessions=len(session_responses)
+    )
+    
+    return success_response(response_data, f"Found {len(session_responses)} drafting sessions")
 
 
 # ============ DRAFTING ENDPOINTS ============

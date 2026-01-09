@@ -1085,3 +1085,45 @@ class FinalProgrammingComplete(BaseModel):
     drafter_id: Optional[int] = Field(None, gt=0, description="Assigned programmer ID")
     wj_time_minutes: Optional[int] = Field(None, gt=0, description="Waterjet time in minutes")
 
+
+# Drafting Session Schemas
+class DraftingSessionAction(BaseModel):
+    """Schema for drafting session actions"""
+    action: str = Field(..., description="Action: 'start', 'pause', 'resume', 'on_hold', or 'end'")
+    drafter_id: int = Field(..., gt=0)
+    timestamp: Optional[datetime] = Field(default=None)
+    note: Optional[str] = Field(None, description="Session note")
+    sqft_drafted: Optional[str] = Field(None, description="Square feet drafted so far")
+    work_percentage_done: Optional[int] = Field(None, ge=0, le=100)
+    session_start_time: Optional[datetime] = Field(None)
+    session_end_time: Optional[datetime] = Field(None)
+
+
+class DraftingSessionNoteResponse(BaseModel):
+    timestamp: datetime
+    action: str
+    note: Optional[str]
+    sqft_drafted: Optional[str]
+    work_percentage_done: Optional[int]
+
+
+class DraftingSessionResponse(BaseModel):
+    session_id: int
+    fab_id: int
+    drafter_id: int
+    status: str
+    current_session_start_time: datetime
+    last_action_time: Optional[datetime]
+    total_time_spent: int  # in seconds
+    cumulative_sqft_drafted: str
+    work_percentage_done: int
+    current_pause_start_time: Optional[datetime]
+    total_pause_duration: int  # in seconds
+    notes: List[DraftingSessionNoteResponse]
+
+
+class DraftingSessionHistoryResponse(BaseModel):
+    fab_id: int
+    sessions: List[DraftingSessionResponse]
+    total_sessions: int
+
