@@ -1,15 +1,15 @@
 """create drafting sessions tables
 
-Revision ID: xxxx
-Revises: <previous_revision>
-Create Date: 2024-01-15
+Revision ID: 2025010901
+Revises: 36b7386d9414
+Create Date: 2025-01-09
 """
 from alembic import op
 import sqlalchemy as sa
 import sqlmodel
 
-revision = 'xxxx'  # Generate a proper revision ID
-down_revision = '<previous_revision>'
+revision = '2025010901'
+down_revision = '36b7386d9414'  # Current head: alter_drafting_numeric_columns
 branch_labels = None
 depends_on = None
 
@@ -20,14 +20,14 @@ def upgrade() -> None:
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('fab_id', sa.Integer(), nullable=False),
         sa.Column('drafter_id', sa.Integer(), nullable=False),
-        sa.Column('status', sa.String(), nullable=False, default='drafting'),
+        sa.Column('status', sa.String(), nullable=False, server_default='drafting'),
         sa.Column('session_start_time', sa.DateTime(), nullable=False),
         sa.Column('session_end_time', sa.DateTime(), nullable=True),
         sa.Column('current_pause_start_time', sa.DateTime(), nullable=True),
-        sa.Column('total_pause_duration', sa.Integer(), nullable=False, default=0),
-        sa.Column('total_time_spent', sa.Integer(), nullable=False, default=0),
-        sa.Column('cumulative_sqft_drafted', sa.String(), nullable=True, default='0'),
-        sa.Column('work_percentage_done', sa.Integer(), nullable=False, default=0),
+        sa.Column('total_pause_duration', sa.Integer(), nullable=False, server_default='0'),
+        sa.Column('total_time_spent', sa.Integer(), nullable=False, server_default='0'),
+        sa.Column('cumulative_sqft_drafted', sa.String(), nullable=True, server_default='0'),
+        sa.Column('work_percentage_done', sa.Integer(), nullable=False, server_default='0'),
         sa.Column('created_at', sa.DateTime(), nullable=False),
         sa.Column('updated_at', sa.DateTime(), nullable=True),
         sa.PrimaryKeyConstraint('id')
