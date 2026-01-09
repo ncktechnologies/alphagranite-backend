@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Navigate to project directory
-cd /Users/segun/Desktop/Protech/alpha_granit_backend
+cd /root/alphagranite/alpha-granit
 
 echo "============================================================"
 echo "STEP 1: Checking current Alembic migration status"

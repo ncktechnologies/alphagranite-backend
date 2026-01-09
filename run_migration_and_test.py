@@ -26,7 +26,7 @@ def run_command(cmd, description):
     return result.returncode == 0
 
 def main():
-    os.chdir('/Users/segun/Desktop/Protech/alpha_granit_backend')
+    os.chdir('cd /root/alphagranite/alpha-granit')
     
     # Step 1: Check current migration
     print("\n" + "="*60)
