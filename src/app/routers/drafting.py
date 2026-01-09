@@ -11,7 +11,7 @@ from src.app.database.user import User
 from src.app.database.fab import Fab
 from src.app.database.drafting import Drafting
 from src.app.database.pre_draft_review import PreDraftReview
-from src.app.database.drafting_session import DraftingSession, DraftingSessionNote
+from src.app.database.drafting import DraftingSession, DraftingSessionNote
 from src.app.interface.business_schemas import (
     DraftingCreate,
     DraftingUpdate,
