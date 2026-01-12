@@ -280,7 +280,8 @@ async def get_fabs(
             if schedule_status == "scheduled":
                 templating_query = templating_query.where(Templating.schedule_start_date.isnot(None))
             elif schedule_status == "unscheduled":
-                templating_query = templating_query.where(Templating.schedule_start_date.is_(None))
+                # For unscheduled: include FABs with NO templating records OR templating with NULL schedule_start_date
+                pass  # Handle separately below
         
         # Apply predefined date filters
         if date_filter:
@@ -330,21 +331,46 @@ async def get_fabs(
                 )
         
         # Execute to get matching FAB IDs
-        templating_result = await db.execute(templating_query)
-        templating_fab_ids = [row[0] for row in templating_result.all()]
-        
-        # If no FABs match the filters, return empty result (except for unscheduled)
-        if not templating_fab_ids and schedule_status != "unscheduled":
-            return {
-                "success": True,
-                "message": "FABs retrieved successfully",
-                "data": {
-                    "total": 0,
-                    "page": 1,
-                    "per_page": limit,
-                    "data": []
+        if schedule_status != "unscheduled":  # CHANGED: skip if unscheduled
+            templating_result = await db.execute(templating_query)
+            templating_fab_ids = [row[0] for row in templating_result.all()]
+            
+            # If no FABs match the filters, return empty result
+            if not templating_fab_ids:
+                return {
+                    "success": True,
+                    "message": "FABs retrieved successfully",
+                    "data": {
+                        "total": 0,
+                        "page": 1,
+                        "per_page": limit,
+                        "data": []
+                    }
                 }
-            }
+        else:
+            # For unscheduled: get FABs with NO templating records or with NULL schedule_start_date
+            unscheduled_query = select(Fab.id).where(
+                or_(
+                    ~Fab.id.in_(select(Templating.fab_id)),  # No templating record at all
+                    Fab.id.in_(
+                        select(Templating.fab_id).where(Templating.schedule_start_date.is_(None))
+                    )  # Templating exists but no schedule_start_date
+                )
+            )
+            unscheduled_result = await db.execute(unscheduled_query)
+            templating_fab_ids = [row[0] for row in unscheduled_result.all()]
+            
+            if not templating_fab_ids:
+                return {
+                    "success": True,
+                    "message": "FABs retrieved successfully",
+                    "data": {
+                        "total": 0,
+                        "page": 1,
+                        "per_page": limit,
+                        "data": []
+                    }
+                }
     
     # Subquery to get the latest templating record for each FAB
     latest_templating = (
