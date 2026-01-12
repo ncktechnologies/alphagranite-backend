@@ -5,7 +5,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = "20260112_add_sales_person_id_to_business_jobs"
-down_revision = "36b7386d9414"
+down_revision = "2025010901"
 branch_labels = None
 depends_on = None
 
