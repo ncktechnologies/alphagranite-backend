@@ -51,4 +51,6 @@ async def create_fab_type(
     await db.commit()
     await db.refresh(new_fab_type)
 
-    return success_response(new_fab_type, "Fab type created successfully")
+    # Convert to response schema
+    response = FabTypeResponse.model_validate(new_fab_type)
+    return success_response(response, "Fab type created successfully")

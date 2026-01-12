@@ -183,8 +183,14 @@ class StoneTypeResponse(BaseModel):
 
 # Fab Type Schemas (simple string list for now)
 class FabTypeResponse(BaseModel):
+    id: int
     name: str
     description: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True  # Enables SQLModel -> Pydantic conversion
 
 
 # Fab Schemas
@@ -1141,4 +1147,4 @@ class FabTypeResponse(BaseModel):
     updated_at: Optional[datetime] = None
 
     class Config:
-        from_attributes = True
+        from_attributes = True  # Enables SQLModel -> Pydantic conversion
