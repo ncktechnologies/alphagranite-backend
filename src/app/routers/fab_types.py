@@ -3,11 +3,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from src.app.database.user import User
-from src.app.database.fab_type import FabType  # Import your model
+from src.app.database.fab_type import FabType
 from src.app.interface.business_schemas import FabTypeResponse, FabTypeCreate
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse, success_response
-from src.app.database.session import get_db
+from src.app.database import get_db
 
 router = APIRouter()
 
