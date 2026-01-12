@@ -13,6 +13,7 @@ from src.app.utils.config import SessionLocal
 from datetime import datetime
 
 
+
 async def sync_user_roles():
     """Sync user_roles table with users table"""
     

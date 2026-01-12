@@ -26,6 +26,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.interface.response_wrappers import SuccessResponse, error_response, success_response
 from src.app.middleware.jwt_auth import get_current_user
+from src.app.utils.helpers import utc_now
 
 router = APIRouter()
 
@@ -1870,3 +1871,42 @@ async def get_sales_ct_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
     
     return sales_ct_dict
 
+@router.patch("/fabs/{fab_id}/hold", response_model=SuccessResponse[FabResponse])
+async def set_fab_hold(
+    fab_id: int,
+    on_hold: Optional[bool] = Query(None, description="If provided, set hold state. If omitted, toggle between on-hold (0) and active (1)"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Mark or toggle a FAB as on-hold.
+    - on_hold=true  -> status_id=0
+    - on_hold=false -> status_id=1
+    - on_hold omitted -> toggle 0 <-> 1
+    """
+    result = await db.execute(select(Fab).where(Fab.id == fab_id))
+    fab = result.scalar_one_or_none()
+    if not fab:
+        raise HTTPException(status_code=404, detail="Fab not found")
+
+    # Only allow toggling between Active(1) and On-Hold(0)
+    if fab.status_id not in (0, 1) and on_hold is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Toggle allowed only when status_id is 0 (on-hold) or 1 (active). Provide on_hold=true/false to set explicitly."
+        )
+
+    if on_hold is None:
+        # Toggle
+        fab.status_id = 0 if fab.status_id == 1 else 1
+    else:
+        fab.status_id = 0 if on_hold else 1
+
+    fab.updated_at = utc_now()
+    fab.updated_by = current_user.id
+
+    await db.commit()
+    await db.refresh(fab)
+
+    # Reuse existing serializer for consistent response
+    return await get_fab(fab_id, db, current_user)

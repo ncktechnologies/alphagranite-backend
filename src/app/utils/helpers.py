@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Callable, TypeVar, Awaitable
 from fastapi import HTTPException
 from pydantic import ValidationError
@@ -49,7 +49,38 @@ async def call_service(
         raise error_response("Internal server error", 500)
 
 def strip_timezone(dt: Optional[datetime]) -> Optional[datetime]:
-    """Remove timezone info from datetime object"""
+    """
+    Convert datetime to UTC and remove timezone info for database storage.
+    PostgreSQL stores timestamps without timezone by default.
+    """
     if dt is None:
         return None
-    return dt.replace(tzinfo=None) if dt.tzinfo else dt
+    
+    # If timezone-aware, convert to UTC
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc)
+    
+    # Remove timezone info for database storage
+    return dt.replace(tzinfo=None)
+
+# Add this utility
+def utc_now() -> datetime:
+    """Get current UTC time as naive datetime for database storage"""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+def datetime_to_iso(dt: Optional[datetime]) -> Optional[str]:
+    """
+    Convert datetime to ISO 8601 format string with UTC timezone.
+    Returns format: 2024-01-15T14:30:00Z
+    """
+    if dt is None:
+        return None
+    
+    # If naive datetime, assume it's UTC
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        # Convert to UTC if not already
+        dt = dt.astimezone(timezone.utc)
+    
+    return dt.strftime('%Y-%m-%dT%H:%M:%SZ')

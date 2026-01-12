@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import List, Optional
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,7 +26,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
-from src.app.utils.helpers import error_response, success_response, strip_timezone
+from src.app.utils.helpers import error_response, success_response, strip_timezone, utc_now, datetime_to_iso
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +57,7 @@ async def manage_drafting_session(
         raise error_response("Drafter not found", 404)
     
     action = session_data.action.lower()
-    timestamp = session_data.timestamp or datetime.now()
+    timestamp = session_data.timestamp or utc_now()
     
     # Get active session for this fab
     active_session_result = await db.execute(
@@ -84,7 +83,7 @@ async def manage_drafting_session(
             session_start_time=session_data.session_start_time or timestamp,
             cumulative_sqft_drafted=session_data.sqft_drafted or "0",
             work_percentage_done=session_data.work_percentage_done or 0,
-            created_at=datetime.now()
+            created_at=utc_now()
         )
         db.add(session)
         await db.flush()
@@ -98,7 +97,7 @@ async def manage_drafting_session(
             note=session_data.note,
             sqft_drafted=session_data.sqft_drafted,
             work_percentage_done=session_data.work_percentage_done,
-            created_at=datetime.now()
+            created_at=utc_now()
         )
         db.add(note)
         
@@ -123,7 +122,7 @@ async def manage_drafting_session(
         
         active_session.status = "paused"
         active_session.current_pause_start_time = timestamp
-        active_session.updated_at = datetime.now()
+        active_session.updated_at = utc_now()
         
         if session_data.sqft_drafted:
             active_session.cumulative_sqft_drafted = session_data.sqft_drafted
@@ -141,7 +140,7 @@ async def manage_drafting_session(
             note=session_data.note,
             sqft_drafted=session_data.sqft_drafted,
             work_percentage_done=session_data.work_percentage_done,
-            created_at=datetime.now()
+            created_at=utc_now()
         )
         db.add(note)
         
@@ -166,7 +165,7 @@ async def manage_drafting_session(
         
         active_session.status = "drafting"
         active_session.current_pause_start_time = None
-        active_session.updated_at = datetime.now()
+        active_session.updated_at = utc_now()
         
         session = active_session
         
@@ -179,7 +178,7 @@ async def manage_drafting_session(
             note=session_data.note,
             sqft_drafted=session_data.sqft_drafted,
             work_percentage_done=session_data.work_percentage_done,
-            created_at=datetime.now()
+            created_at=utc_now()
         )
         db.add(note)
         
@@ -197,7 +196,7 @@ async def manage_drafting_session(
             active_session.current_pause_start_time = timestamp
         
         active_session.status = "on_hold"
-        active_session.updated_at = datetime.now()
+        active_session.updated_at = utc_now()
         
         if session_data.sqft_drafted:
             active_session.cumulative_sqft_drafted = session_data.sqft_drafted
@@ -215,7 +214,7 @@ async def manage_drafting_session(
             note=session_data.note,
             sqft_drafted=session_data.sqft_drafted,
             work_percentage_done=session_data.work_percentage_done,
-            created_at=datetime.now()
+            created_at=utc_now()
         )
         db.add(note)
         
@@ -242,7 +241,7 @@ async def manage_drafting_session(
         active_session.status = "completed"
         active_session.session_end_time = end_time
         active_session.current_pause_start_time = None
-        active_session.updated_at = datetime.now()
+        active_session.updated_at = utc_now()
         
         if session_data.sqft_drafted:
             active_session.cumulative_sqft_drafted = session_data.sqft_drafted
@@ -260,7 +259,7 @@ async def manage_drafting_session(
             note=session_data.note,
             sqft_drafted=session_data.sqft_drafted,
             work_percentage_done=session_data.work_percentage_done,
-            created_at=datetime.now()
+            created_at=utc_now()
         )
         db.add(note)
         
@@ -342,7 +341,7 @@ async def get_current_drafting_session(
     total_time = session.total_time_spent
     if session.status == "drafting":
         # Session is active, calculate current elapsed time
-        current_elapsed = int((datetime.now() - session.session_start_time).total_seconds())
+        current_elapsed = int((utc_now() - session.session_start_time).total_seconds())
         total_time = current_elapsed - session.total_pause_duration
     
     # Get last action time from notes
@@ -479,7 +478,7 @@ async def create_drafting(
         file_ids=None,
         is_redrafting=False,
         status_id=1,
-        created_at=datetime.now(),
+        created_at=utc_now(),
         updated_at=None,
         updated_by=None
     )
@@ -546,7 +545,7 @@ async def update_drafting(
         
         # Only set drafter_end_date to now if not provided in request
         if 'drafter_end_date' not in update_data:
-            drafting.drafter_end_date = datetime.now()
+            drafting.drafter_end_date = utc_now()
         
         # IMPORTANT: Add fab to session explicitly
         db.add(fab)
@@ -554,10 +553,10 @@ async def update_drafting(
         # Update fab stages and mark draft as completed
         fab.current_stage = fab.next_stage
         fab.draft_completed = True
-        fab.updated_at = datetime.now()
+        fab.updated_at = utc_now()
         fab.updated_by = current_user.id
     
-    drafting.updated_at = datetime.now()
+    drafting.updated_at = utc_now()
     drafting.updated_by = current_user.id
     
     await db.commit()
@@ -601,7 +600,7 @@ async def submit_draft_for_review(
     
     if is_drafting_completed:
         drafting.status_id = 3  # Completed status
-        drafting.drafter_end_date = datetime.now()
+        drafting.drafter_end_date = utc_now()
         
         # Update fab stage to next step
         fab_result = await db.execute(select(Fab).where(Fab.id == drafting.fab_id))
@@ -609,10 +608,10 @@ async def submit_draft_for_review(
         if fab:
             fab.current_stage = "sales_check"  # Move to sales check after drafting
             fab.next_stage = "cut_list"  # Next will be cut_list (or revision if needed)
-            fab.updated_at = datetime.now()
+            fab.updated_at = utc_now()
             fab.updated_by = current_user.id
     
-    drafting.updated_at = datetime.now()
+    drafting.updated_at = utc_now()
     drafting.updated_by = current_user.id
     
     await db.commit()
@@ -679,7 +678,7 @@ async def add_file_to_drafting(
     else:
         drafting.file_ids = str(file_id)
     
-    drafting.updated_at = datetime.now()
+    drafting.updated_at = utc_now()
     drafting.updated_by = current_user.id
     
     await db.commit()
@@ -709,7 +708,7 @@ async def delete_file_from_drafting(
             file_ids_list.remove(str(file_id))
             drafting.file_ids = ','.join(file_ids_list) if file_ids_list else None
     
-    drafting.updated_at = datetime.now()
+    drafting.updated_at = utc_now()
     drafting.updated_by = current_user.id
     
     await db.commit()
@@ -748,8 +747,8 @@ async def create_pre_draft_review(
         is_redrafting_needed=1 if not review_data.is_completed else 0,
         is_completed=review_data.is_completed if hasattr(review_data, 'is_completed') else False,
         status_id=1,
-        created_at=datetime.now(),
-        updated_at=datetime.now(),
+        created_at=utc_now(),
+        updated_at=utc_now(),
         updated_by=current_user.id
     )
     
@@ -760,7 +759,7 @@ async def create_pre_draft_review(
         db.add(fab)
         fab.current_stage = "drafting"
         fab.next_stage = "sales_ct"
-        fab.updated_at = datetime.now()
+        fab.updated_at = utc_now()
         fab.updated_by = current_user.id
     
     await db.commit()
@@ -802,13 +801,13 @@ async def mark_predraft_review_completed(
         # Move fab to drafting stage
         fab.current_stage = "drafting"
         fab.next_stage = "sales_check"
-        fab.updated_at = datetime.now()
+        fab.updated_at = utc_now()
         fab.updated_by = current_user.id
     
     if notes:
         review.draft_notes = notes  # Store as string
     
-    review.updated_at = datetime.now()
+    review.updated_at = utc_now()
     review.updated_by = current_user.id
     
     await db.commit()
@@ -837,7 +836,7 @@ async def set_predraft_to_redraft(
     # Mark as needs redrafting
     review.is_redrafting_needed = 1
     review.draft_notes = redraft_notes  # Store as string
-    review.updated_at = datetime.now()
+    review.updated_at = utc_now()
     review.updated_by = current_user.id
     
     # Get the fab and move back to templating stage
@@ -847,7 +846,7 @@ async def set_predraft_to_redraft(
     if fab:
         fab.current_stage = "templating"
         fab.next_stage = "pre_draft_review"
-        fab.updated_at = datetime.now()
+        fab.updated_at = utc_now()
         fab.updated_by = current_user.id
     
     await db.commit()
