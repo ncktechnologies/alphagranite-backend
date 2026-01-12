@@ -1127,3 +1127,6 @@ class DraftingSessionHistoryResponse(BaseModel):
     sessions: List[DraftingSessionResponse]
     total_sessions: int
 
+class FabTypeCreate(SQLModel):
+    name: str = Field(max_length=100, description="Fab type name")
+    description: Optional[str] = Field(default=None, description="Fab type description")
