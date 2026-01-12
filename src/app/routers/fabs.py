@@ -597,6 +597,13 @@ async def get_fabs(
     # Apply templating date filter to count query if applicable
     if templating_fab_ids is not None:
         count_query = count_query.where(Fab.id.in_(templating_fab_ids))
+    elif schedule_status == "unscheduled":  # ADDED: explicit unscheduled count
+        count_query = count_query.where(
+            or_(
+                ~Fab.id.in_(select(Templating.fab_id)),
+                Fab.id.in_(select(Templating.fab_id).where(Templating.schedule_start_date.is_(None)))
+            )
+        )
     
     # Apply predefined date filters to count query
     if date_filter:
