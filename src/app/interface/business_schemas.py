@@ -1126,3 +1126,19 @@ class DraftingSessionHistoryResponse(BaseModel):
     fab_id: int
     sessions: List[DraftingSessionResponse]
     total_sessions: int
+
+# Fab Type Schemas
+class FabTypeCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100, description="Fab type name")
+    description: Optional[str] = Field(None, description="Fab type description")
+
+
+class FabTypeResponse(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
