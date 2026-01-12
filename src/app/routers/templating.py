@@ -20,7 +20,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
-from src.app.utils.helpers import error_response, success_response
+from src.app.utils.helpers import error_response, success_response, utc_now
 from src.app.database.fab_notes import FabNotes
 
 router = APIRouter()
@@ -249,22 +249,23 @@ async def complete_templating(
     
     # Mark templating as completed (status_id = 2 for completed)
     templating.status_id = 2
-    templating.updated_at = datetime.now()
+    templating.updated_at = utc_now()  # changed
     templating.updated_by = current_user.id
-    
+
     # Update FAB stage: Move to next stage based on current stage
-    # Import get_next_stage from fabs router
     from src.app.routers.fabs import get_next_stage
     
     if fab.current_stage:
         fab.next_stage = get_next_stage(fab.current_stage)
-        # Move to next stage
         if fab.next_stage:
             fab.current_stage = fab.next_stage
             fab.next_stage = get_next_stage(fab.current_stage)
-        fab.updated_at = datetime.now()
+        fab.updated_at = utc_now()  # changed
         fab.updated_by = current_user.id
-    
+
+    # Set template_review_complete to True on successful completion
+    fab.template_review_complete = True  # NEW
+
     await db.commit()
     await db.refresh(templating)
     await db.refresh(fab)

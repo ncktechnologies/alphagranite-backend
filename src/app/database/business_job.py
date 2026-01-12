@@ -20,6 +20,10 @@ class BusinessJobBase(SQLModel):
     project_value: Optional[Decimal] = Field(default=None, sa_column=Column(Numeric(15, 2)))
     status_id: int = Field(foreign_key="status.value_id")
     created_by: int = Field(foreign_key="users.id")
+    sales_person_id: Optional[int] = Field(  # NEW
+        default=None,
+        foreign_key="users.id"
+    )
     created_at: datetime = Field(
         sa_column=Column(DateTime(timezone=False), server_default=func.now())
     )
