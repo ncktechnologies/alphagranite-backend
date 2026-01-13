@@ -103,10 +103,20 @@ async def update_slabsmith(
     
     slabsmith.updated_at = datetime.now()
     slabsmith.updated_by = current_user.id
-    
+
+    # If completed, move the related FAB to cut_list stage
+    if update_data.get("is_completed") is True:
+        fab_result = await db.execute(select(Fab).where(Fab.id == slabsmith.fab_id))
+        fab = fab_result.scalar_one_or_none()
+        if fab:
+            fab.current_stage = "cut_list"
+            fab.next_stage = "final_programming"
+            fab.updated_at = datetime.now()
+            fab.updated_by = current_user.id
+
     await db.commit()
     await db.refresh(slabsmith)
-    
+
     return success_response(serialize_datetime_fields(slabsmith), "Slab smith updated successfully")
 
 
