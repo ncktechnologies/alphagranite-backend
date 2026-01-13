@@ -72,4 +72,4 @@ class Fab(SQLModel, table=True):
     created_by: int = Field(foreign_key="users.id")
     updated_at: Optional[datetime] = None
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
-    cost_of_stone_id: Optional[int] = Field(default=None, foreign_key="cost_of_stone.id")
+    cost_of_stone_id: Optional[int] = Field(default=None, foreign_key="cost_of_stones.id")
