@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from typing import Optional, List
 from sqlalchemy.future import select
-from sqlalchemy import func, and_, or_
+from sqlalchemy import func, and_, or_, Integer
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends, Query
 
@@ -56,14 +56,9 @@ async def get_dashboard(
     
     # 3. Average Revisions - Calculate average number of revisions per FAB
     revisions_query = select(
-        func.avg(
-            func.cast(
-                func.coalesce(Fab.revised, 0),
-                type_=func.Integer
-            )
-        )
+        func.avg(func.coalesce(Fab.revised, 0))
     ).where(and_(*date_filter)) if date_filter else select(
-        func.avg(func.cast(func.coalesce(Fab.revised, 0), type_=func.Integer))
+        func.avg(func.coalesce(Fab.revised, 0))
     )
     revisions_result = await db.execute(revisions_query)
     avg_revisions = revisions_result.scalar() or 0
