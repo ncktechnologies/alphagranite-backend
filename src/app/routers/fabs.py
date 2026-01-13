@@ -216,7 +216,7 @@ async def create_fab(
     
     # Cost of stone validation (if provided)
     if fab_data.cost_of_stone_id:
-        from src.app.database.cost_of_stone import CostOfStone
+        from src.app.database.cost_of_stones import CostOfStone
         cost_stone = await db.get(CostOfStone, fab_data.cost_of_stone_id)
         if not cost_stone:
             return error_response("Cost of stone record not found", 404)

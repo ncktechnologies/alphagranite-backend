@@ -61,8 +61,13 @@ async def schedule_templating(
     # If templating exists but was unscheduled, update it instead of creating new
     if existing_templating:
         # Re-schedule the existing templating
-        existing_templating.is_templating_schedule = True  # ✅ Set back to True
-        # Update other fields...
+        existing_templating.is_templating_schedule = True
+        existing_templating.schedule_start_date = templating_data.schedule_start_date
+        existing_templating.schedule_due_date = templating_data.schedule_due_date
+        existing_templating.total_sqft = templating_data.total_sqft
+        existing_templating.notes = templating_data.notes
+        existing_templating.updated_at = utc_now()
+        existing_templating.updated_by = current_user.id
         templating = existing_templating
     else:
         # Create new templating schedule
@@ -74,8 +79,8 @@ async def schedule_templating(
             total_sqft=templating_data.total_sqft,
             notes=templating_data.notes,
             is_templating_schedule=True,
-            status_id=1,  # Active status
-            created_at=datetime.now(),
+            status_id=1,
+            created_at=utc_now(),
             updated_at=None,
             updated_by=None
         )
@@ -84,7 +89,7 @@ async def schedule_templating(
     # Update fab: move to templating stage and set next stage to pre_draft_review
     fab.current_stage = "templating"
     fab.next_stage = "pre_draft_review"
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     
     await db.commit()
@@ -134,16 +139,15 @@ async def unschedule_templating(
     
     # Update templating to unscheduled
     templating.is_templating_schedule = False
-    templating.updated_at = datetime.now()
+    templating.updated_at = utc_now()
     templating.updated_by = current_user.id
     
     # Reset fab stage - keep it at templating with next_stage as pre_draft_review
     fab_result = await db.execute(select(Fab).where(Fab.id == templating.fab_id))
     fab = fab_result.scalar_one_or_none()
     if fab and fab.current_stage == "templating":
-        # FAB stays at templating stage, just mark templating as unscheduled
         fab.next_stage = "pre_draft_review"
-        fab.updated_at = datetime.now()
+        fab.updated_at = utc_now()
         fab.updated_by = current_user.id
     
     await db.commit()
@@ -176,7 +180,7 @@ async def update_templating(
             else:
                 setattr(templating, field, value)
     
-    templating.updated_at = datetime.now()
+    templating.updated_at = utc_now()
     templating.updated_by = current_user.id
     
     await db.commit()
@@ -324,9 +328,9 @@ async def mark_templating_received(
     if not fab:
         raise error_response("Associated fab not found", 404)
     
-    # Update templating status to received (assuming status_id 2 is "received")
+    # Update templating status to received
     templating.status_id = 2
-    templating.updated_at = datetime.now()
+    templating.updated_at = utc_now()
     templating.updated_by = current_user.id
     
     # ✅ Set template_received to True
@@ -335,7 +339,7 @@ async def mark_templating_received(
     # Move fab to predraft review stage and set next stage to drafting
     fab.current_stage = "pre_draft_review"
     fab.next_stage = "drafting"
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     
     await db.commit()
@@ -446,7 +450,7 @@ async def update_template_review(
     fab.template_received = review_data.template_received
     if review_data.total_sqft is not None:
         fab.total_sqft = review_data.total_sqft
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     
     # Add note if provided
@@ -456,7 +460,7 @@ async def update_template_review(
             stage=fab.current_stage or "templating",
             note=review_data.notes,
             created_by=current_user.id,
-            created_at=datetime.now()
+            created_at=utc_now()
         )
         db.add(fab_note)
     
@@ -491,7 +495,7 @@ async def mark_template_review_complete(
     fab.template_review_complete = review_data.template_review_complete
     if review_data.total_sqft is not None:
         fab.total_sqft = review_data.total_sqft
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     
     await db.commit()
@@ -544,7 +548,7 @@ async def update_templating_work(
         existing_notes = templating.notes or []
         templating.notes = existing_notes + work_data.notes
     
-    templating.updated_at = datetime.now()
+    templating.updated_at = utc_now()
     templating.updated_by = current_user.id
     
     await db.commit()
