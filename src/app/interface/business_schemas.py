@@ -215,6 +215,7 @@ class FabCreate(BaseModel):
     slab_smith_ag_needed: bool = True
     sct_needed: bool = True
     final_programming_needed: bool = True
+    cost_of_stone_id: Optional[int] = Field(None, description="Cost of stone record ID")
 
 
 class FabUpdate(BaseModel):
@@ -264,6 +265,7 @@ class FabUpdate(BaseModel):
     current_stage: Optional[str] = None
     next_stage: Optional[str] = None
     status_id: Optional[int] = None
+    cost_of_stone_id: Optional[int] = Field(None, description="Cost of stone record ID")
 
 
 class FabResponse(BaseModel):
@@ -343,6 +345,7 @@ class FabResponse(BaseModel):
     technician_name: Optional[str] = None
     # FAB Notes (last 10)
     fab_notes: Optional[List[dict]] = None
+    cost_of_stone_id: Optional[int] = Field(None, description="Cost of stone record ID")
 
     class Config:
         from_attributes = True

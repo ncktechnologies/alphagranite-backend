@@ -214,6 +214,13 @@ async def create_fab(
     if not edge:
         return error_response("Edge not found", 404)
     
+    # Cost of stone validation (if provided)
+    if fab_data.cost_of_stone_id:
+        from src.app.database.cost_of_stone import CostOfStone
+        cost_stone = await db.get(CostOfStone, fab_data.cost_of_stone_id)
+        if not cost_stone:
+            return error_response("Cost of stone record not found", 404)
+    
     # Create the fab and start it at templating stage
     fab_dict = fab_data.model_dump()
     
@@ -224,8 +231,8 @@ async def create_fab(
     fab = Fab(
         **fab_dict,
         current_stage="templating",
-        next_stage="pre_draft_review",  # Next stage after templating
-        status_id=1,  # Active/Created status
+        next_stage="pre_draft_review",
+        status_id=1,
         created_by=current_user.id,
         created_at=datetime.now()
     )
