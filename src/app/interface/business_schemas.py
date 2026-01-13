@@ -10,6 +10,7 @@ class JobCreate(BaseModel):
     job_number: str = Field(..., min_length=1, max_length=100, description="Unique job number")
     account_id: int = Field(..., gt=0, description="Account ID")
     project_value: Optional[float] = Field(None, ge=0, description="Project value/amount")
+    sales_person_id: Optional[int] = Field(None, gt=0, description="Sales person ID")
 
 
 class JobUpdate(BaseModel):
@@ -17,6 +18,7 @@ class JobUpdate(BaseModel):
     job_number: Optional[str] = Field(None, min_length=1, max_length=100)
     project_value: Optional[float] = Field(None, ge=0)
     status_id: Optional[int] = None
+    sales_person_id: Optional[int] = None
 
 
 class JobResponse(BaseModel):
@@ -34,6 +36,7 @@ class JobResponse(BaseModel):
     start_date: Optional[datetime] = None
     due_date: Optional[datetime] = None
     project_value: Optional[float] = None
+    sales_person_id: Optional[int] = None
     status_id: int
     created_at: datetime
     created_by: int
