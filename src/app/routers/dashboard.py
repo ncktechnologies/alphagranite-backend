@@ -202,16 +202,17 @@ async def get_dashboard(
     
     # 9. Performance Overview - FABs completed per month (last 12 months)
     twelve_months_ago = end_date - timedelta(days=365)
+    month_trunc = func.date_trunc("month", Fab.created_at)
     performance_query = select(
-        func.date_trunc("month", Fab.created_at).label("month"),
+        month_trunc.label("month"),
         func.count(Fab.id).label("count")
     ).where(
         and_(
             Fab.current_stage == "install_completion",
             Fab.created_at >= twelve_months_ago
         )
-    ).group_by(func.date_trunc("month", Fab.created_at))\
-        .order_by(func.date_trunc("month", Fab.created_at))
+    ).group_by(month_trunc)\
+        .order_by(month_trunc)
     
     performance_result = await db.execute(performance_query)
     performance_rows = performance_result.all()
