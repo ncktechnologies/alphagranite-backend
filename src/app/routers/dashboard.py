@@ -43,6 +43,11 @@ async def get_dashboard(
     total_fabs_result = await db.execute(total_fabs_query)
     total_fabs = total_fabs_result.scalar() or 0
     
+    # 1b. Total Jobs count
+    total_jobs_query = select(func.count(BusinessJob.id)).where(and_(*date_filter)) if date_filter else select(func.count(BusinessJob.id))
+    total_jobs_result = await db.execute(total_jobs_query)
+    total_jobs = total_jobs_result.scalar() or 0
+
     # 2. Pending Installations (status_id = 1, current_stage = install_scheduling or install_completion)
     pending_installations_query = select(func.count(Fab.id)).where(
         and_(
@@ -263,6 +268,7 @@ async def get_dashboard(
     dashboard_data = {
         "kpis": {
             "total_fabs": total_fabs,
+            "total_jobs": total_jobs,
             "pending_installations": pending_installations,
             "average_revisions": round(float(avg_revisions), 2),
             "completion_rate": completion_rate
