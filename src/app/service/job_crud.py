@@ -51,13 +51,14 @@ async def create_job(
     job = BusinessJob(
         name=job_data.name,
         job_number=job_data.job_number,
-        project_value=job_data.project_value,
         account_id=job_data.account_id,
-        description=None,
-        priority="Medium",  # Default priority
-        start_date=None,
-        due_date=None,
-        status_id=1,  # Active status
+        description=job_data.description,
+        priority=job_data.priority or "Medium",
+        start_date=job_data.start_date,
+        due_date=job_data.due_date,
+        project_value=job_data.project_value,
+        sales_person_id=job_data.sales_person_id,  # Add this line
+        status_id=job_data.status_id or 1,
         created_by=user_id,
         created_at=datetime.now()
     )
@@ -293,6 +294,7 @@ async def update_job(
         "due_date": job.due_date,
         "project_value": job.project_value,
         "status_id": job.status_id,
+        "sales_person_id": job.sales_person_id,
         "created_at": job.created_at,
         "created_by": job.created_by,
         "updated_at": job.updated_at,
