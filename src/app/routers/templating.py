@@ -58,12 +58,16 @@ async def schedule_templating(
     if existing_templating and existing_templating.is_templating_schedule:
         raise error_response("Templating already scheduled for this fab", 400)
 
+    # Strip timezone info from datetime fields
+    schedule_start = templating_data.schedule_start_date.replace(tzinfo=None) if templating_data.schedule_start_date else None
+    schedule_due = templating_data.schedule_due_date.replace(tzinfo=None) if templating_data.schedule_due_date else None
+
     # If templating exists but was unscheduled, update it instead of creating new
     if existing_templating:
         # Re-schedule the existing templating
         existing_templating.is_templating_schedule = True
-        existing_templating.schedule_start_date = templating_data.schedule_start_date
-        existing_templating.schedule_due_date = templating_data.schedule_due_date
+        existing_templating.schedule_start_date = schedule_start
+        existing_templating.schedule_due_date = schedule_due
         existing_templating.total_sqft = templating_data.total_sqft
         existing_templating.notes = templating_data.notes
         existing_templating.updated_at = utc_now()
@@ -74,8 +78,8 @@ async def schedule_templating(
         templating = Templating(
             fab_id=templating_data.fab_id,
             technician_id=templating_data.technician_id,
-            schedule_start_date=templating_data.schedule_start_date,
-            schedule_due_date=templating_data.schedule_due_date,
+            schedule_start_date=schedule_start,
+            schedule_due_date=schedule_due,
             total_sqft=templating_data.total_sqft,
             notes=templating_data.notes,
             is_templating_schedule=True,
