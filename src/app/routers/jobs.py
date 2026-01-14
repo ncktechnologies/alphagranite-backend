@@ -154,7 +154,7 @@ async def upload_job_media(
                 name=file.filename,
                 file_path=file_path,
                 file_type=file_type,
-                file_size=file_size,
+                file_size=str(file_size),  # Convert to string
                 job_id=job_id,
                 uploaded_by=current_user.id,
                 created_at=datetime.now()
@@ -170,7 +170,7 @@ async def upload_job_media(
                 "id": db_file.id,
                 "name": file.filename,
                 "file_type": file_type,
-                "file_size": file_size,
+                "file_size": file_size,  # Return as int in response
                 "file_url": file_url,
                 "uploaded_by": current_user.id,
                 "created_at": db_file.created_at.isoformat()
