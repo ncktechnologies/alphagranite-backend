@@ -33,6 +33,9 @@ async def _sync_fab_total_sqft(db: AsyncSession, fab_id: int, total_sqft, user_i
     fab_result = await db.execute(select(Fab).where(Fab.id == fab_id))
     fab = fab_result.scalar_one_or_none()
     if fab:
+        # Convert to float if it's a string
+        if isinstance(total_sqft, str):
+            total_sqft = float(total_sqft) if total_sqft else None
         fab.total_sqft = total_sqft
         fab.updated_at = utc_now()
         fab.updated_by = user_id
