@@ -405,6 +405,7 @@ async def get_job_details(
     
     # Unpack row
     job = row[0]
+    job_id = job.id  # Store job ID before converting to dict
     account_name = row[1]
     account_number = row[2]
     account_contact_person = row[3]
@@ -430,7 +431,7 @@ async def get_job_details(
     job_dict["sales_person_name"] = f"{sales_person_first_name} {sales_person_last_name}" if sales_person_first_name else None
     
     # Get FAB count for this job
-    fab_count_query = select(func.count()).select_from(Fab).where(Fab.job_id == job.id)
+    fab_count_query = select(func.count()).select_from(Fab).where(Fab.job_id == job_id)
     fab_count_result = await db.execute(fab_count_query)
     fab_count = fab_count_result.scalar()
     
@@ -440,7 +441,7 @@ async def get_job_details(
     stage_breakdown_query = select(
         Fab.current_stage,
         func.count().label("count")
-    ).where(Fab.job_id == job.id).group_by(Fab.current_stage)
+    ).where(Fab.job_id == job_id).group_by(Fab.current_stage)
     
     stage_result = await db.execute(stage_breakdown_query)
     stage_rows = stage_result.all()
@@ -453,7 +454,7 @@ async def get_job_details(
         File,
         User.first_name.label("uploader_first_name"),
         User.last_name.label("uploader_last_name")
-    ).where(File.job_id == job.id)
+    ).where(File.job_id == job_id)
     
     media_query = media_query.join(User, File.uploaded_by == User.id, isouter=True)
     media_query = media_query.order_by(File.created_at.desc())
@@ -469,7 +470,7 @@ async def get_job_details(
         uploader_first = row[1]
         uploader_last = row[2]
         
-        file_url = f"{BASE_URL}/api/v1/jobs/{job.id}/media/{file.id}/download"
+        file_url = f"{BASE_URL}/api/v1/jobs/{job_id}/media/{file.id}/download"
         
         media_files.append({
             "id": file.id,
