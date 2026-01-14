@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Optional, List, TYPE_CHECKING
 from sqlmodel import SQLModel, Field, Relationship
 from sqlalchemy.orm import relationship as sa_relationship
+from sqlalchemy import Column
 
 if TYPE_CHECKING:
     from .user_role import UserRole
@@ -45,9 +46,8 @@ class User(SQLModel, table=True):
     # Relationship to job applications
     job_applications: Optional[List["JobApplication"]] = Relationship(back_populates="applicant")
     
-    # Relationship to password reset OTPs using SQLAlchemy relationship
-    password_reset_otps: Optional[List["PasswordResetOTP"]] = sa_relationship(
-        "PasswordResetOTP",
+    # Relationship to password reset OTPs - use sqlmodel Relationship instead
+    password_reset_otps: Optional[List["PasswordResetOTP"]] = Relationship(
         back_populates="user",
-        cascade="all, delete-orphan"
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"}
     )
