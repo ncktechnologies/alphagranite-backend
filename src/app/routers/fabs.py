@@ -2261,3 +2261,26 @@ async def set_fab_hold(
 
     # Reuse existing serializer for consistent response
     return await get_fab(fab_id, db, current_user)
+
+
+@router.patch("/fabs/{fab_id}/toggle-invoice", response_model=SuccessResponse[FabResponse])
+async def toggle_need_to_invoice(
+    fab_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Toggle the need_to_invoice flag for a FAB"""
+    result = await db.execute(select(Fab).where(Fab.id == fab_id))
+    fab = result.scalar_one_or_none()
+    
+    if not fab:
+        raise HTTPException(status_code=404, detail="FAB not found")
+    
+    fab.need_to_invoice = not fab.need_to_invoice
+    fab.updated_at = datetime.now()
+    fab.updated_by = current_user.id
+    
+    await db.commit()
+    await db.refresh(fab)
+    
+    return await get_fab(fab_id, db, current_user)
