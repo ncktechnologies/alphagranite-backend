@@ -9,6 +9,7 @@ from src.app.interface.schemas import (
     TokenSchema, RefreshTokenRequest,
     PasswordResetConfirm, UserProfileUpdate, UserResponse,
     LoginRequest, PasswordChangeRequest, PasswordResetRequest,
+    VerifyOTPRequest,
 )
 
 # ...existing code...
@@ -508,7 +509,7 @@ async def request_password_reset(
 
 @auth_router.post("/verify-reset-otp")
 async def verify_reset_otp(
-    otp_data: dict,  # {"email": "user@example.com", "otp": "123456"}
+    otp_data: VerifyOTPRequest,
     request: Request,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
@@ -520,14 +521,11 @@ async def verify_reset_otp(
         ip_address = request.client.host if request.client else None
         browser = request.headers.get(HEADER_USER_AGENT)
 
-        email = otp_data.get("email")
-        otp = otp_data.get("otp")
-
-        if not email or not otp:
-            raise error_response("Email and OTP are required", 400)
+        username_or_email = otp_data.username_or_email
+        otp = otp_data.otp
 
         # Verify OTP
-        success, error_msg, user_id = await auth_service.verify_reset_otp(email, otp, db)
+        success, error_msg, user_id = await auth_service.verify_reset_otp(username_or_email, otp, db)
 
         if not success:
             background_tasks.add_task(
@@ -570,7 +568,7 @@ async def verify_reset_otp(
 
 @auth_router.post("/reset-password")
 async def reset_password(
-    reset_data: PasswordConfirm,
+    reset_data: PasswordResetConfirm,
     request: Request,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
