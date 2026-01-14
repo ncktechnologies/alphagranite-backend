@@ -1,11 +1,12 @@
-
 import os
 import jwt
 import string
 import secrets
 import logging
-from sqlalchemy import select
+import random
+from sqlalchemy import select, delete
 from dotenv import load_dotenv
+from datetime import datetime, timedelta
 
 # Load environment variables from .env file
 load_dotenv()
@@ -14,9 +15,7 @@ load_dotenv()
     # Wrapping these imports avoids ImportError when importing AuthService
     # in small utility scripts that don't have DB dependencies installed.
 from src.app.database.user import User
-from datetime import datetime, timedelta
-from passlib.context import CryptContext
-from fastapi import HTTPException, status
+from src.app.database.password_reset_otp import PasswordResetOTP
 from typing import Optional, Dict, List, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.app.database.permission import Permission
@@ -24,6 +23,8 @@ from src.app.database.action_menu import ActionMenu
 from src.app.database.role_permission import RolePermission
 from src.app.database.role import Role
 from src.app.database.user_role import UserRole
+from passlib.context import CryptContext
+from fastapi import HTTPException, status
 
 
 class AuthService:
@@ -325,24 +326,101 @@ class AuthService:
 
         return True, None
         
-    async def reset_password(self, user_id: int, new_password: str, db_session: AsyncSession) -> Tuple[bool, Optional[str]]:
-        """Reset a user's password"""
-        res = await db_session.execute(select(User).where(User.id == user_id))
+    async def create_password_reset_otp(self, email: str, db: AsyncSession):
+        """
+        Create a 6-digit OTP for password reset
+        Returns: (success, otp, user)
+        """
+        # Find user by email
+        res = await db.execute(select(User).where(User.email == email))
         user = res.scalars().first()
+
+        if not user:
+            return False, None, None
+
+        # Generate 6-digit OTP
+        otp = ''.join(random.choices(string.digits, k=6))
+
+        # Delete any existing OTP for this user (for security)
+        await db.execute(
+            delete(PasswordResetOTP).where(PasswordResetOTP.user_id == user.id)
+        )
+
+        # Create new OTP record (expires in 10 minutes)
+        password_reset_otp = PasswordResetOTP(
+            user_id=user.id,
+            otp=otp,
+            expires_at=datetime.now() + timedelta(minutes=10),
+            attempts=0
+        )
+        db.add(password_reset_otp)
+        await db.commit()
+
+        return True, otp, user
+
+    async def verify_reset_otp(self, email: str, otp: str, db: AsyncSession):
+        """
+        Verify OTP for password reset
+        Returns: (success, error_msg, user_id)
+        """
+        # Find user by email
+        res = await db.execute(select(User).where(User.email == email))
+        user = res.scalars().first()
+
+        if not user:
+            return False, "User not found", None
+
+        # Find OTP record
+        otp_res = await db.execute(
+            select(PasswordResetOTP).where(PasswordResetOTP.user_id == user.id)
+        )
+        otp_record = otp_res.scalars().first()
+
+        if not otp_record:
+            return False, "No OTP request found. Please request a new OTP.", user.id
+
+        # Check if OTP is expired
+        if datetime.now() > otp_record.expires_at:
+            await db.delete(otp_record)
+            await db.commit()
+            return False, "OTP has expired. Please request a new one.", user.id
+
+        # Check if too many attempts
+        if otp_record.attempts >= 3:
+            await db.delete(otp_record)
+            await db.commit()
+            return False, "Too many failed attempts. Please request a new OTP.", user.id
+
+        # Verify OTP
+        if otp_record.otp != otp:
+            otp_record.attempts += 1
+            db.add(otp_record)
+            await db.commit()
+            remaining_attempts = 3 - otp_record.attempts
+            return False, f"Invalid OTP. {remaining_attempts} attempts remaining.", user.id
+
+        # OTP is valid - delete it
+        await db.delete(otp_record)
+        await db.commit()
+
+        return True, None, user.id
+
+    async def reset_password(self, user_id: int, new_password: str, db: AsyncSession):
+        """
+        Reset user password
+        Returns: (success, error_msg)
+        """
+        res = await db.execute(select(User).where(User.id == user_id))
+        user = res.scalars().first()
+
         if not user:
             return False, "User not found"
 
-        # Hash the new password
-        hashed_password = self.get_password_hash(new_password)
-
-        # Update password in database
-        user.password = hashed_password
-        user.is_first_login = False  # Reset counts as changing password
-        user.failed_login_attempts = 0  # Reset failed login attempts
-        user.is_locked = False  # Unlock account if it was locked
-        user.locked_at = None
+        # Hash and update password
+        user.password = self.hash_password(new_password)
+        user.is_first_login = False
         user.updated_at = datetime.now()
-        db_session.add(user)
-        await db_session.commit()
+        db.add(user)
+        await db.commit()
 
         return True, None

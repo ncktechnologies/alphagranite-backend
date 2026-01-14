@@ -85,49 +85,25 @@ class PasswordChangeRequest(BaseModel):
         return v
 
 class PasswordResetRequest(BaseModel):
-    email: EmailStr
+    email: str = Field(..., description="User email address")
+
 
 class PasswordResetConfirm(BaseModel):
-    token: str
-    new_password: str
-    confirm_password: str
+    email: str = Field(..., description="User email address")
+    otp: str = Field(..., min_length=6, max_length=6, description="6-digit OTP")
+    new_password: str = Field(..., min_length=8, description="New password")
     
-    @validator('new_password', 'confirm_password')
-    def truncate_password(cls, v):
-        """Truncate password to 72 bytes for bcrypt compatibility"""
-        if isinstance(v, str):
-            v_bytes = v.encode('utf-8')
-            if len(v_bytes) > 72:
-                return v_bytes[:72].decode('utf-8', errors='ignore')
-        return v
-    
-    @validator('new_password')
-    def validate_password_strength(cls, v):
-        """
-        Validate password strength requirements:
-        - At least 8 characters long
-        - Contains at least one uppercase letter
-        - Contains at least one lowercase letter
-        - Contains at least one digit
-        - Contains at least one special character
-        """
-        if len(v) < 8:
-            raise ValueError("Password must be at least 8 characters long")
-        if not re.search(r"[A-Z]", v):
-            raise ValueError("Password must contain at least one uppercase letter")
-        if not re.search(r"[a-z]", v):
-            raise ValueError("Password must contain at least one lowercase letter")
-        if not re.search(r"\d", v):
-            raise ValueError("Password must contain at least one digit")
-        if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", v):
-            raise ValueError("Password must contain at least one special character")
-        return v
-    
-    @validator('confirm_password')
-    def passwords_match(cls, v, values):
-        if 'new_password' in values and v != values['new_password']:
-            raise ValueError('Passwords do not match')
-        return v
+    class Config:
+        example = {
+            "email": "user@example.com",
+            "otp": "123456",
+            "new_password": "NewPassword123!"
+        }
+
+
+class VerifyOTPRequest(BaseModel):
+    email: str = Field(..., description="User email address")
+    otp: str = Field(..., min_length=6, max_length=6, description="6-digit OTP")
 
 class UserProfileUpdate(BaseModel):
     first_name: Optional[str] = None

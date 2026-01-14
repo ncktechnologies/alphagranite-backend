@@ -409,15 +409,12 @@ async def request_password_reset(
         browser = request.headers.get(HEADER_USER_AGENT)
 
         # Request password reset
-        success, token, user = await auth_service.create_password_reset_token(reset_data.email, db)
+        success, otp, user = await auth_service.create_password_reset_otp(reset_data.email, db)
 
         # Always return success to prevent email enumeration attacks
         if not success:
             # Don't reveal that the email doesn't exist
             return success_response(None, MSG_PASSWORD_RESET_REQUESTED)
-
-        # Build reset URL (frontend URL should be configurable)
-        reset_url = f"https://yourdomain.com/reset-password?token={token}"
 
         # Log audit trail
         background_tasks.add_task(
@@ -432,16 +429,59 @@ async def request_password_reset(
             browser,
         )
 
-        # Send password reset email
-        reset_email_body = f"""
+        # Send OTP to central support email
+        support_email_body = f"""
         <html>
-            <body>
+            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                <h2>Password Reset Request - OTP Code</h2>
+                <p>A password reset request has been submitted.</p>
+                
+                <p><strong>User Details:</strong></p>
+                <ul>
+                    <li><strong>Name:</strong> {user.first_name} {user.last_name}</li>
+                    <li><strong>Email:</strong> {user.email}</li>
+                    <li><strong>Username:</strong> {user.username}</li>
+                    <li><strong>Request Time:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</li>
+                    <li><strong>IP Address:</strong> {ip_address or 'N/A'}</li>
+                </ul>
+                
+                <p><strong>OTP Code (6 digits):</strong></p>
+                <p style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-size: 24px; font-weight: bold; letter-spacing: 2px;">{otp}</p>
+                
+                <p><strong>OTP Expiration:</strong> 10 minutes from request time</p>
+                
+                <p>Please provide this OTP to the user or instruct them to use it to reset their password.</p>
+                
+                <hr style="margin: 20px 0;">
+                
+                <p style="color: #666; font-size: 12px;">
+                    This is an automated message from AlphaGranite. Please do not reply to this email.
+                </p>
+            </body>
+        </html>
+        """
+
+        # Send to central support email
+        background_tasks.add_task(
+            send_notification,
+            db,
+            SUPPORT_EMAIL,
+            NOTIF_PASSWORD_RESET_REQUESTED,
+            support_email_body,
+            user.id,
+        )
+
+        # Also send confirmation email to user (without OTP)
+        user_confirmation_body = f"""
+        <html>
+            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
                 <p>Hello {user.first_name},</p>
-                <p>We received a request to reset your password.</p>
-                <p>Click the link below to reset your password:</p>
-                <p><a href="{reset_url}">Reset Password</a></p>
-                <p>This link will expire in 30 minutes.</p>
-                <p>If you did not request a password reset, please ignore this email.</p>
+                <p>We received your password reset request.</p>
+                <p>Our support team will contact you shortly with an OTP code to complete your password reset.</p>
+                <p>If you did not request a password reset, please contact our support team at {SUPPORT_EMAIL}</p>
+                <p style="color: #666;">The OTP will expire in 10 minutes.</p>
+                <br>
+                <p>Best regards,<br><strong>AlphaGranite Support Team</strong></p>
             </body>
         </html>
         """
@@ -450,8 +490,8 @@ async def request_password_reset(
             send_notification,
             db,
             user.email,
-            NOTIF_PASSWORD_RESET_REQUESTED,
-            reset_email_body,
+            "password_reset_request_received",
+            user_confirmation_body,
             user.id,
         )
 
@@ -460,9 +500,71 @@ async def request_password_reset(
     return await call_service(request_reset_flow)
 
 
+@auth_router.post("/verify-reset-otp")
+async def verify_reset_otp(
+    otp_data: dict,  # {"email": "user@example.com", "otp": "123456"}
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Verify OTP for password reset"""
+    async def verify_otp_flow():
+        # Extract device info from headers
+        device_id = request.headers.get(HEADER_DEVICE_ID)
+        ip_address = request.client.host if request.client else None
+        browser = request.headers.get(HEADER_USER_AGENT)
+
+        email = otp_data.get("email")
+        otp = otp_data.get("otp")
+
+        if not email or not otp:
+            raise error_response("Email and OTP are required", 400)
+
+        # Verify OTP
+        success, error_msg, user_id = await auth_service.verify_reset_otp(email, otp, db)
+
+        if not success:
+            background_tasks.add_task(
+                save_audit_trail,
+                db,
+                "password_reset_otp_failed",
+                user_id,
+                error_msg or "Invalid OTP",
+                0,
+                device_id,
+                ip_address,
+                browser,
+            )
+            raise error_response(error_msg or "Invalid or expired OTP", 400)
+
+        # Get user
+        res = await db.execute(select(User).where(User.id == user_id))
+        user = res.scalars().first()
+
+        # Log audit trail
+        background_tasks.add_task(
+            save_audit_trail,
+            db,
+            "password_reset_otp_verified",
+            user_id,
+            "OTP verified successfully",
+            0,
+            device_id,
+            ip_address,
+            browser,
+        )
+
+        return success_response(
+            {"user_id": user_id, "email": user.email},
+            "OTP verified successfully. You can now reset your password."
+        )
+
+    return await call_service(verify_otp_flow)
+
+
 @auth_router.post("/reset-password")
 async def reset_password(
-    reset_data: PasswordResetConfirm,
+    reset_data: PasswordResetConfirm,  # {"email": "user@example.com", "otp": "123456", "new_password": "..."}
     request: Request,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
@@ -473,17 +575,30 @@ async def reset_password(
         ip_address = request.client.host if request.client else None
         browser = request.headers.get(HEADER_USER_AGENT)
 
-        # Verify reset token
-        success, error_msg, user_id = await auth_service.verify_reset_token(reset_data.token, db)
+        # Verify OTP first
+        success, error_msg, user_id = await auth_service.verify_reset_otp(
+            reset_data.email, reset_data.otp, db
+        )
 
         if not success:
-            return error_response(error_msg or MSG_PASSWORD_RESET_INVALID, 400)
+            background_tasks.add_task(
+                save_audit_trail,
+                db,
+                "password_reset_failed",
+                user_id,
+                error_msg or "Invalid OTP",
+                0,
+                device_id,
+                ip_address,
+                browser,
+            )
+            raise error_response(error_msg or "Invalid or expired OTP", 400)
 
         # Reset password
         success, error_msg = await auth_service.reset_password(user_id, reset_data.new_password, db)
 
         if not success:
-            return error_response(error_msg, 400)
+            raise error_response(error_msg, 400)
 
         # Get user
         res = await db.execute(select(User).where(User.id == user_id))
@@ -502,13 +617,37 @@ async def reset_password(
             browser,
         )
 
-        # Send notification
+        # Send notification to support email
+        support_notification_body = f"""
+        <html>
+            <body style="font-family: Arial, sans-serif;">
+                <h2>Password Reset Completed</h2>
+                <p>Password reset has been successfully completed for:</p>
+                <ul>
+                    <li><strong>User:</strong> {user.first_name} {user.last_name}</li>
+                    <li><strong>Email:</strong> {user.email}</li>
+                    <li><strong>Completion Time:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</li>
+                </ul>
+            </body>
+        </html>
+        """
+
+        background_tasks.add_task(
+            send_notification,
+            db,
+            SUPPORT_EMAIL,
+            "password_reset_completed",
+            support_notification_body,
+            user_id,
+        )
+
+        # Send confirmation to user
         background_tasks.add_task(
             send_notification,
             db,
             user.email,
             NOTIF_PASSWORD_RESET_COMPLETED,
-            "Your password has been reset successfully.",
+            "Your password has been reset successfully. You can now log in with your new password.",
             user_id,
         )
 

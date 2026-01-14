@@ -43,3 +43,4 @@ class User(SQLModel, table=True):
     roles: Optional[List["UserRole"]] = Relationship(back_populates="user")
     # Relationship to job applications
     job_applications: Optional[List["JobApplication"]] = Relationship(back_populates="applicant")
+    password_reset_otps = Relationship("PasswordResetOTP", back_populates="user", cascade="all, delete-orphan")
