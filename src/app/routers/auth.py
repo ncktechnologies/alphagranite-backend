@@ -403,100 +403,107 @@ async def request_password_reset(
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     async def request_reset_flow():
-        # Extract device info from headers
-        device_id = request.headers.get(HEADER_DEVICE_ID)
-        ip_address = request.client.host if request.client else None
-        browser = request.headers.get(HEADER_USER_AGENT)
+        try:
+            # Extract device info from headers
+            device_id = request.headers.get(HEADER_DEVICE_ID)
+            ip_address = request.client.host if request.client else None
+            browser = request.headers.get(HEADER_USER_AGENT)
 
-        # Request password reset - accepts username or email
-        success, otp, user = await auth_service.create_password_reset_otp(
-            reset_data.username_or_email, db
-        )
+            # Request password reset - accepts username or email
+            success, otp, user = await auth_service.create_password_reset_otp(
+                reset_data.username_or_email, db
+            )
 
-        # Always return success to prevent email enumeration attacks
-        if not success:
+            # Always return success to prevent email enumeration attacks
+            if not success:
+                return success_response(None, MSG_PASSWORD_RESET_REQUESTED)
+
+            # Log audit trail
+            background_tasks.add_task(
+                save_audit_trail,
+                db,
+                AUDIT_PASSWORD_RESET_REQUESTED,
+                user.id,
+                MSG_PASSWORD_RESET_REQUESTED,
+                0,
+                device_id,
+                ip_address,
+                browser,
+            )
+
+            # Send OTP to central support email
+            support_email_body = f"""
+            <html>
+                <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                    <h2>Password Reset Request - OTP Code</h2>
+                    <p>A password reset request has been submitted.</p>
+                    
+                    <p><strong>User Details:</strong></p>
+                    <ul>
+                        <li><strong>Name:</strong> {user.first_name} {user.last_name}</li>
+                        <li><strong>Username:</strong> {user.username}</li>
+                        <li><strong>Email:</strong> {user.email}</li>
+                        <li><strong>Request Time:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</li>
+                        <li><strong>IP Address:</strong> {ip_address or 'N/A'}</li>
+                    </ul>
+                    
+                    <p><strong>OTP Code (6 digits):</strong></p>
+                    <p style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-size: 24px; font-weight: bold; letter-spacing: 2px;">{otp}</p>
+                    
+                    <p><strong>OTP Expiration:</strong> 10 minutes from request time</p>
+                    
+                    <p>Please provide this OTP to the user or instruct them to use it to reset their password.</p>
+                    
+                    <hr style="margin: 20px 0;">
+                    
+                    <p style="color: #666; font-size: 12px;">
+                        This is an automated message from AlphaGranite. Please do not reply to this email.
+                    </p>
+                </body>
+            </html>
+            """
+
+            # Send to central support email
+            background_tasks.add_task(
+                send_notification,
+                db,
+                SUPPORT_EMAIL,
+                NOTIF_PASSWORD_RESET_REQUESTED,
+                support_email_body,
+                user.id,
+            )
+
+            # Also send confirmation email to user
+            user_confirmation_body = f"""
+            <html>
+                <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                    <p>Hello {user.first_name},</p>
+                    <p>We received your password reset request.</p>
+                    <p>Our support team will contact you shortly with an OTP code to complete your password reset.</p>
+                    <p>If you did not request a password reset, please contact our support team at {SUPPORT_EMAIL}</p>
+                    <p style="color: #666;">The OTP will expire in 10 minutes.</p>
+                    <br>
+                    <p>Best regards,<br><strong>AlphaGranite Support Team</strong></p>
+                </body>
+            </html>
+            """
+
+            background_tasks.add_task(
+                send_notification,
+                db,
+                user.email,
+                "password_reset_request_received",
+                user_confirmation_body,
+                user.id,
+            )
+
             return success_response(None, MSG_PASSWORD_RESET_REQUESTED)
 
-        # Log audit trail
-        background_tasks.add_task(
-            save_audit_trail,
-            db,
-            AUDIT_PASSWORD_RESET_REQUESTED,
-            user.id,
-            MSG_PASSWORD_RESET_REQUESTED,
-            0,
-            device_id,
-            ip_address,
-            browser,
-        )
-
-        # Send OTP to central support email
-        support_email_body = f"""
-        <html>
-            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                <h2>Password Reset Request - OTP Code</h2>
-                <p>A password reset request has been submitted.</p>
-                
-                <p><strong>User Details:</strong></p>
-                <ul>
-                    <li><strong>Name:</strong> {user.first_name} {user.last_name}</li>
-                    <li><strong>Username:</strong> {user.username}</li>
-                    <li><strong>Email:</strong> {user.email}</li>
-                    <li><strong>Request Time:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</li>
-                    <li><strong>IP Address:</strong> {ip_address or 'N/A'}</li>
-                </ul>
-                
-                <p><strong>OTP Code (6 digits):</strong></p>
-                <p style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-size: 24px; font-weight: bold; letter-spacing: 2px;">{otp}</p>
-                
-                <p><strong>OTP Expiration:</strong> 10 minutes from request time</p>
-                
-                <p>Please provide this OTP to the user or instruct them to use it to reset their password.</p>
-                
-                <hr style="margin: 20px 0;">
-                
-                <p style="color: #666; font-size: 12px;">
-                    This is an automated message from AlphaGranite. Please do not reply to this email.
-                </p>
-            </body>
-        </html>
-        """
-
-        # Send to central support email
-        background_tasks.add_task(
-            send_notification,
-            db,
-            SUPPORT_EMAIL,
-            NOTIF_PASSWORD_RESET_REQUESTED,
-            support_email_body,
-            user.id,
-        )
-
-        # Also send confirmation email to user
-        user_confirmation_body = f"""
-        <html>
-            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                <p>Hello {user.first_name},</p>
-                <p>We received your password reset request.</p>
-                <p>Our support team will contact you shortly with an OTP code to complete your password reset.</p>
-                <p>If you did not request a password reset, please contact our support team at {SUPPORT_EMAIL}</p>
-                <p style="color: #666;">The OTP will expire in 10 minutes.</p>
-                <br>
-                <p>Best regards,<br><strong>AlphaGranite Support Team</strong></p>
-            </body>
-        </html>
-        """
-
-        background_tasks.add_task(
-            send_notification,
-            db,
-            user.email,
-            "password_reset_request_received",
-            user_confirmation_body,
-            user.id,
-        )
-
-        return success_response(None, MSG_PASSWORD_RESET_REQUESTED)
+        except Exception as e:
+            print(f"Error in request_password_reset: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            raise error_response(f"Error processing password reset request: {str(e)}", 500)
 
     return await call_service(request_reset_flow)
 

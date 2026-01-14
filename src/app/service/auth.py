@@ -4,7 +4,8 @@ import string
 import secrets
 import logging
 import random
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, or_
+from sqlalchemy.ext.asyncio import AsyncSession
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
@@ -17,7 +18,6 @@ load_dotenv()
 from src.app.database.user import User
 from src.app.database.password_reset_otp import PasswordResetOTP
 from typing import Optional, Dict, List, Tuple
-from sqlalchemy.ext.asyncio import AsyncSession
 from src.app.database.permission import Permission
 from src.app.database.action_menu import ActionMenu
 from src.app.database.role_permission import RolePermission
@@ -334,41 +334,48 @@ class AuthService:
         """
         from src.app.database.user import User
         from src.app.database.password_reset_otp import PasswordResetOTP
-        from sqlalchemy import or_
 
-        # Find user by username OR email
-        res = await db.execute(
-            select(User).where(
-                or_(
-                    User.username == username_or_email,
-                    User.email == username_or_email
+        try:
+            # Find user by username OR email
+            res = await db.execute(
+                select(User).where(
+                    or_(
+                        User.username == username_or_email,
+                        User.email == username_or_email
+                    )
                 )
             )
-        )
-        user = res.scalars().first()
+            user = res.scalars().first()
 
-        if not user:
+            if not user:
+                return False, None, None
+
+            # Generate 6-digit OTP
+            otp = ''.join(random.choices(string.digits, k=6))
+
+            # Delete any existing OTP for this user
+            await db.execute(
+                delete(PasswordResetOTP).where(PasswordResetOTP.user_id == user.id)
+            )
+            await db.commit()
+
+            # Create new OTP record (expires in 10 minutes)
+            password_reset_otp = PasswordResetOTP(
+                user_id=user.id,
+                otp=otp,
+                expires_at=datetime.now() + timedelta(minutes=10),
+                attempts=0
+            )
+            db.add(password_reset_otp)
+            await db.commit()
+            await db.refresh(password_reset_otp)
+
+            return True, otp, user
+
+        except Exception as e:
+            await db.rollback()
+            print(f"Error creating password reset OTP: {str(e)}")
             return False, None, None
-
-        # Generate 6-digit OTP
-        otp = ''.join(random.choices(string.digits, k=6))
-
-        # Delete any existing OTP for this user
-        await db.execute(
-            delete(PasswordResetOTP).where(PasswordResetOTP.user_id == user.id)
-        )
-
-        # Create new OTP record (expires in 10 minutes)
-        password_reset_otp = PasswordResetOTP(
-            user_id=user.id,
-            otp=otp,
-            expires_at=datetime.now() + timedelta(minutes=10),
-            attempts=0
-        )
-        db.add(password_reset_otp)
-        await db.commit()
-
-        return True, otp, user
 
     async def verify_reset_otp(self, username_or_email: str, otp: str, db: AsyncSession):
         """
@@ -378,73 +385,87 @@ class AuthService:
         """
         from src.app.database.user import User
         from src.app.database.password_reset_otp import PasswordResetOTP
-        from sqlalchemy import or_
 
-        # Find user by username OR email
-        res = await db.execute(
-            select(User).where(
-                or_(
-                    User.username == username_or_email,
-                    User.email == username_or_email
+        try:
+            # Find user by username OR email
+            res = await db.execute(
+                select(User).where(
+                    or_(
+                        User.username == username_or_email,
+                        User.email == username_or_email
+                    )
                 )
             )
-        )
-        user = res.scalars().first()
+            user = res.scalars().first()
 
-        if not user:
-            return False, "User not found", None
+            if not user:
+                return False, "User not found", None
 
-        # Find OTP record
-        otp_res = await db.execute(
-            select(PasswordResetOTP).where(PasswordResetOTP.user_id == user.id)
-        )
-        otp_record = otp_res.scalars().first()
+            # Find OTP record
+            otp_res = await db.execute(
+                select(PasswordResetOTP).where(PasswordResetOTP.user_id == user.id)
+            )
+            otp_record = otp_res.scalars().first()
 
-        if not otp_record:
-            return False, "No OTP request found. Please request a new OTP.", user.id
+            if not otp_record:
+                return False, "No OTP request found. Please request a new OTP.", user.id
 
-        # Check if OTP is expired
-        if datetime.now() > otp_record.expires_at:
+            # Check if OTP is expired
+            if datetime.now() > otp_record.expires_at:
+                await db.delete(otp_record)
+                await db.commit()
+                return False, "OTP has expired. Please request a new one.", user.id
+
+            # Check if too many attempts
+            if otp_record.attempts >= 3:
+                await db.delete(otp_record)
+                await db.commit()
+                return False, "Too many failed attempts. Please request a new OTP.", user.id
+
+            # Verify OTP
+            if otp_record.otp != otp:
+                otp_record.attempts += 1
+                db.add(otp_record)
+                await db.commit()
+                remaining_attempts = 3 - otp_record.attempts
+                return False, f"Invalid OTP. {remaining_attempts} attempts remaining.", user.id
+
+            # OTP is valid - delete it
             await db.delete(otp_record)
             await db.commit()
-            return False, "OTP has expired. Please request a new one.", user.id
 
-        # Check if too many attempts
-        if otp_record.attempts >= 3:
-            await db.delete(otp_record)
-            await db.commit()
-            return False, "Too many failed attempts. Please request a new OTP.", user.id
+            return True, None, user.id
 
-        # Verify OTP
-        if otp_record.otp != otp:
-            otp_record.attempts += 1
-            db.add(otp_record)
-            await db.commit()
-            remaining_attempts = 3 - otp_record.attempts
-            return False, f"Invalid OTP. {remaining_attempts} attempts remaining.", user.id
-
-        # OTP is valid - delete it
-        await db.delete(otp_record)
-        await db.commit()
-
-        return True, None, user.id
+        except Exception as e:
+            await db.rollback()
+            print(f"Error verifying reset OTP: {str(e)}")
+            return False, f"Error verifying OTP: {str(e)}", None
 
     async def reset_password(self, user_id: int, new_password: str, db: AsyncSession):
         """
         Reset user password
         Returns: (success, error_msg)
         """
-        res = await db.execute(select(User).where(User.id == user_id))
-        user = res.scalars().first()
+        from src.app.database.user import User
 
-        if not user:
-            return False, "User not found"
+        try:
+            res = await db.execute(select(User).where(User.id == user_id))
+            user = res.scalars().first()
 
-        # Hash and update password
-        user.password = self.hash_password(new_password)
-        user.is_first_login = False
-        user.updated_at = datetime.now()
-        db.add(user)
-        await db.commit()
+            if not user:
+                return False, "User not found"
 
-        return True, None
+            # Hash and update password
+            user.password = self.hash_password(new_password)
+            user.is_first_login = False
+            user.updated_at = datetime.now()
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+
+            return True, None
+
+        except Exception as e:
+            await db.rollback()
+            print(f"Error resetting password: {str(e)}")
+            return False, str(e)
