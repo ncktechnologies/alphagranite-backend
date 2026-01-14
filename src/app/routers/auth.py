@@ -408,12 +408,13 @@ async def request_password_reset(
         ip_address = request.client.host if request.client else None
         browser = request.headers.get(HEADER_USER_AGENT)
 
-        # Request password reset
-        success, otp, user = await auth_service.create_password_reset_otp(reset_data.email, db)
+        # Request password reset - accepts username or email
+        success, otp, user = await auth_service.create_password_reset_otp(
+            reset_data.username_or_email, db
+        )
 
         # Always return success to prevent email enumeration attacks
         if not success:
-            # Don't reveal that the email doesn't exist
             return success_response(None, MSG_PASSWORD_RESET_REQUESTED)
 
         # Log audit trail
@@ -439,8 +440,8 @@ async def request_password_reset(
                 <p><strong>User Details:</strong></p>
                 <ul>
                     <li><strong>Name:</strong> {user.first_name} {user.last_name}</li>
-                    <li><strong>Email:</strong> {user.email}</li>
                     <li><strong>Username:</strong> {user.username}</li>
+                    <li><strong>Email:</strong> {user.email}</li>
                     <li><strong>Request Time:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</li>
                     <li><strong>IP Address:</strong> {ip_address or 'N/A'}</li>
                 </ul>
@@ -471,7 +472,7 @@ async def request_password_reset(
             user.id,
         )
 
-        # Also send confirmation email to user (without OTP)
+        # Also send confirmation email to user
         user_confirmation_body = f"""
         <html>
             <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
@@ -564,7 +565,7 @@ async def verify_reset_otp(
 
 @auth_router.post("/reset-password")
 async def reset_password(
-    reset_data: PasswordResetConfirm,  # {"email": "user@example.com", "otp": "123456", "new_password": "..."}
+    reset_data: PasswordResetConfirm,
     request: Request,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
@@ -575,9 +576,9 @@ async def reset_password(
         ip_address = request.client.host if request.client else None
         browser = request.headers.get(HEADER_USER_AGENT)
 
-        # Verify OTP first
+        # Verify OTP first - accepts username or email
         success, error_msg, user_id = await auth_service.verify_reset_otp(
-            reset_data.email, reset_data.otp, db
+            reset_data.username_or_email, reset_data.otp, db
         )
 
         if not success:
@@ -625,6 +626,7 @@ async def reset_password(
                 <p>Password reset has been successfully completed for:</p>
                 <ul>
                     <li><strong>User:</strong> {user.first_name} {user.last_name}</li>
+                    <li><strong>Username:</strong> {user.username}</li>
                     <li><strong>Email:</strong> {user.email}</li>
                     <li><strong>Completion Time:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</li>
                 </ul>

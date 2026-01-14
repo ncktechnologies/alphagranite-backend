@@ -326,13 +326,25 @@ class AuthService:
 
         return True, None
         
-    async def create_password_reset_otp(self, email: str, db: AsyncSession):
+    async def create_password_reset_otp(self, username_or_email: str, db: AsyncSession):
         """
         Create a 6-digit OTP for password reset
+        Accepts both username and email
         Returns: (success, otp, user)
         """
-        # Find user by email
-        res = await db.execute(select(User).where(User.email == email))
+        from src.app.database.user import User
+        from src.app.database.password_reset_otp import PasswordResetOTP
+        from sqlalchemy import or_
+
+        # Find user by username OR email
+        res = await db.execute(
+            select(User).where(
+                or_(
+                    User.username == username_or_email,
+                    User.email == username_or_email
+                )
+            )
+        )
         user = res.scalars().first()
 
         if not user:
@@ -341,7 +353,7 @@ class AuthService:
         # Generate 6-digit OTP
         otp = ''.join(random.choices(string.digits, k=6))
 
-        # Delete any existing OTP for this user (for security)
+        # Delete any existing OTP for this user
         await db.execute(
             delete(PasswordResetOTP).where(PasswordResetOTP.user_id == user.id)
         )
@@ -358,13 +370,25 @@ class AuthService:
 
         return True, otp, user
 
-    async def verify_reset_otp(self, email: str, otp: str, db: AsyncSession):
+    async def verify_reset_otp(self, username_or_email: str, otp: str, db: AsyncSession):
         """
         Verify OTP for password reset
+        Accepts both username and email
         Returns: (success, error_msg, user_id)
         """
-        # Find user by email
-        res = await db.execute(select(User).where(User.email == email))
+        from src.app.database.user import User
+        from src.app.database.password_reset_otp import PasswordResetOTP
+        from sqlalchemy import or_
+
+        # Find user by username OR email
+        res = await db.execute(
+            select(User).where(
+                or_(
+                    User.username == username_or_email,
+                    User.email == username_or_email
+                )
+            )
+        )
         user = res.scalars().first()
 
         if not user:

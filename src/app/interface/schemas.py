@@ -85,24 +85,44 @@ class PasswordChangeRequest(BaseModel):
         return v
 
 class PasswordResetRequest(BaseModel):
-    email: str = Field(..., description="User email address")
-
-
-class PasswordResetConfirm(BaseModel):
-    email: str = Field(..., description="User email address")
-    otp: str = Field(..., min_length=6, max_length=6, description="6-digit OTP")
-    new_password: str = Field(..., min_length=8, description="New password")
+    username_or_email: str = Field(..., description="Username or email address")
     
     class Config:
         example = {
-            "email": "user@example.com",
+            "username_or_email": "john_doe"  # or "john@example.com"
+        }
+
+
+class PasswordResetConfirm(BaseModel):
+    username_or_email: str = Field(..., description="Username or email address")
+    otp: str = Field(..., min_length=6, max_length=6, description="6-digit OTP")
+    new_password: str = Field(..., min_length=8, description="New password")
+    
+    @validator('new_password')
+    def validate_password_strength(cls, v):
+        """Validate password strength"""
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters long")
+        if not re.search(r"[A-Z]", v):
+            raise ValueError("Password must contain at least one uppercase letter")
+        if not re.search(r"[a-z]", v):
+            raise ValueError("Password must contain at least one lowercase letter")
+        if not re.search(r"\d", v):
+            raise ValueError("Password must contain at least one digit")
+        if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", v):
+            raise ValueError("Password must contain at least one special character")
+        return v
+    
+    class Config:
+        example = {
+            "username_or_email": "john_doe",
             "otp": "123456",
             "new_password": "NewPassword123!"
         }
 
 
 class VerifyOTPRequest(BaseModel):
-    email: str = Field(..., description="User email address")
+    username_or_email: str = Field(..., description="Username or email address")
     otp: str = Field(..., min_length=6, max_length=6, description="6-digit OTP")
 
 class UserProfileUpdate(BaseModel):
