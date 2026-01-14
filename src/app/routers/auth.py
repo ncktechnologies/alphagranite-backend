@@ -509,63 +509,63 @@ async def request_password_reset(
     return await call_service(request_reset_flow)
 
 
-@auth_router.post("/verify-reset-otp")
-async def verify_reset_otp(
-    otp_data: VerifyOTPRequest,
-    request: Request,
-    background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
-) -> Any:
-    """Verify OTP for password reset"""
-    async def verify_otp_flow():
-        # Extract device info from headers
-        device_id = request.headers.get(HEADER_DEVICE_ID)
-        ip_address = request.client.host if request.client else None
-        browser = request.headers.get(HEADER_USER_AGENT)
+# @auth_router.post("/verify-reset-otp")
+# async def verify_reset_otp(
+#     otp_data: VerifyOTPRequest,
+#     request: Request,
+#     background_tasks: BackgroundTasks,
+#     db: AsyncSession = Depends(get_db),
+# ) -> Any:
+#     """Verify OTP for password reset"""
+#     async def verify_otp_flow():
+#         # Extract device info from headers
+#         device_id = request.headers.get(HEADER_DEVICE_ID)
+#         ip_address = request.client.host if request.client else None
+#         browser = request.headers.get(HEADER_USER_AGENT)
 
-        username_or_email = otp_data.username_or_email
-        otp = otp_data.otp
+#         username_or_email = otp_data.username_or_email
+#         otp = otp_data.otp
 
-        # Verify OTP
-        success, error_msg, user_id = await auth_service.verify_reset_otp(username_or_email, otp, db)
+#         # Verify OTP
+#         success, error_msg, user_id = await auth_service.verify_reset_otp(username_or_email, otp, db)
 
-        if not success:
-            background_tasks.add_task(
-                save_audit_trail,
-                db,
-                "password_reset_otp_failed",
-                user_id,
-                error_msg or "Invalid OTP",
-                0,
-                device_id,
-                ip_address,
-                browser,
-            )
-            raise error_response(error_msg or "Invalid or expired OTP", 400)
+#         if not success:
+#             background_tasks.add_task(
+#                 save_audit_trail,
+#                 db,
+#                 "password_reset_otp_failed",
+#                 user_id,
+#                 error_msg or "Invalid OTP",
+#                 0,
+#                 device_id,
+#                 ip_address,
+#                 browser,
+#             )
+#             raise error_response(error_msg or "Invalid or expired OTP", 400)
 
-        # Get user
-        res = await db.execute(select(User).where(User.id == user_id))
-        user = res.scalars().first()
+#         # Get user
+#         res = await db.execute(select(User).where(User.id == user_id))
+#         user = res.scalars().first()
 
-        # Log audit trail
-        background_tasks.add_task(
-            save_audit_trail,
-            db,
-            "password_reset_otp_verified",
-            user_id,
-            "OTP verified successfully",
-            0,
-            device_id,
-            ip_address,
-            browser,
-        )
+#         # Log audit trail
+#         background_tasks.add_task(
+#             save_audit_trail,
+#             db,
+#             "password_reset_otp_verified",
+#             user_id,
+#             "OTP verified successfully",
+#             0,
+#             device_id,
+#             ip_address,
+#             browser,
+#         )
 
-        return success_response(
-            {"user_id": user_id, "email": user.email},
-            "OTP verified successfully. You can now reset your password."
-        )
+#         return success_response(
+#             {"user_id": user_id, "email": user.email},
+#             "OTP verified successfully. You can now reset your password."
+#         )
 
-    return await call_service(verify_otp_flow)
+#     return await call_service(verify_otp_flow)
 
 
 @auth_router.post("/reset-password")
