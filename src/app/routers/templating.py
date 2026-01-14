@@ -26,6 +26,18 @@ from src.app.database.fab_notes import FabNotes
 router = APIRouter()
 
 
+# helper to keep Fab.total_sqft in sync with Templating
+async def _sync_fab_total_sqft(db: AsyncSession, fab_id: int, total_sqft, user_id: int):
+    if total_sqft is None:
+        return
+    fab_result = await db.execute(select(Fab).where(Fab.id == fab_id))
+    fab = fab_result.scalar_one_or_none()
+    if fab:
+        fab.total_sqft = total_sqft
+        fab.updated_at = utc_now()
+        fab.updated_by = user_id
+
+
 @router.post("/templating/schedule", response_model=SuccessResponse[TemplatingResponse], status_code=201)
 async def schedule_templating(
     templating_data: TemplatingScheduleCreate,
@@ -96,6 +108,8 @@ async def schedule_templating(
     fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     
+    # After creating/updating templating, keep Fab in sync
+    await _sync_fab_total_sqft(db, templating.fab_id, templating_data.total_sqft, current_user.id)
     await db.commit()
     await db.refresh(templating)
     
@@ -162,7 +176,7 @@ async def unschedule_templating(
 @router.put("/templating/{templating_id}", response_model=SuccessResponse[TemplatingResponse])
 async def update_templating(
     templating_id: int,
-    templating_data: TemplatingScheduleUpdate,
+    update_data: TemplatingScheduleUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -175,8 +189,7 @@ async def update_templating(
         raise error_response("Templating not found", 404)
     
     # Update fields - explicitly handle all fields including total_sqft
-    update_data = templating_data.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
+    for field, value in update_data.model_dump(exclude_unset=True).items():
         if hasattr(templating, field):  # Only set if field exists on model
             # Convert total_sqft to string if it's a float/int (database expects VARCHAR)
             if field == "total_sqft" and value is not None:
@@ -186,7 +199,10 @@ async def update_templating(
     
     templating.updated_at = utc_now()
     templating.updated_by = current_user.id
-    
+
+    # Sync Fab.total_sqft so GET /fabs/{id} reflects the change
+    await _sync_fab_total_sqft(db, templating.fab_id, update_data.total_sqft, current_user.id)
+
     await db.commit()
     await db.refresh(templating)
     
