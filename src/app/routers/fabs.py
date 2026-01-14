@@ -559,23 +559,276 @@ async def get_fabs(
         
         fabs.append(fab_dict)
     
-    # Fetch fab_notes and stage data for all FABs
-    for fab_dict in fabs:
-        fab_notes = await get_fab_notes(db, fab_dict["id"])
-        fab_dict["fab_notes"] = fab_notes
+    # Batch load all related data to avoid N+1 queries
+    fab_ids = [fab_dict["id"] for fab_dict in fabs]
+    
+    if fab_ids:
+        from sqlalchemy.orm import aliased
+        from src.app.database.drafting import Drafting
+        from src.app.database.file import File
         
-        # Fetch draft data
-        draft_data = await get_draft_data(db, fab_dict["id"])
-        fab_dict["draft_data"] = draft_data
+        # Create aliases for users in different contexts
+        CreatorUser = aliased(User)
+        UpdaterUser = aliased(User)
+        DrafterUserAlias = aliased(User)
+        DrafterUpdaterUser = aliased(User)
+        SalesCTDrafterUser = aliased(User)
+        SalesCTUpdaterUser = aliased(User)
         
-        # Fetch Sales CT data
-        sales_ct_data = await get_sales_ct_data(db, fab_dict["id"])
-        fab_dict["sales_ct_data"] = sales_ct_data
+        # 1. Batch load fab notes
+        notes_query = select(
+            FabNotes,
+            CreatorUser.first_name.label("creator_first_name"),
+            CreatorUser.last_name.label("creator_last_name"),
+            UpdaterUser.first_name.label("updater_first_name"),
+            UpdaterUser.last_name.label("updater_last_name")
+        ).where(FabNotes.fab_id.in_(fab_ids))\
+         .join(CreatorUser, FabNotes.created_by == CreatorUser.id, isouter=True)\
+         .join(UpdaterUser, FabNotes.updated_by == UpdaterUser.id, isouter=True)\
+         .order_by(FabNotes.fab_id, FabNotes.created_at.desc())
         
-        # Add stage completion status and stage-specific data
-        stage_info = await get_stage_completion_data(db, fab_dict["id"], fab_dict.get("current_stage"))
-        fab_dict["is_complete"] = stage_info["is_complete"]
-        fab_dict["stage_data"] = stage_info["stage_data"]
+        notes_result = await db.execute(notes_query)
+        notes_rows = notes_result.all()
+        
+        # Group notes by fab_id (limit to 10 per FAB)
+        notes_by_fab = {}
+        for row in notes_rows:
+            note = row[0]
+            creator_first = row[1]
+            creator_last = row[2]
+            updater_first = row[3]
+            updater_last = row[4]
+            
+            if note.fab_id not in notes_by_fab:
+                notes_by_fab[note.fab_id] = []
+            
+            if len(notes_by_fab[note.fab_id]) < 10:
+                notes_by_fab[note.fab_id].append({
+                    "id": note.id,
+                    "fab_id": note.fab_id,
+                    "stage": note.stage,
+                    "note": note.note,
+                    "created_by": note.created_by,
+                    "created_by_name": f"{creator_first} {creator_last}" if creator_first else None,
+                    "created_at": note.created_at.isoformat() if note.created_at else None,
+                    "updated_at": note.updated_at.isoformat() if note.updated_at else None,
+                    "updated_by": note.updated_by,
+                    "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
+                })
+        
+        # 2. Batch load drafting data
+        drafting_query = select(
+            Drafting,
+            DrafterUserAlias.first_name.label("drafter_first_name"),
+            DrafterUserAlias.last_name.label("drafter_last_name"),
+            DrafterUpdaterUser.first_name.label("updater_first_name"),
+            DrafterUpdaterUser.last_name.label("updater_last_name")
+        ).where(Drafting.fab_id.in_(fab_ids))\
+         .join(DrafterUserAlias, Drafting.drafter_id == DrafterUserAlias.id, isouter=True)\
+         .join(DrafterUpdaterUser, Drafting.updated_by == DrafterUpdaterUser.id, isouter=True)\
+         .order_by(Drafting.fab_id, Drafting.id.desc())
+        
+        drafting_result = await db.execute(drafting_query)
+        drafting_rows = drafting_result.all()
+        
+        # Get unique file IDs from all drafting records
+        all_draft_file_ids = set()
+        for row in drafting_rows:
+            draft = row[0]
+            if draft.file_ids:
+                file_id_list = [int(fid.strip()) for fid in draft.file_ids.split(",") if fid.strip()]
+                all_draft_file_ids.update(file_id_list)
+        
+        # Batch load draft files
+        draft_files_by_id = {}
+        if all_draft_file_ids:
+            draft_files_query = select(File).where(File.id.in_(all_draft_file_ids))
+            draft_files_result = await db.execute(draft_files_query)
+            draft_files = draft_files_result.scalars().all()
+            
+            for file in draft_files:
+                filename = os.path.basename(file.file_path)
+                file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
+                draft_files_by_id[file.id] = {
+                    "id": file.id,
+                    "name": file.name,
+                    "file_url": file_url,
+                    "file_type": file.file_type,
+                    "file_size": file.file_size,
+                    "created_at": file.created_at.isoformat() if file.created_at else None
+                }
+        
+        # Group drafting data by fab_id (get latest only)
+        drafting_by_fab = {}
+        for row in drafting_rows:
+            draft = row[0]
+            drafter_first = row[1]
+            drafter_last = row[2]
+            updater_first = row[3]
+            updater_last = row[4]
+            
+            if draft.fab_id not in drafting_by_fab:
+                # Get files for this draft
+                files_data = []
+                if draft.file_ids:
+                    file_id_list = [int(fid.strip()) for fid in draft.file_ids.split(",") if fid.strip()]
+                    files_data = [draft_files_by_id[fid] for fid in file_id_list if fid in draft_files_by_id]
+                
+                drafting_by_fab[draft.fab_id] = {
+                    "id": draft.id,
+                    "fab_id": draft.fab_id,
+                    "drafter_id": draft.drafter_id,
+                    "drafter_name": f"{drafter_first} {drafter_last}" if drafter_first else None,
+                    "drafter_start_date": draft.drafter_start_date.isoformat() if draft.drafter_start_date else None,
+                    "drafter_end_date": draft.drafter_end_date.isoformat() if draft.drafter_end_date else None,
+                    "total_sqft_drafted": float(draft.total_sqft_drafted) if draft.total_sqft_drafted else None,
+                    "no_of_piece_drafted": draft.no_of_piece_drafted,
+                    "draft_note": draft.draft_note,
+                    "mentions": draft.mentions,
+                    "total_hours_drafted": float(draft.total_hours_drafted) if draft.total_hours_drafted else None,
+                    "file_ids": draft.file_ids,
+                    "files": files_data,
+                    "status_id": draft.status_id,
+                    "created_at": draft.created_at.isoformat() if draft.created_at else None,
+                    "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
+                    "updated_by": draft.updated_by,
+                    "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
+                }
+        
+        # 3. Batch load sales_ct data
+        sales_ct_query = select(
+            SalesCT,
+            SalesCTDrafterUser.first_name.label("drafter_first_name"),
+            SalesCTDrafterUser.last_name.label("drafter_last_name"),
+            SalesCTUpdaterUser.first_name.label("updater_first_name"),
+            SalesCTUpdaterUser.last_name.label("updater_last_name")
+        ).where(SalesCT.fab_id.in_(fab_ids))\
+         .join(SalesCTDrafterUser, SalesCT.drafter_id == SalesCTDrafterUser.id, isouter=True)\
+         .join(SalesCTUpdaterUser, SalesCT.updated_by == SalesCTUpdaterUser.id, isouter=True)\
+         .order_by(SalesCT.fab_id, SalesCT.id.desc())
+        
+        sales_ct_result = await db.execute(sales_ct_query)
+        sales_ct_rows = sales_ct_result.all()
+        
+        # Get unique file IDs from all sales_ct records
+        all_sct_file_ids = set()
+        for row in sales_ct_rows:
+            sct = row[0]
+            if sct.file_ids:
+                file_id_list = [int(fid.strip()) for fid in sct.file_ids.split(",") if fid.strip()]
+                all_sct_file_ids.update(file_id_list)
+        
+        # Batch load sales_ct files
+        sct_files_by_id = {}
+        if all_sct_file_ids:
+            sct_files_query = select(File).where(File.id.in_(all_sct_file_ids))
+            sct_files_result = await db.execute(sct_files_query)
+            sct_files = sct_files_result.scalars().all()
+            
+            for file in sct_files:
+                filename = os.path.basename(file.file_path)
+                file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
+                sct_files_by_id[file.id] = {
+                    "id": file.id,
+                    "name": file.name,
+                    "file_url": file_url,
+                    "file_type": file.file_type,
+                    "file_size": file.file_size,
+                    "created_at": file.created_at.isoformat() if file.created_at else None
+                }
+        
+        # Group sales_ct data by fab_id (get latest only)
+        sales_ct_by_fab = {}
+        for row in sales_ct_rows:
+            sct = row[0]
+            drafter_first = row[1]
+            drafter_last = row[2]
+            updater_first = row[3]
+            updater_last = row[4]
+            
+            if sct.fab_id not in sales_ct_by_fab:
+                # Get files for this sales_ct
+                files_data = []
+                if sct.file_ids:
+                    file_id_list = [int(fid.strip()) for fid in sct.file_ids.split(",") if fid.strip()]
+                    files_data = [sct_files_by_id[fid] for fid in file_id_list if fid in sct_files_by_id]
+                
+                sales_ct_by_fab[sct.fab_id] = {
+                    "id": sct.id,
+                    "fab_id": sct.fab_id,
+                    "slab_smith_type": sct.slab_smith_type,
+                    "drafter_id": sct.drafter_id,
+                    "drafter_name": f"{drafter_first} {drafter_last}" if drafter_first else None,
+                    "start_date": sct.start_date.isoformat() if sct.start_date else None,
+                    "end_date": sct.end_date.isoformat() if sct.end_date else None,
+                    "total_sqft_completed": sct.total_sqft_completed,
+                    "is_revision_needed": sct.is_revision_needed,
+                    "is_revision_completed": sct.is_revision_completed,
+                    "no_of_revisions": sct.no_of_revisions,
+                    "current_revision_count": sct.current_revision_count,
+                    "revision_reason": sct.revision_reason,
+                    "file_ids": sct.file_ids,
+                    "files": files_data,
+                    "status_id": sct.status_id,
+                    "created_at": sct.created_at.isoformat() if sct.created_at else None,
+                    "updated_at": sct.updated_at.isoformat() if sct.updated_at else None,
+                    "updated_by": sct.updated_by,
+                    "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
+                }
+        
+        # 4. Batch load stage completion data (templating)
+        templating_stage_query = select(Templating).where(
+            Templating.fab_id.in_(fab_ids),
+            Templating.is_templating_schedule == True
+        ).order_by(Templating.fab_id, Templating.id.desc())
+        
+        templating_stage_result = await db.execute(templating_stage_query)
+        templating_stage_rows = templating_stage_result.scalars().all()
+        
+        # Group stage data by fab_id (get latest only)
+        stage_data_by_fab = {}
+        for templating in templating_stage_rows:
+            if templating.fab_id not in stage_data_by_fab:
+                stage_data_by_fab[templating.fab_id] = {
+                    "is_complete": templating.is_completed,
+                    "stage_data": {
+                        "templating_id": templating.id,
+                        "technician_id": templating.technician_id,
+                        "schedule_start_date": templating.schedule_start_date.isoformat() if templating.schedule_start_date else None,
+                        "schedule_due_date": templating.schedule_due_date.isoformat() if templating.schedule_due_date else None,
+                        "actual_start_date": templating.actual_start_date.isoformat() if templating.actual_start_date else None,
+                        "duration": templating.duration,
+                        "total_sqft": templating.total_sqft,
+                        "is_completed": templating.is_completed,
+                        "notes": templating.notes
+                    }
+                }
+        
+        # 5. Assign all batch-loaded data to fabs
+        for fab_dict in fabs:
+            fab_id = fab_dict["id"]
+            fab_dict["fab_notes"] = notes_by_fab.get(fab_id, [])
+            fab_dict["draft_data"] = drafting_by_fab.get(fab_id)
+            fab_dict["sales_ct_data"] = sales_ct_by_fab.get(fab_id)
+            
+            # Handle stage completion based on current_stage
+            current_stage = fab_dict.get("current_stage")
+            if current_stage == "templating":
+                stage_info = stage_data_by_fab.get(fab_id, {"is_complete": False, "stage_data": None})
+                fab_dict["is_complete"] = stage_info["is_complete"]
+                fab_dict["stage_data"] = stage_info["stage_data"]
+            else:
+                # For other stages, default to False/None (can be extended later)
+                fab_dict["is_complete"] = False
+                fab_dict["stage_data"] = None
+    else:
+        # No FABs to process
+        for fab_dict in fabs:
+            fab_dict["fab_notes"] = []
+            fab_dict["draft_data"] = None
+            fab_dict["sales_ct_data"] = None
+            fab_dict["is_complete"] = False
+            fab_dict["stage_data"] = None
     
     # Count total FABs with same filters (without pagination)
     count_query = select(func.count(Fab.id)).select_from(Fab)
