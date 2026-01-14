@@ -259,7 +259,7 @@ async def get_fabs(
     schedule_start_date: Optional[date] = Query(None, description="Filter FABs scheduled on or after this date (YYYY-MM-DD)"),
     schedule_due_date: Optional[date] = Query(None, description="Filter FABs scheduled on or before this date (YYYY-MM-DD)"),
     schedule_status: Optional[str] = Query(None, description="Filter by schedule status: scheduled or unscheduled"),
-    date_filter: Optional[str] = Query(None, description="Predefined date filter: today, this_week, this_month, next_week, next_month"),
+    date_filter: Optional[str] = Query(None, description="Predefined date filter: today, this_week, last_week, this_month, last_month, next_week, next_month"),
     search: Optional[str] = Query(None, description="Search by FAB ID, Job Name, or Job Number"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -308,6 +308,13 @@ async def get_fabs(
                     Templating.schedule_start_date >= start_of_week,
                     Templating.schedule_start_date <= end_of_week
                 )
+            elif date_filter == "last_week":
+                start_of_last_week = today - timedelta(days=today.weekday() + 7)
+                end_of_last_week = start_of_last_week + timedelta(days=6)
+                templating_query = templating_query.where(
+                    Templating.schedule_start_date >= start_of_last_week,
+                    Templating.schedule_start_date <= end_of_last_week
+                )
             elif date_filter == "this_month":
                 start_of_month = today.replace(day=1)
                 if today.month == 12:
@@ -318,6 +325,17 @@ async def get_fabs(
                 templating_query = templating_query.where(
                     Templating.schedule_start_date >= start_of_month,
                     Templating.schedule_start_date <= end_of_month
+                )
+            elif date_filter == "last_month":
+                if today.month == 1:
+                    start_of_last_month = today.replace(year=today.year - 1, month=12, day=1)
+                    end_of_last_month = today.replace(year=today.year - 1, month=12, day=31)
+                else:
+                    start_of_last_month = today.replace(month=today.month - 1, day=1)
+                    end_of_last_month = today.replace(day=1) - timedelta(days=1)
+                templating_query = templating_query.where(
+                    Templating.schedule_start_date >= start_of_last_month,
+                    Templating.schedule_start_date <= end_of_last_month
                 )
             elif date_filter == "next_week":
                 start_of_next_week = today + timedelta(days=(7 - today.weekday()))
@@ -883,6 +901,13 @@ async def get_fabs(
                 latest_templating.c.schedule_start_date >= start_of_week,
                 latest_templating.c.schedule_start_date <= end_of_week
             )
+        elif date_filter == "last_week":
+            start_of_last_week = today - timedelta(days=today.weekday() + 7)
+            end_of_last_week = start_of_last_week + timedelta(days=6)
+            count_query = count_query.where(
+                latest_templating.c.schedule_start_date >= start_of_last_week,
+                latest_templating.c.schedule_start_date <= end_of_last_week
+            )
         elif date_filter == "this_month":
             start_of_month = today.replace(day=1)
             if today.month == 12:
@@ -893,6 +918,17 @@ async def get_fabs(
             count_query = count_query.where(
                 latest_templating.c.schedule_start_date >= start_of_month,
                 latest_templating.c.schedule_start_date <= end_of_month
+            )
+        elif date_filter == "last_month":
+            if today.month == 1:
+                start_of_last_month = today.replace(year=today.year - 1, month=12, day=1)
+                end_of_last_month = today.replace(year=today.year - 1, month=12, day=31)
+            else:
+                start_of_last_month = today.replace(month=today.month - 1, day=1)
+                end_of_last_month = today.replace(day=1) - timedelta(days=1)
+            count_query = count_query.where(
+                latest_templating.c.schedule_start_date >= start_of_last_month,
+                latest_templating.c.schedule_start_date <= end_of_last_month
             )
         elif date_filter == "next_week":
             start_of_next_week = today + timedelta(days=(7 - today.weekday()))
@@ -977,6 +1013,13 @@ async def get_fabs(
                     latest_templating.c.schedule_start_date >= start_of_week,
                     latest_templating.c.schedule_start_date <= end_of_week
                 )
+            elif date_filter == "last_week":
+                start_of_last_week = today - timedelta(days=today.weekday() + 7)
+                end_of_last_week = start_of_last_week + timedelta(days=6)
+                totals_query = totals_query.where(
+                    latest_templating.c.schedule_start_date >= start_of_last_week,
+                    latest_templating.c.schedule_start_date <= end_of_last_week
+                )
             elif date_filter == "this_month":
                 start_of_month = today.replace(day=1)
                 if today.month == 12:
@@ -987,6 +1030,17 @@ async def get_fabs(
                 totals_query = totals_query.where(
                     latest_templating.c.schedule_start_date >= start_of_month,
                     latest_templating.c.schedule_start_date <= end_of_month
+                )
+            elif date_filter == "last_month":
+                if today.month == 1:
+                    start_of_last_month = today.replace(year=today.year - 1, month=12, day=1)
+                    end_of_last_month = today.replace(year=today.year - 1, month=12, day=31)
+                else:
+                    start_of_last_month = today.replace(month=today.month - 1, day=1)
+                    end_of_last_month = today.replace(day=1) - timedelta(days=1)
+                totals_query = totals_query.where(
+                    latest_templating.c.schedule_start_date >= start_of_last_month,
+                    latest_templating.c.schedule_start_date <= end_of_last_month
                 )
             elif date_filter == "next_week":
                 start_of_next_week = today + timedelta(days=(7 - today.weekday()))
@@ -2062,7 +2116,6 @@ async def get_draft_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
                     "file_size": file.file_size,
                     "created_at": file.created_at.isoformat() if file.created_at else None
                 })
-    
     draft_dict = {
         "id": drafting.id,
         "fab_id": drafting.fab_id,
