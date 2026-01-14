@@ -610,7 +610,7 @@ async def get_templaters(
     # Get all users in TEMPLATE department
     users_result = await db.execute(
         select(User)
-        .where(User.department_id == department.id)
+        .where(User.department == department.id)
         .order_by(User.first_name, User.last_name)
     )
     users = users_result.scalars().all()
@@ -623,7 +623,7 @@ async def get_templaters(
             "last_name": user.last_name,
             "name": f"{user.first_name} {user.last_name}",
             "email": user.email,
-            "department_id": user.department_id
+            "department_id": user.department
         }
         for user in users
     ]
