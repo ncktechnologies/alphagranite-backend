@@ -124,13 +124,9 @@ async def upload_job_media(
                 errors.append(f"{file.filename}: File type not allowed")
                 continue
             
-            # Validate file size (max 100MB)
+            # Read file content
             file_content = await file.read()
             file_size = len(file_content)
-            
-            if file_size > 100 * 1024 * 1024:  # 100MB
-                errors.append(f"{file.filename}: File too large (max 100MB)")
-                continue
             
             # Create upload directory if it doesn't exist
             job_upload_dir = os.path.join(UPLOAD_DIR, f"job_{job_id}")
