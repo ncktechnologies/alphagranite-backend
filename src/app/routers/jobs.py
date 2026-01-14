@@ -16,6 +16,11 @@ from src.app.database.fab import Fab
 from src.app.interface.response_wrappers import SuccessResponse, error_response, success_response
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.utils.helpers import utc_now
+from src.app.interface.business_schemas import (
+    JobCreate, JobUpdate, JobResponse,
+)
+from src.app.service import job_crud
+from src.app.utils.permissions import PermissionChecker
 
 router = APIRouter()
 
