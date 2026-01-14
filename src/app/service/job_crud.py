@@ -100,7 +100,8 @@ async def create_job(
         "created_at": job.created_at,
         "created_by": job.created_by,
         "updated_at": job.updated_at,
-        "updated_by": job.updated_by
+        "updated_by": job.updated_by,
+        "need_to_invoice": job.need_to_invoice
     }
 
 async def get_jobs(
@@ -176,7 +177,8 @@ async def get_jobs(
             "created_at": job.created_at,
             "created_by": job.created_by,
             "updated_at": job.updated_at,
-            "updated_by": job.updated_by
+            "updated_by": job.updated_by,
+            "need_to_invoice": job.need_to_invoice
         })
     
     return jobs_list
@@ -240,7 +242,8 @@ async def get_job_by_id(
         "created_at": job.created_at,
         "created_by": job.created_by,
         "updated_at": job.updated_at,
-        "updated_by": job.updated_by
+        "updated_by": job.updated_by,
+        "need_to_invoice": job.need_to_invoice
     }
 
 async def update_job(
@@ -327,7 +330,8 @@ async def update_job(
         "created_at": job.created_at,
         "created_by": job.created_by,
         "updated_at": job.updated_at,
-        "updated_by": job.updated_by
+        "updated_by": job.updated_by,
+        "need_to_invoice": job.need_to_invoice
     }
 
 
@@ -444,3 +448,40 @@ async def check_job_number_exists(
     existing_job = result.scalar_one_or_none()
     
     return existing_job is not None
+
+async def toggle_job_invoice_flag(
+    db: AsyncSession,
+    job_id: int,
+    user_id: int
+) -> dict:
+    """
+    Toggle the need_to_invoice flag for a job.
+    
+    Args:
+        db: Database session
+        job_id: ID of job to toggle invoice flag
+        user_id: ID of user toggling the flag
+        
+    Returns:
+        Dict with job_id and new need_to_invoice value
+        
+    Raises:
+        HTTPException: If job not found
+    """
+    result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
+    job = result.scalar_one_or_none()
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job.need_to_invoice = not job.need_to_invoice
+    job.updated_at = datetime.now()
+    job.updated_by = user_id
+    
+    await db.commit()
+    await db.refresh(job)
+    
+    return {
+        "job_id": job.id,
+        "need_to_invoice": job.need_to_invoice
+    }

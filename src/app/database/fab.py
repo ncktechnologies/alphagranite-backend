@@ -76,4 +76,3 @@ class Fab(SQLModel, table=True):
     updated_at: Optional[datetime] = None
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
     cost_of_stone_id: Optional[int] = Field(default=None, foreign_key="cost_of_stones.id")
-    need_to_invoice: bool = Field(default=False)

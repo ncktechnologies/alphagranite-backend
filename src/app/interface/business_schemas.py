@@ -11,6 +11,7 @@ class JobCreate(BaseModel):
     account_id: int = Field(..., gt=0, description="Account ID")
     project_value: Optional[float] = Field(None, ge=0, description="Project value/amount")
     sales_person_id: Optional[int] = Field(None, gt=0, description="Sales person ID")
+    need_to_invoice: bool = False
 
 
 class JobUpdate(BaseModel):
@@ -19,6 +20,7 @@ class JobUpdate(BaseModel):
     project_value: Optional[float] = Field(None, ge=0)
     status_id: Optional[int] = None
     sales_person_id: Optional[int] = None
+    need_to_invoice: Optional[bool] = None
 
 
 class JobResponse(BaseModel):
@@ -43,6 +45,7 @@ class JobResponse(BaseModel):
     created_by: int
     updated_at: Optional[datetime] = None
     updated_by: Optional[int] = None
+    need_to_invoice: Optional[bool] = None
 
 
 # Account Schemas
@@ -218,7 +221,6 @@ class FabCreate(BaseModel):
     final_programming_needed: bool = True
     cost_of_stone_id: Optional[int] = Field(None, description="Cost of stone record ID")
     cost_of_stone: Optional[Decimal] = Field(None, description="Cost of stone amount")
-    need_to_invoice: bool = False
 
 
 class FabUpdate(BaseModel):
@@ -270,7 +272,6 @@ class FabUpdate(BaseModel):
     status_id: Optional[int] = None
     cost_of_stone_id: Optional[int] = Field(None, description="Cost of stone record ID")
     cost_of_stone: Optional[Decimal] = Field(None, description="Cost of stone amount")
-    need_to_invoice: Optional[bool] = None
 
 
 class FabResponse(BaseModel):
@@ -352,7 +353,6 @@ class FabResponse(BaseModel):
     fab_notes: Optional[List[dict]] = None
     cost_of_stone_id: Optional[int] = Field(None, description="Cost of stone record ID")
     cost_of_stone: Optional[Decimal] = Field(None, description="Cost of stone amount")
-    need_to_invoice: bool
 
     class Config:
         from_attributes = True

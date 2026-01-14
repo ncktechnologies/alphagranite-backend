@@ -496,3 +496,21 @@ async def get_job_details(
     job_dict["media_summary"] = media_summary
 
     return success_response(job_dict, f"Job details retrieved successfully")
+
+
+@router.patch("/jobs/{job_id}/toggle-invoice")
+async def toggle_need_to_invoice(
+    job_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Toggle the need_to_invoice flag for a job"""
+    from src.app.service.job_crud import toggle_job_invoice_flag
+    
+    result = await toggle_job_invoice_flag(db, job_id, current_user.id)
+    
+    return {
+        "success": True,
+        "message": "Invoice flag toggled successfully",
+        "data": result
+    }

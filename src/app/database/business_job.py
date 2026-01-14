@@ -32,6 +32,7 @@ class BusinessJobBase(SQLModel):
         sa_column=Column(DateTime(timezone=False), onupdate=func.now()),
     )
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    need_to_invoice: bool = Field(default=False)
 
 
 class BusinessJob(BusinessJobBase, table=True):
