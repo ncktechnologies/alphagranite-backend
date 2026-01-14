@@ -13,10 +13,8 @@ from src.app.interface.schemas import (
 
 # ...existing code...
 
-# Place the refresh token endpoint after auth_router is defined
-
 from src.app.utils.constants import *
-from src.app.utils.config import ADMIN_EMAIL
+from src.app.utils.config import ADMIN_EMAIL, SUPPORT_EMAIL
 from src.app.interface.response_wrappers import SuccessResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from src.app.service.background import send_notification, save_audit_trail
@@ -572,7 +570,7 @@ async def verify_reset_otp(
 
 @auth_router.post("/reset-password")
 async def reset_password(
-    reset_data: PasswordResetConfirm,
+    reset_data: PasswordConfirm,
     request: Request,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
