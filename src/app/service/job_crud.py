@@ -10,6 +10,7 @@ from fastapi import HTTPException
 
 from src.app.database.business_job import BusinessJob
 from src.app.database.account import Account
+from src.app.database.user import User
 from src.app.interface.business_schemas import JobCreate, JobUpdate
 
 
@@ -69,7 +70,15 @@ async def create_job(
     await db.commit()
     await db.refresh(job)
     
-    # Return job with account details
+    # Get sales person details
+    sales_person = None
+    if job.sales_person_id:
+        sales_person_result = await db.execute(
+            select(User).where(User.id == job.sales_person_id)
+        )
+        sales_person = sales_person_result.scalar_one_or_none()
+    
+    # Return job with account and sales person details
     return {
         "id": job.id,
         "name": job.name,
@@ -87,13 +96,12 @@ async def create_job(
         "project_value": job.project_value,
         "status_id": job.status_id,
         "sales_person_id": job.sales_person_id,
+        "sales_person_name": f"{sales_person.first_name} {sales_person.last_name}" if sales_person else None,
         "created_at": job.created_at,
         "created_by": job.created_by,
         "updated_at": job.updated_at,
         "updated_by": job.updated_by
     }
-    
-
 
 async def get_jobs(
     db: AsyncSession,
@@ -117,16 +125,17 @@ async def get_jobs(
     Returns:
         List of Job dicts with account details
     """
-    from sqlalchemy.orm import aliased
-    
     query = select(
         BusinessJob,
         Account.name.label("account_name"),
         Account.account_number.label("account_number"),
         Account.contact_person.label("account_contact_person"),
         Account.email.label("account_email"),
-        Account.phone.label("account_phone")
-    ).outerjoin(Account, BusinessJob.account_id == Account.id)
+        Account.phone.label("account_phone"),
+        User.first_name.label("sales_first_name"),
+        User.last_name.label("sales_last_name")
+    ).outerjoin(Account, BusinessJob.account_id == Account.id)\
+     .outerjoin(User, BusinessJob.sales_person_id == User.id)
     
     # Apply filters
     if account_id is not None:
@@ -145,6 +154,7 @@ async def get_jobs(
     jobs_list = []
     for row in rows:
         job = row[0]
+        sales_person_name = f"{row[6]} {row[7]}" if row[6] and row[7] else None
         jobs_list.append({
             "id": job.id,
             "name": job.name,
@@ -162,6 +172,7 @@ async def get_jobs(
             "project_value": job.project_value,
             "status_id": job.status_id,
             "sales_person_id": job.sales_person_id,
+            "sales_person_name": sales_person_name,
             "created_at": job.created_at,
             "created_by": job.created_by,
             "updated_at": job.updated_at,
@@ -169,7 +180,6 @@ async def get_jobs(
         })
     
     return jobs_list
-
 
 async def get_job_by_id(
     db: AsyncSession,
@@ -194,8 +204,12 @@ async def get_job_by_id(
         Account.account_number.label("account_number"),
         Account.contact_person.label("account_contact_person"),
         Account.email.label("account_email"),
-        Account.phone.label("account_phone")
-    ).outerjoin(Account, BusinessJob.account_id == Account.id).where(BusinessJob.id == job_id)
+        Account.phone.label("account_phone"),
+        User.first_name.label("sales_first_name"),
+        User.last_name.label("sales_last_name")
+    ).outerjoin(Account, BusinessJob.account_id == Account.id)\
+     .outerjoin(User, BusinessJob.sales_person_id == User.id)\
+     .where(BusinessJob.id == job_id)
     
     result = await db.execute(query)
     row = result.first()
@@ -204,6 +218,7 @@ async def get_job_by_id(
         raise HTTPException(status_code=404, detail="Job not found")
     
     job = row[0]
+    sales_person_name = f"{row[6]} {row[7]}" if row[6] and row[7] else None
     return {
         "id": job.id,
         "name": job.name,
@@ -221,12 +236,12 @@ async def get_job_by_id(
         "project_value": job.project_value,
         "status_id": job.status_id,
         "sales_person_id": job.sales_person_id,
+        "sales_person_name": sales_person_name,
         "created_at": job.created_at,
         "created_by": job.created_by,
         "updated_at": job.updated_at,
         "updated_by": job.updated_by
     }
-
 
 async def update_job(
     db: AsyncSession,
@@ -283,6 +298,14 @@ async def update_job(
         )
         account = account_result.scalar_one_or_none()
     
+    # Get sales person details
+    sales_person = None
+    if job.sales_person_id:
+        sales_person_result = await db.execute(
+            select(User).where(User.id == job.sales_person_id)
+        )
+        sales_person = sales_person_result.scalar_one_or_none()
+    
     return {
         "id": job.id,
         "name": job.name,
@@ -300,6 +323,7 @@ async def update_job(
         "project_value": job.project_value,
         "status_id": job.status_id,
         "sales_person_id": job.sales_person_id,
+        "sales_person_name": f"{sales_person.first_name} {sales_person.last_name}" if sales_person else None,
         "created_at": job.created_at,
         "created_by": job.created_by,
         "updated_at": job.updated_at,
