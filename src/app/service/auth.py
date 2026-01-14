@@ -443,7 +443,7 @@ class AuthService:
 
     async def reset_password(self, user_id: int, new_password: str, db: AsyncSession):
         """
-        Reset user password
+        Reset user password using get_password_hash (same as change_password)
         Returns: (success, error_msg)
         """
         from src.app.database.user import User
@@ -455,8 +455,8 @@ class AuthService:
             if not user:
                 return False, "User not found"
 
-            # Hash and update password
-            user.password = self.hash_password(new_password)
+            # Hash password using get_password_hash (handles bcrypt 72-byte limit)
+            user.password = self.get_password_hash(new_password)
             user.is_first_login = False
             user.updated_at = datetime.now()
             db.add(user)
