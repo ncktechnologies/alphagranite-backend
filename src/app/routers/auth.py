@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from typing import Any, Optional
 from src.app.database.user import User
 from src.app.service.auth import AuthService
@@ -579,41 +579,57 @@ async def reset_password(
         ip_address = request.client.host if request.client else None
         browser = request.headers.get(HEADER_USER_AGENT)
 
-        # Verify OTP first - accepts username or email
-        success, error_msg, user_id = await auth_service.verify_reset_otp(
-            reset_data.username_or_email, reset_data.otp, db
-        )
-
-        if not success:
-            background_tasks.add_task(
-                save_audit_trail,
-                db,
-                "password_reset_failed",
-                user_id,
-                error_msg or "Invalid OTP",
-                0,
-                device_id,
-                ip_address,
-                browser,
+        # Find user by username or email
+        from sqlalchemy import or_
+        res = await db.execute(
+            select(User).where(
+                or_(
+                    User.username == reset_data.username_or_email,
+                    User.email == reset_data.username_or_email
+                )
             )
-            raise error_response(error_msg or "Invalid or expired OTP", 400)
+        )
+        user = res.scalars().first()
+
+        if not user:
+            raise error_response("User not found", 404)
+
+        # Verify OTP one more time (without deleting) to ensure it's valid
+        from src.app.database.password_reset_otp import PasswordResetOTP
+        otp_res = await db.execute(
+            select(PasswordResetOTP).where(PasswordResetOTP.user_id == user.id)
+        )
+        otp_record = otp_res.scalars().first()
+
+        if not otp_record:
+            raise error_response("No valid OTP found. Please request a new one.", 400)
+
+        # Check if OTP is expired
+        if datetime.now() > otp_record.expires_at:
+            await db.delete(otp_record)
+            await db.commit()
+            raise error_response("OTP has expired. Please request a new one.", 400)
+
+        # Verify OTP matches
+        if otp_record.otp != reset_data.otp:
+            raise error_response("Invalid OTP", 400)
+
+        # Delete OTP after verification
+        await db.delete(otp_record)
+        await db.commit()
 
         # Reset password
-        success, error_msg = await auth_service.reset_password(user_id, reset_data.new_password, db)
+        success, error_msg = await auth_service.reset_password(user.id, reset_data.new_password, db)
 
         if not success:
             raise error_response(error_msg, 400)
-
-        # Get user
-        res = await db.execute(select(User).where(User.id == user_id))
-        user = res.scalars().first()
 
         # Log audit trail
         background_tasks.add_task(
             save_audit_trail,
             db,
             AUDIT_PASSWORD_RESET_COMPLETED,
-            user_id,
+            user.id,
             MSG_PASSWORD_RESET_COMPLETED,
             0,
             device_id,
@@ -643,7 +659,7 @@ async def reset_password(
             SUPPORT_EMAIL,
             "password_reset_completed",
             support_notification_body,
-            user_id,
+            user.id,
         )
 
         # Send confirmation to user
@@ -653,7 +669,7 @@ async def reset_password(
             user.email,
             NOTIF_PASSWORD_RESET_COMPLETED,
             "Your password has been reset successfully. You can now log in with your new password.",
-            user_id,
+            user.id,
         )
 
         return success_response(None, MSG_PASSWORD_RESET_COMPLETED)
