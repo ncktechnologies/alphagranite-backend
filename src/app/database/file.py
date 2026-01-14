@@ -12,3 +12,5 @@ class File(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
     file_size: str = Field(max_length=255)
+    job_id: Optional[int] = Field(default=None, foreign_key="business_jobs.id", index=True)
+    uploaded_by: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
