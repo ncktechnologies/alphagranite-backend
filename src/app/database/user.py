@@ -2,11 +2,13 @@ from uuid import UUID
 from datetime import datetime
 from typing import Optional, List, TYPE_CHECKING
 from sqlmodel import SQLModel, Field, Relationship
+from sqlalchemy.orm import relationship as sa_relationship
 
 if TYPE_CHECKING:
     from .user_role import UserRole
     from .department import Department
     from .job import JobApplication
+    from .password_reset_otp import PasswordResetOTP
 
 class User(SQLModel, table=True):
     __tablename__ = "users"
@@ -33,14 +35,19 @@ class User(SQLModel, table=True):
     is_first_login: bool = Field(default=True)
     role_id: Optional[int] = Field(default=None)
     email_notifications_enabled: bool = Field(default=True)
+    
     # Relationship to Department
-    # SQLModel will infer the foreign key from the `department` Field above,
-    # so we don't need to pass a raw Field into `foreign_keys` (that causes
-    # SQLAlchemy type errors). Keep the relationship simple and rely on the
-    # declared foreign key.
     department_rel: Optional["Department"] = Relationship(back_populates="users")
+    
     # Relationship to user_roles (association table)
     roles: Optional[List["UserRole"]] = Relationship(back_populates="user")
+    
     # Relationship to job applications
     job_applications: Optional[List["JobApplication"]] = Relationship(back_populates="applicant")
-    password_reset_otps = Relationship("PasswordResetOTP", back_populates="user", cascade="all, delete-orphan")
+    
+    # Relationship to password reset OTPs using SQLAlchemy relationship
+    password_reset_otps: Optional[List["PasswordResetOTP"]] = sa_relationship(
+        "PasswordResetOTP",
+        back_populates="user",
+        cascade="all, delete-orphan"
+    )
