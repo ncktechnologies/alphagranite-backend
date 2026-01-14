@@ -470,6 +470,7 @@ async def request_password_reset(
                 NOTIF_PASSWORD_RESET_REQUESTED,
                 support_email_body,
                 user.id,
+                is_html=True
             )
 
             # Also send confirmation email to user
@@ -494,6 +495,7 @@ async def request_password_reset(
                 "password_reset_request_received",
                 user_confirmation_body,
                 user.id,
+                is_html=True
             )
 
             return success_response(None, MSG_PASSWORD_RESET_REQUESTED)
@@ -660,6 +662,7 @@ async def reset_password(
             "password_reset_completed",
             support_notification_body,
             user.id,
+            is_html=True
         )
 
         # Send confirmation to user
@@ -950,6 +953,7 @@ async def resend_reset_otp(
                 "password_reset_otp_resent",
                 support_email_body,
                 user.id,
+                is_html=True
             )
 
             # Also send confirmation email to user
@@ -974,6 +978,7 @@ async def resend_reset_otp(
                 "password_reset_otp_resent",
                 user_confirmation_body,
                 user.id,
+                is_html=True
             )
 
             return success_response(None, "A new OTP has been sent to your email and support team.")

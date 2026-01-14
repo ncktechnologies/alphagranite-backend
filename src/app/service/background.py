@@ -1,4 +1,3 @@
-
 import os
 import logging
 import smtplib
@@ -71,20 +70,20 @@ async def save_audit_trail(
 
 
 async def send_notification(
-    db: AsyncSession | None,
+    db: AsyncSession,
     email: str,
     title: str,
     body: str,
-    user_id: int,
+    user_id: int = None,
+    is_html: bool = True  # Add this parameter
 ):
-    """Send an email notification and record audit events. This function
-    opens its own async session so callers can pass a request session or None.
-    
-    Args:
-        email: Can be a single email, list of emails, or comma-separated string
-        title: Email subject
-        body: Email body
-        user_id: User ID for audit trail
+    """
+    Send email notification
+    - email: recipient email address
+    - title: email subject
+    - body: email body (can be HTML or plain text)
+    - user_id: optional user_id for logging
+    - is_html: True to send as HTML, False for plain text
     """
     # Parse admin emails (could be comma-separated)
     admin_emails = [e.strip().lower() for e in ADMIN_EMAIL.split(',') if e.strip()]
