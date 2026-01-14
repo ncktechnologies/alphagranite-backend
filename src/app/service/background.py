@@ -19,7 +19,7 @@ from src.app.utils.helpers import error_response, success_response
 # `SessionLocal` is imported from `src.app.utils.config` above.
 
 
-def send_email(to_email: str, subject: str, body: str):
+def send_email(to_email: str, subject: str, body: str, is_html: bool = True):
     """Synchronous SMTP send (will be executed in threadpool to avoid blocking)."""
     smtp_host = os.getenv("EMAIL_HOST")
     smtp_port = int(os.getenv("EMAIL_PORT", 587))
@@ -32,7 +32,12 @@ def send_email(to_email: str, subject: str, body: str):
     msg["From"] = smtp_from
     msg["To"] = to_email
     msg["Subject"] = subject
-    msg.attach(MIMEText(body, "plain"))
+    
+    # Attach body as HTML or plain text based on is_html parameter
+    if is_html:
+        msg.attach(MIMEText(body, "html"))
+    else:
+        msg.attach(MIMEText(body, "plain"))
 
     try:
         with smtplib.SMTP(smtp_host, smtp_port) as server:
@@ -132,7 +137,7 @@ async def send_notification(
         # Send the email in a thread so we don't block the event loop
         try:
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, send_email, recipient_email, title, body)
+            await loop.run_in_executor(None, send_email, recipient_email, title, body, is_html)
             sent_emails.append(recipient_email)
             
             # Record audit trail that notification was sent
