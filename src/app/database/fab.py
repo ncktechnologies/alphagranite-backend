@@ -20,6 +20,9 @@ class Fab(SQLModel, table=True):
     total_sqft: float
     notes: Optional[List[str]] = Field(default=None, sa_column=Column(JSONB))
     
+    # Cost of stone - dollar amount
+    cost_of_stone: Optional[float] = Field(default=None)
+    
     # Process steps flags
     template_needed: bool = Field(default=True)
     drafting_needed: bool = Field(default=True)

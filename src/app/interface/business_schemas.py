@@ -217,6 +217,7 @@ class FabCreate(BaseModel):
     sct_needed: bool = True
     final_programming_needed: bool = True
     cost_of_stone_id: Optional[int] = Field(None, description="Cost of stone record ID")
+    cost_of_stone: Optional[Decimal] = Field(None, description="Cost of stone amount")
 
 
 class FabUpdate(BaseModel):
@@ -267,6 +268,7 @@ class FabUpdate(BaseModel):
     next_stage: Optional[str] = None
     status_id: Optional[int] = None
     cost_of_stone_id: Optional[int] = Field(None, description="Cost of stone record ID")
+    cost_of_stone: Optional[Decimal] = Field(None, description="Cost of stone amount")
 
 
 class FabResponse(BaseModel):
@@ -347,6 +349,7 @@ class FabResponse(BaseModel):
     # FAB Notes (last 10)
     fab_notes: Optional[List[dict]] = None
     cost_of_stone_id: Optional[int] = Field(None, description="Cost of stone record ID")
+    cost_of_stone: Optional[Decimal] = Field(None, description="Cost of stone amount")
 
     class Config:
         from_attributes = True
