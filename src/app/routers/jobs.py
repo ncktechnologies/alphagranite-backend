@@ -460,14 +460,14 @@ async def get_job_details(
     
     media_files = []
     media_summary = {"photos": 0, "videos": 0, "documents": 0, "total": 0}
-    
+
     for row in media_rows:
         file = row[0]
         uploader_first = row[1]
         uploader_last = row[2]
-        
+
         file_url = f"{BASE_URL}/api/v1/jobs/{job_id}/media/{file.id}/download"
-        
+
         media_files.append({
             "id": file.id,
             "name": file.name,
@@ -478,12 +478,21 @@ async def get_job_details(
             "uploader_name": f"{uploader_first} {uploader_last}" if uploader_first else None,
             "created_at": file.created_at.isoformat() if file.created_at else None
         })
-        
-        # Update summary
-        media_summary[file.file_type] += 1
+
+        # Robust summary update
+        if file.file_type == "photo":
+            media_summary["photos"] += 1
+        elif file.file_type == "video":
+            media_summary["videos"] += 1
+        elif file.file_type == "document":
+            media_summary["documents"] += 1
+        else:
+            # For any unexpected type, add a new key
+            media_summary[file.file_type] = media_summary.get(file.file_type, 0) + 1
+
         media_summary["total"] += 1
-    
+
     job_dict["media_files"] = media_files
     job_dict["media_summary"] = media_summary
-    
+
     return success_response(job_dict, f"Job details retrieved successfully")
