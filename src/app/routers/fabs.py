@@ -252,6 +252,7 @@ async def get_fabs(
     job_id: Optional[int] = Query(None, description="Filter by job ID"),
     fab_type: Optional[str] = Query(None, description="Filter by fab type"),
     sales_person_id: Optional[int] = Query(None, description="Filter by sales person ID"),
+    templater_id: Optional[int] = Query(None, description="Filter by templater/technician ID"),
     status_id: Optional[int] = Query(None, description="Filter by status ID"),
     current_stage: Optional[str] = Query(None, description="Filter by current stage"),
     next_stage: Optional[str] = Query(None, description="Filter by next stage"),
@@ -273,8 +274,12 @@ async def get_fabs(
     
     # First, get FAB IDs that match the templating date filters (if applicable)
     templating_fab_ids = None
-    if schedule_start_date or schedule_due_date or date_filter or schedule_status:
+    if schedule_start_date or schedule_due_date or date_filter or schedule_status or templater_id:
         templating_query = select(Templating.fab_id).distinct()
+        
+        # Apply templater_id filter if provided
+        if templater_id is not None:
+            templating_query = templating_query.where(Templating.technician_id == templater_id)
         
         # Apply custom date range filters
         if schedule_start_date is not None:

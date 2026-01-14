@@ -9,6 +9,7 @@ from src.app.database.user import User
 from src.app.database.fab import Fab
 from src.app.database.templating import Templating
 from src.app.database.status import Status
+from src.app.database.department import Department
 from src.app.interface.business_schemas import (
     TemplatingScheduleCreate,
     TemplatingScheduleUpdate,
@@ -588,3 +589,43 @@ async def update_templating_work(
         },
         "Templating work updated successfully"
     )
+
+
+@router.get("/templaters", response_model=SuccessResponse[List[dict]])
+async def get_templaters(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get list of all templaters (users in TEMPLATE department)"""
+    
+    # Get the TEMPLATE department
+    dept_result = await db.execute(
+        select(Department).where(Department.name.ilike("TEMPLATE"))
+    )
+    department = dept_result.scalar_one_or_none()
+    
+    if not department:
+        return success_response([], "No TEMPLATE department found")
+    
+    # Get all users in TEMPLATE department
+    users_result = await db.execute(
+        select(User)
+        .where(User.department_id == department.id)
+        .order_by(User.first_name, User.last_name)
+    )
+    users = users_result.scalars().all()
+    
+    # Format response
+    templaters = [
+        {
+            "id": user.id,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "name": f"{user.first_name} {user.last_name}",
+            "email": user.email,
+            "department_id": user.department_id
+        }
+        for user in users
+    ]
+    
+    return success_response(templaters, "Templaters retrieved successfully")
