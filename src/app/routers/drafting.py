@@ -448,12 +448,15 @@ from pydantic import BaseModel
 from typing import List
 
 # Add this new schema for bulk drafting creation
+class DraftingCreateItem(BaseModel):
+    fab_id: int
+    scheduled_start_date: Optional[datetime] = None
+    scheduled_end_date: Optional[datetime] = None
+    total_sqft_required_to_draft: Optional[float] = None
+
 class DraftingCreateBulk(BaseModel):
-    fab_ids: List[int]
     drafter_id: int
-    scheduled_start_date: datetime
-    scheduled_end_date: datetime
-    total_sqft_required_to_draft: float
+    items: List[DraftingCreateItem]
 
 @router.post("/drafting", response_model=SuccessResponse[List[DraftingResponse]], status_code=201)
 async def create_drafting(
@@ -461,29 +464,32 @@ async def create_drafting(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Create drafting entries for multiple fabs"""
+    """Create drafting entries for multiple fabs with individual details"""
     
     # Validate drafter exists
     drafter_result = await db.execute(select(User).where(User.id == drafting_data.drafter_id))
     if not drafter_result.scalar_one_or_none():
         raise error_response("Drafter not found", 404)
     
+    # Extract fab IDs from items
+    fab_ids = [item.fab_id for item in drafting_data.items]
+    
     # Validate all fabs exist
-    fabs_result = await db.execute(select(Fab).where(Fab.id.in_(drafting_data.fab_ids)))
+    fabs_result = await db.execute(select(Fab).where(Fab.id.in_(fab_ids)))
     fabs = fabs_result.scalars().all()
     
-    if len(fabs) != len(drafting_data.fab_ids):
+    if len(fabs) != len(fab_ids):
         raise error_response("One or more fab IDs not found", 404)
     
     # Create drafting entries for all fabs
     drafting_entries = []
-    for fab_id in drafting_data.fab_ids:
+    for item in drafting_data.items:
         drafting = Drafting(
-            fab_id=fab_id,
+            fab_id=item.fab_id,
             drafter_id=drafting_data.drafter_id,
-            scheduled_start_date=strip_timezone(drafting_data.scheduled_start_date),
-            scheduled_end_date=strip_timezone(drafting_data.scheduled_end_date),
-            total_sqft_required_to_draft=str(drafting_data.total_sqft_required_to_draft),  # Convert to string
+            scheduled_start_date=strip_timezone(item.scheduled_start_date) if item.scheduled_start_date else None,
+            scheduled_end_date=strip_timezone(item.scheduled_end_date) if item.scheduled_end_date else None,
+            total_sqft_required_to_draft=str(item.total_sqft_required_to_draft) if item.total_sqft_required_to_draft else None,
             drafter_start_date=None,
             drafter_end_date=None,
             total_sqft_drafted=None,
