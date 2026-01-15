@@ -483,7 +483,7 @@ async def create_drafting(
             drafter_id=drafting_data.drafter_id,
             scheduled_start_date=strip_timezone(drafting_data.scheduled_start_date),
             scheduled_end_date=strip_timezone(drafting_data.scheduled_end_date),
-            total_sqft_required_to_draft=drafting_data.total_sqft_required_to_draft,
+            total_sqft_required_to_draft=str(drafting_data.total_sqft_required_to_draft),  # Convert to string
             drafter_start_date=None,
             drafter_end_date=None,
             total_sqft_drafted=None,
