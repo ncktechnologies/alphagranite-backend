@@ -514,19 +514,38 @@ async def create_drafting(
     for drafting in drafting_entries:
         await db.refresh(drafting)
     
-    # Build response with drafter info
-    drafter_name = f"{drafter.first_name} {drafter.last_name}" if drafter.first_name else drafter.last_name
+    # Build drafter name
+    drafter_name = f"{drafter.first_name} {drafter.last_name}".strip()
+    if not drafter_name:
+        drafter_name = drafter.email  # Fallback to email if names are empty
     
     # Convert to response format with drafter details
     response_data = []
     for drafting in drafting_entries:
+        # Convert model to dict with proper serialization
         drafting_dict = {
-            **drafting.__dict__,
+            "id": drafting.id,
+            "fab_id": drafting.fab_id,
             "drafter_id": drafting.drafter_id,
             "drafter_name": drafter_name,
+            "scheduled_start_date": drafting.scheduled_start_date.isoformat() if drafting.scheduled_start_date else None,
+            "scheduled_end_date": drafting.scheduled_end_date.isoformat() if drafting.scheduled_end_date else None,
+            "drafter_start_date": drafting.drafter_start_date.isoformat() if drafting.drafter_start_date else None,
+            "drafter_end_date": drafting.drafter_end_date.isoformat() if drafting.drafter_end_date else None,
+            "total_sqft_required_to_draft": drafting.total_sqft_required_to_draft,
+            "total_sqft_drafted": drafting.total_sqft_drafted,
+            "no_of_piece_drafted": drafting.no_of_piece_drafted,
+            "total_hours_drafted": drafting.total_hours_drafted,
+            "draft_note": drafting.draft_note,
+            "mentions": drafting.mentions,
+            "file_ids": drafting.file_ids,
+            "is_redrafting": drafting.is_redrafting,
+            "is_completed": drafting.is_completed if hasattr(drafting, 'is_completed') else False,
+            "status_id": drafting.status_id,
+            "created_at": drafting.created_at.isoformat() if drafting.created_at else None,
+            "updated_at": drafting.updated_at.isoformat() if drafting.updated_at else None,
+            "updated_by": drafting.updated_by
         }
-        # Remove SQLAlchemy internal attributes
-        drafting_dict = {k: v for k, v in drafting_dict.items() if not k.startswith('_')}
         response_data.append(drafting_dict)
     
     return success_response(response_data, f"Drafting created successfully for {len(drafting_entries)} fabs")
