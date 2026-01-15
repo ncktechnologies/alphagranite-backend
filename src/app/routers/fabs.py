@@ -266,160 +266,19 @@ async def get_fabs(
 ):
     """Get list of fabs with optional filtering and pagination"""
     
-    from sqlalchemy.orm import aliased
-    from sqlalchemy import and_, or_
-    TechnicianUser = aliased(User)
-    DrafterUser = aliased(User)
-    DrafterAssignedByUser = aliased(User)
+    # Step 1: Apply templating filters to get FAB IDs
+    templating_fab_ids = await _apply_templating_filters(
+        db, templater_id, schedule_start_date, schedule_due_date, schedule_status, date_filter
+    )
     
-    # First, get FAB IDs that match the templating date filters (if applicable)
-    templating_fab_ids = None
-    if schedule_start_date or schedule_due_date or date_filter or schedule_status or templater_id is not None:
-        templating_query = select(Templating.fab_id).distinct()
-        
-        # Apply templater_id filter if provided
-        if templater_id is not None:
-            if templater_id == 0:
-                # Special case: return FABs with NO templating records at all
-                # Get FAB IDs that are NOT in the Templating table
-                templating_query = select(Templating.fab_id).distinct()
-                templating_query = templating_query.where(Templating.fab_id.in_(select(Fab.id)))
-                
-                # Execute to get FAB IDs that have templating records
-                templating_result = await db.execute(templating_query)
-                fabs_with_templating = [row[0] for row in templating_result.all()]
-                
-                # Filter main query to exclude FABs that have templating records
-                if fabs_with_templating:
-                    templating_query = select(Fab.id).where(~Fab.id.in_(fabs_with_templating))
-                else:
-                    # All FABs have no templating records
-                    templating_query = select(Fab.id)
-            else:
-                templating_query = templating_query.where(Templating.technician_id == templater_id)
-        
-        # Apply custom date range filters
-        if schedule_start_date is not None:
-            templating_query = templating_query.where(Templating.schedule_start_date >= schedule_start_date)
-        if schedule_due_date is not None:
-            templating_query = templating_query.where(Templating.schedule_due_date <= schedule_due_date)
-        
-        # Apply schedule status filter (separate from date_filter)
-        if schedule_status:
-            if schedule_status == "scheduled":
-                templating_query = templating_query.where(Templating.schedule_start_date.isnot(None))
-            elif schedule_status == "unscheduled":
-                # For unscheduled: include FABs with NO templating records OR templating with NULL schedule_start_date
-                pass  # Handle separately below
-        
-        # Apply predefined date filters
-        if date_filter:
-            today = date.today()
-            
-            if date_filter == "today":
-                templating_query = templating_query.where(Templating.schedule_start_date == today)
-            elif date_filter == "this_week":
-                start_of_week = today - timedelta(days=today.weekday())
-                end_of_week = start_of_week + timedelta(days=6)
-                templating_query = templating_query.where(
-                    Templating.schedule_start_date >= start_of_week,
-                    Templating.schedule_start_date <= end_of_week
-                )
-            elif date_filter == "last_week":
-                start_of_last_week = today - timedelta(days=today.weekday() + 7)
-                end_of_last_week = start_of_last_week + timedelta(days=6)
-                templating_query = templating_query.where(
-                    Templating.schedule_start_date >= start_of_last_week,
-                    Templating.schedule_start_date <= end_of_last_week
-                )
-            elif date_filter == "this_month":
-                start_of_month = today.replace(day=1)
-                if today.month == 12:
-                    end_of_month = today.replace(day=31)
-                else:
-                    next_month = today.replace(month=today.month + 1, day=1)
-                    end_of_month = next_month - timedelta(days=1)
-                templating_query = templating_query.where(
-                    Templating.schedule_start_date >= start_of_month,
-                    Templating.schedule_start_date <= end_of_month
-                )
-            elif date_filter == "last_month":
-                if today.month == 1:
-                    start_of_last_month = today.replace(year=today.year - 1, month=12, day=1)
-                    end_of_last_month = today.replace(year=today.year - 1, month=12, day=31)
-                else:
-                    start_of_last_month = today.replace(month=today.month - 1, day=1)
-                    end_of_last_month = today.replace(day=1) - timedelta(days=1)
-                templating_query = templating_query.where(
-                    Templating.schedule_start_date >= start_of_last_month,
-                    Templating.schedule_start_date <= end_of_last_month
-                )
-            elif date_filter == "next_week":
-                start_of_next_week = today + timedelta(days=(7 - today.weekday()))
-                end_of_next_week = start_of_next_week + timedelta(days=6)
-                templating_query = templating_query.where(
-                    Templating.schedule_start_date >= start_of_next_week,
-                    Templating.schedule_start_date <= end_of_next_week
-                )
-            elif date_filter == "next_month":
-                if today.month == 12:
-                    start_of_next_month = date(today.year + 1, 1, 1)
-                    end_of_next_month = date(today.year + 1, 1, 31)
-                else:
-                    start_of_next_month = date(today.year, today.month + 1, 1)
-                    if today.month == 11:
-                        end_of_next_month = date(today.year, 12, 31)
-                    else:
-                        following_month = date(today.year, today.month + 2, 1)
-                        end_of_next_month = following_month - timedelta(days=1)
-                templating_query = templating_query.where(
-                    Templating.schedule_start_date >= start_of_next_month,
-                    Templating.schedule_start_date <= end_of_next_month
-                )
-        
-        # Execute to get matching FAB IDs
-        if schedule_status != "unscheduled":  # CHANGED: skip if unscheduled
-            templating_result = await db.execute(templating_query)
-            templating_fab_ids = [row[0] for row in templating_result.all()]
-            
-            # If no FABs match the filters, return empty result
-            if not templating_fab_ids:
-                return {
-                    "success": True,
-                    "message": "FABs retrieved successfully",
-                    "data": {
-                        "total": 0,
-                        "page": 1,
-                        "per_page": limit,
-                        "data": []
-                    }
-                }
-        else:
-            # For unscheduled: get FABs with NO templating records or with NULL schedule_start_date
-            unscheduled_query = select(Fab.id).where(
-                or_(
-                    ~Fab.id.in_(select(Templating.fab_id)),  # No templating record at all
-                    Fab.id.in_(
-                        select(Templating.fab_id).where(Templating.schedule_start_date.is_(None))
-                    )  # Templating exists but no schedule_start_date
-                )
-            )
-            unscheduled_result = await db.execute(unscheduled_query)
-            templating_fab_ids = [row[0] for row in unscheduled_result.all()]
-            
-            if not templating_fab_ids:
-                return {
-                    "success": True,
-                    "message": "FABs retrieved successfully",
-                    "data": {
-                        "total": 0,
-                        "page": 1,
-                        "per_page": limit,
-                        "data": []
-                    }
-                }
+    if templating_fab_ids is not None and len(templating_fab_ids) == 0:
+        return {
+            "success": True,
+            "message": "FABs retrieved successfully",
+            "data": {"total": 0, "page": 1, "per_page": limit, "data": []}
+        }
     
-    # Subquery to get the latest templating record for each FAB
+    # Step 2: Build latest templating subquery
     latest_templating = (
         select(Templating)
         .where(Templating.fab_id == Fab.id)
@@ -428,448 +287,30 @@ async def get_fabs(
         .lateral("latest_templating")
     )
     
-    # Build query with joins to get related data including templating and drafter
-    query = select(
-        Fab,
-        User.first_name.label("sales_person_first_name"),
-        User.last_name.label("sales_person_last_name"),
-        StoneType.name.label("stone_type_name"),
-        StoneColor.name.label("stone_color_name"),
-        StoneThickness.thickness.label("stone_thickness_value"),
-        Edge.name.label("edge_name"),
-        latest_templating.c.schedule_start_date.label("templating_schedule_start_date"),
-        latest_templating.c.schedule_due_date.label("templating_schedule_due_date"),
-        latest_templating.c.notes.label("templating_notes"),
-        TechnicianUser.first_name.label("technician_first_name"),
-        TechnicianUser.last_name.label("technician_last_name"),
-        BusinessJob,
-        Account.name.label("account_name"),
-        Account.account_number.label("account_number"),
-        Account.contact_person.label("account_contact_person"),
-        Account.email.label("account_email"),
-        Account.phone.label("account_phone"),
-        DrafterUser.first_name.label("drafter_first_name"),
-        DrafterUser.last_name.label("drafter_last_name"),
-        DrafterAssignedByUser.first_name.label("drafter_assigned_by_first_name"),
-        DrafterAssignedByUser.last_name.label("drafter_assigned_by_last_name")
-    ).select_from(Fab)
+    # Step 3: Build main query
+    query = _build_fab_list_query(
+        job_id, fab_type, sales_person_id, status_id, current_stage, next_stage, 
+        search, templating_fab_ids, latest_templating
+    )
     
-    # Join with related tables
-    query = query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
-    query = query.join(Account, BusinessJob.account_id == Account.id, isouter=True)
-    query = query.join(User, Fab.sales_person_id == User.id, isouter=True)
-    query = query.join(StoneType, Fab.stone_type_id == StoneType.id, isouter=True)
-    query = query.join(StoneColor, Fab.stone_color_id == StoneColor.id, isouter=True)
-    query = query.join(StoneThickness, Fab.stone_thickness_id == StoneThickness.id, isouter=True)
-    query = query.join(Edge, Fab.edge_id == Edge.id, isouter=True)
-    query = query.outerjoin(latest_templating, sa.literal(True))
-    query = query.join(TechnicianUser, latest_templating.c.technician_id == TechnicianUser.id, isouter=True)
-    query = query.join(DrafterUser, Fab.drafter_id == DrafterUser.id, isouter=True)
-    query = query.join(DrafterAssignedByUser, Fab.drafter_assigned_by == DrafterAssignedByUser.id, isouter=True)
-    
-    # Apply filters
-    if job_id is not None:
-        query = query.where(Fab.job_id == job_id)
-    if fab_type:
-        query = query.where(Fab.fab_type.ilike(f"%{fab_type}%"))
-    if sales_person_id is not None:
-        query = query.where(Fab.sales_person_id == sales_person_id)
-    if status_id is not None:
-        query = query.where(Fab.status_id == status_id)
-    if current_stage:
-        query = query.where(Fab.current_stage == current_stage)
-    if next_stage:
-        query = query.where(Fab.next_stage == next_stage)
-    
-    # Apply search filter (FAB ID, Job Name, or Job Number)
-    if search:
-        search_term = f"%{search}%"
-        query = query.where(
-            or_(
-                sa.cast(Fab.id, sa.String).ilike(search_term),  # Search by FAB ID
-                BusinessJob.name.ilike(search_term),  # Search by Job Name
-                BusinessJob.job_number.ilike(search_term)  # Search by Job Number
-            )
-        )
-    
-    # Apply templating date filter if we have matching FAB IDs
-    if templating_fab_ids is not None:
-        query = query.where(Fab.id.in_(templating_fab_ids))
-    
-    # Apply pagination with conditional ordering
-    # If filtering by templating stage, order by schedule_start_date (nulls last), then by updated_at
-    if current_stage == "templating":
-        query = query.offset(skip).limit(limit).order_by(
-            latest_templating.c.schedule_start_date.asc().nullslast(),
-            Fab.updated_at.asc().nullsfirst(),  # Older updates first, null (never updated) first
-            Fab.created_at.asc()  # Tie-breaker: older FABs first
-        )
-    elif current_stage == "cut_list":
-        # For cut_list stage: order by shop_date_schedule ascending (nulls first)
-        query = query.offset(skip).limit(limit).order_by(
-            Fab.shop_date_schedule.asc().nullsfirst(),  # Nulls first, then oldest dates
-            Fab.updated_at.asc().nullsfirst(),  # Tie-breaker: older updates first
-            Fab.created_at.asc()  # Tie-breaker: older FABs first
-        )
-    else:
-        # Default ordering: Sort by updated_at ascending (older updates first)
-        # FABs that have never been updated (updated_at IS NULL) appear first
-        query = query.offset(skip).limit(limit).order_by(
-            Fab.updated_at.asc().nullsfirst(),  # Older updates first, null first
-            Fab.created_at.asc()  # Tie-breaker: older FABs first
-        )
+    # Step 4: Apply pagination and ordering
+    query = _apply_pagination_and_ordering(query, skip, limit, current_stage, latest_templating)
     
     result = await db.execute(query)
     rows = result.all()
     
-    # Process the results to include related names
-    fabs = []
-    for row in rows:
-        fab = row[0]
-        sales_person_first_name = row[1]
-        sales_person_last_name = row[2]
-        stone_type_name = row[3]
-        stone_color_name = row[4]
-        stone_thickness_value = row[5]
-        edge_name = row[6]
-        templating_schedule_start_date = row[7]
-        templating_schedule_due_date = row[8]
-        templating_notes = row[9]
-        technician_first_name = row[10]
-        technician_last_name = row[11]
-        business_job = row[12]  # BusinessJob object
-        account_name = row[13]
-        account_number = row[14]
-        account_contact_person = row[15]
-        account_email = row[16]
-        account_phone = row[17]
-        drafter_first_name = row[18]
-        drafter_last_name = row[19]
-        drafter_assigned_by_first_name = row[20]
-        drafter_assigned_by_last_name = row[21]
-        
-        # Convert to dict and serialize datetime/date/Decimal objects
-        fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
-                    for k, v in fab.__dict__.items() if not k.startswith('_')}
-        
-        # Ensure notes is always a list
-        if fab_dict.get("notes") and not isinstance(fab_dict["notes"], list):
-            fab_dict["notes"] = [fab_dict["notes"]] if fab_dict["notes"] else None
-        
-        fab_dict["sales_person_name"] = f"{sales_person_first_name} {sales_person_last_name}" if sales_person_first_name else None
-        fab_dict["stone_type_name"] = stone_type_name
-        fab_dict["stone_color_name"] = stone_color_name
-        fab_dict["stone_thickness_value"] = stone_thickness_value
-        fab_dict["edge_name"] = edge_name
-        
-        # Add job details as a dictionary
-        if business_job:
-            job_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
-                       for k, v in business_job.__dict__.items() if not k.startswith('_')}
-            fab_dict["job_details"] = job_dict
-            fab_dict["account_id"] = business_job.account_id
-        else:
-            fab_dict["job_details"] = None
-            fab_dict["account_id"] = None
-
-        # Add account data
-        fab_dict["account_name"] = account_name
-        fab_dict["account_number"] = account_number
-        fab_dict["account_contact_person"] = account_contact_person
-        fab_dict["account_email"] = account_email
-        fab_dict["account_phone"] = account_phone
-        
-        # Add templating data
-        fab_dict["templating_schedule_start_date"] = templating_schedule_start_date.isoformat() if templating_schedule_start_date else None
-        fab_dict["templating_schedule_due_date"] = templating_schedule_due_date.isoformat() if templating_schedule_due_date else None
-        fab_dict["templating_notes"] = templating_notes
-        fab_dict["technician_name"] = f"{technician_first_name} {technician_last_name}" if technician_first_name else None
-        
-        # Add drafter information
-        fab_dict["drafter_name"] = f"{drafter_first_name} {drafter_last_name}" if drafter_first_name else None
-        fab_dict["drafter_assigned_by_name"] = f"{drafter_assigned_by_first_name} {drafter_assigned_by_last_name}" if drafter_assigned_by_first_name else None
-        
-        # Add next stage
-        fab_dict["next_stage"] = get_next_stage(fab_dict.get("current_stage"))
-        
-        fabs.append(fab_dict)
+    # Step 5: Convert rows to dictionaries
+    fabs = [_convert_fab_row_to_dict(row) for row in rows]
     
-    # Batch load all related data to avoid N+1 queries
-    fab_ids = [fab_dict["id"] for fab_dict in fabs]
+    # Step 6: Batch load related data
+    await _batch_load_fab_related_data(db, fabs)
     
-    if fab_ids:
-        from sqlalchemy.orm import aliased
-        from src.app.database.drafting import Drafting
-        from src.app.database.file import File
-        
-        # Create aliases for users in different contexts
-        CreatorUser = aliased(User)
-        UpdaterUser = aliased(User)
-        DrafterUserAlias = aliased(User)
-        DrafterUpdaterUser = aliased(User)
-        SalesCTDrafterUser = aliased(User)
-        SalesCTUpdaterUser = aliased(User)
-        
-        # 1. Batch load fab notes
-        notes_query = select(
-            FabNotes,
-            CreatorUser.first_name.label("creator_first_name"),
-            CreatorUser.last_name.label("creator_last_name"),
-            UpdaterUser.first_name.label("updater_first_name"),
-            UpdaterUser.last_name.label("updater_last_name")
-        ).where(FabNotes.fab_id.in_(fab_ids))\
-         .join(CreatorUser, FabNotes.created_by == CreatorUser.id, isouter=True)\
-         .join(UpdaterUser, FabNotes.updated_by == UpdaterUser.id, isouter=True)\
-         .order_by(FabNotes.fab_id, FabNotes.created_at.desc())
-        
-        notes_result = await db.execute(notes_query)
-        notes_rows = notes_result.all()
-        
-        # Group notes by fab_id (limit to 10 per FAB)
-        notes_by_fab = {}
-        for row in notes_rows:
-            note = row[0]
-            creator_first = row[1]
-            creator_last = row[2]
-            updater_first = row[3]
-            updater_last = row[4]
-            
-            if note.fab_id not in notes_by_fab:
-                notes_by_fab[note.fab_id] = []
-            
-            if len(notes_by_fab[note.fab_id]) < 10:
-                notes_by_fab[note.fab_id].append({
-                    "id": note.id,
-                    "fab_id": note.fab_id,
-                    "stage": note.stage,
-                    "note": note.note,
-                    "created_by": note.created_by,
-                    "created_by_name": f"{creator_first} {creator_last}" if creator_first else None,
-                    "created_at": note.created_at.isoformat() if note.created_at else None,
-                    "updated_at": note.updated_at.isoformat() if note.updated_at else None,
-                    "updated_by": note.updated_by,
-                    "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
-                })
-        
-        # 2. Batch load drafting data
-        drafting_query = select(
-            Drafting,
-            DrafterUserAlias.first_name.label("drafter_first_name"),
-            DrafterUserAlias.last_name.label("drafter_last_name"),
-            DrafterUpdaterUser.first_name.label("updater_first_name"),
-            DrafterUpdaterUser.last_name.label("updater_last_name")
-        ).where(Drafting.fab_id.in_(fab_ids))\
-         .join(DrafterUserAlias, Drafting.drafter_id == DrafterUserAlias.id, isouter=True)\
-         .join(DrafterUpdaterUser, Drafting.updated_by == DrafterUpdaterUser.id, isouter=True)\
-         .order_by(Drafting.fab_id, Drafting.id.desc())
-        
-        drafting_result = await db.execute(drafting_query)
-        drafting_rows = drafting_result.all()
-        
-        # Get unique file IDs from all drafting records
-        all_draft_file_ids = set()
-        for row in drafting_rows:
-            draft = row[0]
-            if draft.file_ids:
-                file_id_list = [int(fid.strip()) for fid in draft.file_ids.split(",") if fid.strip()]
-                all_draft_file_ids.update(file_id_list)
-        
-        # Batch load draft files
-        draft_files_by_id = {}
-        if all_draft_file_ids:
-            draft_files_query = select(File).where(File.id.in_(all_draft_file_ids))
-            draft_files_result = await db.execute(draft_files_query)
-            draft_files = draft_files_result.scalars().all()
-            
-            for file in draft_files:
-                filename = os.path.basename(file.file_path)
-                file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
-                draft_files_by_id[file.id] = {
-                    "id": file.id,
-                    "name": file.name,
-                    "file_url": file_url,
-                    "file_type": file.file_type,
-                    "file_size": file.file_size,
-                    "created_at": file.created_at.isoformat() if file.created_at else None
-                }
-        
-        # Group drafting data by fab_id (get latest only)
-        drafting_by_fab = {}
-        for row in drafting_rows:
-            draft = row[0]
-            drafter_first = row[1]
-            drafter_last = row[2]
-            updater_first = row[3]
-            updater_last = row[4]
-            
-            if draft.fab_id not in drafting_by_fab:
-                # Get files for this draft
-                files_data = []
-                if draft.file_ids:
-                    file_id_list = [int(fid.strip()) for fid in draft.file_ids.split(",") if fid.strip()]
-                    files_data = [draft_files_by_id[fid] for fid in file_id_list if fid in draft_files_by_id]
-                
-                drafting_by_fab[draft.fab_id] = {
-                    "id": draft.id,
-                    "fab_id": draft.fab_id,
-                    "drafter_id": draft.drafter_id,
-                    "drafter_name": f"{drafter_first} {drafter_last}" if drafter_first else None,
-                    "drafter_start_date": draft.drafter_start_date.isoformat() if draft.drafter_start_date else None,
-                    "drafter_end_date": draft.drafter_end_date.isoformat() if draft.drafter_end_date else None,
-                    "total_sqft_drafted": float(draft.total_sqft_drafted) if draft.total_sqft_drafted else None,
-                    "no_of_piece_drafted": draft.no_of_piece_drafted,
-                    "draft_note": draft.draft_note,
-                    "mentions": draft.mentions,
-                    "total_hours_drafted": float(draft.total_hours_drafted) if draft.total_hours_drafted else None,
-                    "file_ids": draft.file_ids,
-                    "files": files_data,
-                    "status_id": draft.status_id,
-                    "created_at": draft.created_at.isoformat() if draft.created_at else None,
-                    "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
-                    "updated_by": draft.updated_by,
-                    "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
-                }
-        
-        # 3. Batch load sales_ct data
-        sales_ct_query = select(
-            SalesCT,
-            SalesCTDrafterUser.first_name.label("drafter_first_name"),
-            SalesCTDrafterUser.last_name.label("drafter_last_name"),
-            SalesCTUpdaterUser.first_name.label("updater_first_name"),
-            SalesCTUpdaterUser.last_name.label("updater_last_name")
-        ).where(SalesCT.fab_id.in_(fab_ids))\
-         .join(SalesCTDrafterUser, SalesCT.drafter_id == SalesCTDrafterUser.id, isouter=True)\
-         .join(SalesCTUpdaterUser, SalesCT.updated_by == SalesCTUpdaterUser.id, isouter=True)\
-         .order_by(SalesCT.fab_id, SalesCT.id.desc())
-        
-        sales_ct_result = await db.execute(sales_ct_query)
-        sales_ct_rows = sales_ct_result.all()
-        
-        # Get unique file IDs from all sales_ct records
-        all_sct_file_ids = set()
-        for row in sales_ct_rows:
-            sct = row[0]
-            if sct.file_ids:
-                file_id_list = [int(fid.strip()) for fid in sct.file_ids.split(",") if fid.strip()]
-                all_sct_file_ids.update(file_id_list)
-        
-        # Batch load sales_ct files
-        sct_files_by_id = {}
-        if all_sct_file_ids:
-            sct_files_query = select(File).where(File.id.in_(all_sct_file_ids))
-            sct_files_result = await db.execute(sct_files_query)
-            sct_files = sct_files_result.scalars().all()
-            
-            for file in sct_files:
-                filename = os.path.basename(file.file_path)
-                file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
-                sct_files_by_id[file.id] = {
-                    "id": file.id,
-                    "name": file.name,
-                    "file_url": file_url,
-                    "file_type": file.file_type,
-                    "file_size": file.file_size,
-                    "created_at": file.created_at.isoformat() if file.created_at else None
-                }
-        
-        # Group sales_ct data by fab_id (get latest only)
-        sales_ct_by_fab = {}
-        for row in sales_ct_rows:
-            sct = row[0]
-            drafter_first = row[1]
-            drafter_last = row[2]
-            updater_first = row[3]
-            updater_last = row[4]
-            
-            if sct.fab_id not in sales_ct_by_fab:
-                # Get files for this sales_ct
-                files_data = []
-                if sct.file_ids:
-                    file_id_list = [int(fid.strip()) for fid in sct.file_ids.split(",") if fid.strip()]
-                    files_data = [sct_files_by_id[fid] for fid in file_id_list if fid in sct_files_by_id]
-                
-                sales_ct_by_fab[sct.fab_id] = {
-                    "id": sct.id,
-                    "fab_id": sct.fab_id,
-                    "slab_smith_type": sct.slab_smith_type,
-                    "drafter_id": sct.drafter_id,
-                    "drafter_name": f"{drafter_first} {drafter_last}" if drafter_first else None,
-                    "start_date": sct.start_date.isoformat() if sct.start_date else None,
-                    "end_date": sct.end_date.isoformat() if sct.end_date else None,
-                    "total_sqft_completed": sct.total_sqft_completed,
-                    "is_revision_needed": sct.is_revision_needed,
-                    "is_revision_completed": sct.is_revision_completed,
-                    "no_of_revisions": sct.no_of_revisions,
-                    "current_revision_count": sct.current_revision_count,
-                    "revision_reason": sct.revision_reason,
-                    "file_ids": sct.file_ids,
-                    "files": files_data,
-                    "status_id": sct.status_id,
-                    "created_at": sct.created_at.isoformat() if sct.created_at else None,
-                    "updated_at": sct.updated_at.isoformat() if sct.updated_at else None,
-                    "updated_by": sct.updated_by,
-                    "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
-                }
-        
-        # 4. Batch load stage completion data (templating)
-        templating_stage_query = select(Templating).where(
-            Templating.fab_id.in_(fab_ids),
-            Templating.is_templating_schedule == True
-        ).order_by(Templating.fab_id, Templating.id.desc())
-        
-        templating_stage_result = await db.execute(templating_stage_query)
-        templating_stage_rows = templating_stage_result.scalars().all()
-        
-        # Group stage data by fab_id (get latest only)
-        stage_data_by_fab = {}
-        for templating in templating_stage_rows:
-            if templating.fab_id not in stage_data_by_fab:
-                stage_data_by_fab[templating.fab_id] = {
-                    "is_complete": templating.is_completed,
-                    "stage_data": {
-                        "templating_id": templating.id,
-                        "technician_id": templating.technician_id,
-                        "schedule_start_date": templating.schedule_start_date.isoformat() if templating.schedule_start_date else None,
-                        "schedule_due_date": templating.schedule_due_date.isoformat() if templating.schedule_due_date else None,
-                        "actual_start_date": templating.actual_start_date.isoformat() if templating.actual_start_date else None,
-                        "duration": templating.duration,
-                        "total_sqft": templating.total_sqft,
-                        "is_completed": templating.is_completed,
-                        "notes": templating.notes
-                    }
-                }
-        
-        # 5. Assign all batch-loaded data to fabs
-        for fab_dict in fabs:
-            fab_id = fab_dict["id"]
-            fab_dict["fab_notes"] = notes_by_fab.get(fab_id, [])
-            fab_dict["draft_data"] = drafting_by_fab.get(fab_id)
-            fab_dict["sales_ct_data"] = sales_ct_by_fab.get(fab_id)
-            
-            # Handle stage completion based on current_stage
-            current_stage = fab_dict.get("current_stage")
-            if current_stage == "templating":
-                stage_info = stage_data_by_fab.get(fab_id, {"is_complete": False, "stage_data": None})
-                fab_dict["is_complete"] = stage_info["is_complete"]
-                fab_dict["stage_data"] = stage_info["stage_data"]
-            else:
-                # For other stages, default to False/None (can be extended later)
-                fab_dict["is_complete"] = False
-                fab_dict["stage_data"] = None
-    else:
-        # No FABs to process
-        for fab_dict in fabs:
-            fab_dict["fab_notes"] = []
-            fab_dict["draft_data"] = None
-            fab_dict["sales_ct_data"] = None
-            fab_dict["is_complete"] = False
-            fab_dict["stage_data"] = None
-    
-    # Count total FABs with same filters (without pagination)
+    # Step 7: Get total count
     count_query = select(func.count(Fab.id)).select_from(Fab)
     count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
     count_query = count_query.outerjoin(latest_templating, sa.literal(True))
     
+    # Apply all filters to count query
     if job_id is not None:
         count_query = count_query.where(Fab.job_id == job_id)
     if fab_type:
@@ -883,7 +324,6 @@ async def get_fabs(
     if next_stage:
         count_query = count_query.where(Fab.next_stage == next_stage)
     
-    # Apply search filter to count query - use distinct to avoid duplicate counts from joins
     if search:
         search_term = f"%{search}%"
         count_query = count_query.where(
@@ -894,10 +334,9 @@ async def get_fabs(
             )
         )
     
-    # Apply templating date filter to count query if applicable
     if templating_fab_ids is not None:
         count_query = count_query.where(Fab.id.in_(templating_fab_ids))
-    elif schedule_status == "unscheduled":  # ADDED: explicit unscheduled count
+    elif schedule_status == "unscheduled":
         count_query = count_query.where(
             or_(
                 ~Fab.id.in_(select(Templating.fab_id)),
@@ -905,111 +344,27 @@ async def get_fabs(
             )
         )
     
-    # Apply predefined date filters to count query
-    if date_filter:
-        today = date.today()
-        
-        if date_filter == "today":
-            count_query = count_query.where(latest_templating.c.schedule_start_date == today)
-        elif date_filter == "this_week":
-            start_of_week = today - timedelta(days=today.weekday())
-            end_of_week = start_of_week + timedelta(days=6)
-            count_query = count_query.where(
-                latest_templating.c.schedule_start_date >= start_of_week,
-                latest_templating.c.schedule_start_date <= end_of_week
-            )
-        elif date_filter == "last_week":
-            start_of_last_week = today - timedelta(days=today.weekday() + 7)
-            end_of_last_week = start_of_last_week + timedelta(days=6)
-            count_query = count_query.where(
-                latest_templating.c.schedule_start_date >= start_of_last_week,
-                latest_templating.c.schedule_start_date <= end_of_last_week
-            )
-        elif date_filter == "this_month":
-            start_of_month = today.replace(day=1)
-            if today.month == 12:
-                end_of_month = today.replace(day=31)
-            else:
-                next_month = today.replace(month=today.month + 1, day=1)
-                end_of_month = next_month - timedelta(days=1)
-            count_query = count_query.where(
-                latest_templating.c.schedule_start_date >= start_of_month,
-                latest_templating.c.schedule_start_date <= end_of_month
-            )
-        elif date_filter == "last_month":
-            if today.month == 1:
-                start_of_last_month = today.replace(year=today.year - 1, month=12, day=1)
-                end_of_last_month = today.replace(year=today.year - 1, month=12, day=31)
-            else:
-                start_of_last_month = today.replace(month=today.month - 1, day=1)
-                end_of_last_month = today.replace(day=1) - timedelta(days=1)
-            count_query = count_query.where(
-                latest_templating.c.schedule_start_date >= start_of_last_month,
-                latest_templating.c.schedule_start_date <= end_of_last_month
-            )
-        elif date_filter == "next_week":
-            start_of_next_week = today + timedelta(days=(7 - today.weekday()))
-            end_of_next_week = start_of_next_week + timedelta(days=6)
-            count_query = count_query.where(
-                latest_templating.c.schedule_start_date >= start_of_next_week,
-                latest_templating.c.schedule_start_date <= end_of_next_week
-            )
-        elif date_filter == "next_month":
-            if today.month == 12:
-                start_of_next_month = date(today.year + 1, 1, 1)
-                end_of_next_month = date(today.year + 1, 1, 31)
-            else:
-                start_of_next_month = date(today.year, today.month + 1, 1)
-                if today.month == 11:
-                    end_of_next_month = date(today.year, 12, 31)
-                else:
-                    following_month = date(today.year, today.month + 2, 1)
-                    end_of_next_month = following_month - timedelta(days=1)
-            count_query = count_query.where(
-                latest_templating.c.schedule_start_date >= start_of_next_month,
-                latest_templating.c.schedule_start_date <= end_of_next_month
-            )
-    if schedule_start_date is not None:
-        count_query = count_query.where(latest_templating.c.schedule_start_date >= schedule_start_date)
-    if schedule_due_date is not None:
-        count_query = count_query.where(latest_templating.c.schedule_due_date <= schedule_due_date)
-    
     total_result = await db.execute(count_query)
     total = total_result.scalar()
     
-    # Calculate aggregated totals when current_stage filter is present
+    # Step 8: Calculate stage totals if needed
     stage_totals = None
     if current_stage:
-        # Build aggregation query with same filters (no pagination)
-        totals_query = select(
+        stage_totals_query = select(
             func.sum(Fab.total_sqft).label("total_sqft"),
             func.sum(Fab.wj_linft).label("wj_linft"),
             func.sum(Fab.edging_linft).label("edging_linft"),
             func.sum(Fab.cnc_linft).label("cnc_linft"),
             func.sum(Fab.miter_linft).label("miter_linft"),
             func.sum(Fab.no_of_pieces).label("no_of_pieces")
-        ).select_from(Fab)
+        ).select_from(Fab).where(Fab.current_stage == current_stage)
         
-        totals_query = totals_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
-        totals_query = totals_query.outerjoin(latest_templating, sa.literal(True))
-        
-        # Apply same filters as count query
+        # Apply same filters
         if job_id is not None:
-            totals_query = totals_query.where(Fab.job_id == job_id)
-        if fab_type:
-            totals_query = totals_query.where(Fab.fab_type.ilike(f"%{fab_type}%"))
-        if sales_person_id is not None:
-            totals_query = totals_query.where(Fab.sales_person_id == sales_person_id)
-        if status_id is not None:
-            totals_query = totals_query.where(Fab.status_id == status_id)
-        totals_query = totals_query.where(Fab.current_stage == current_stage)
-        if next_stage:
-            totals_query = totals_query.where(Fab.next_stage == next_stage)
-        
-        # Apply search filter to totals query
+            stage_totals_query = stage_totals_query.where(Fab.job_id == job_id)
         if search:
             search_term = f"%{search}%"
-            totals_query = totals_query.where(
+            stage_totals_query = stage_totals_query.where(
                 or_(
                     sa.cast(Fab.id, sa.String).ilike(search_term),
                     BusinessJob.name.ilike(search_term),
@@ -1017,77 +372,7 @@ async def get_fabs(
                 )
             )
         
-        # Apply predefined date filters to totals query
-        if date_filter:
-            today = date.today()
-            
-            if date_filter == "today":
-                totals_query = totals_query.where(latest_templating.c.schedule_start_date == today)
-            elif date_filter == "this_week":
-                start_of_week = today - timedelta(days=today.weekday())
-                end_of_week = start_of_week + timedelta(days=6)
-                totals_query = totals_query.where(
-                    latest_templating.c.schedule_start_date >= start_of_week,
-                    latest_templating.c.schedule_start_date <= end_of_week
-                )
-            elif date_filter == "last_week":
-                start_of_last_week = today - timedelta(days=today.weekday() + 7)
-                end_of_last_week = start_of_last_week + timedelta(days=6)
-                totals_query = totals_query.where(
-                    latest_templating.c.schedule_start_date >= start_of_last_week,
-                    latest_templating.c.schedule_start_date <= end_of_last_week
-                )
-            elif date_filter == "this_month":
-                start_of_month = today.replace(day=1)
-                if today.month == 12:
-                    end_of_month = today.replace(day=31)
-                else:
-                    next_month = today.replace(month=today.month + 1, day=1)
-                    end_of_month = next_month - timedelta(days=1)
-                totals_query = totals_query.where(
-                    latest_templating.c.schedule_start_date >= start_of_month,
-                    latest_templating.c.schedule_start_date <= end_of_month
-                )
-            elif date_filter == "last_month":
-                if today.month == 1:
-                    start_of_last_month = today.replace(year=today.year - 1, month=12, day=1)
-                    end_of_last_month = today.replace(year=today.year - 1, month=12, day=31)
-                else:
-                    start_of_last_month = today.replace(month=today.month - 1, day=1)
-                    end_of_last_month = today.replace(day=1) - timedelta(days=1)
-                totals_query = totals_query.where(
-                    latest_templating.c.schedule_start_date >= start_of_last_month,
-                    latest_templating.c.schedule_start_date <= end_of_last_month
-                )
-            elif date_filter == "next_week":
-                start_of_next_week = today + timedelta(days=(7 - today.weekday()))
-                end_of_next_week = start_of_next_week + timedelta(days=6)
-                totals_query = totals_query.where(
-                    latest_templating.c.schedule_start_date >= start_of_next_week,
-                    latest_templating.c.schedule_start_date <= end_of_next_week
-                )
-            elif date_filter == "next_month":
-                if today.month == 12:
-                    start_of_next_month = date(today.year + 1, 1, 1)
-                    end_of_next_month = date(today.year + 1, 1, 31)
-                else:
-                    start_of_next_month = date(today.year, today.month + 1, 1)
-                    if today.month == 11:
-                        end_of_next_month = date(today.year, 12, 31)
-                    else:
-                        following_month = date(today.year, today.month + 2, 1)
-                        end_of_next_month = following_month - timedelta(days=1)
-                totals_query = totals_query.where(
-                    latest_templating.c.schedule_start_date >= start_of_next_month,
-                    latest_templating.c.schedule_start_date <= end_of_next_month
-                )
-        
-        if schedule_start_date is not None:
-            totals_query = totals_query.where(latest_templating.c.schedule_start_date >= schedule_start_date)
-        if schedule_due_date is not None:
-            totals_query = totals_query.where(latest_templating.c.schedule_due_date <= schedule_due_date)
-        
-        totals_result = await db.execute(totals_query)
+        totals_result = await db.execute(stage_totals_query)
         totals_row = totals_result.first()
         
         if totals_row:
@@ -1101,9 +386,8 @@ async def get_fabs(
                 "no_of_pieces": int(totals_row[5]) if totals_row[5] else 0
             }
     
-    # Calculate pagination metadata
+    # Step 9: Build response
     page = (skip // limit) + 1 if limit > 0 else 1
-    
     response_data = {
         "total": total,
         "page": page,
@@ -1111,7 +395,6 @@ async def get_fabs(
         "data": fabs
     }
     
-    # Add stage totals if present
     if stage_totals:
         response_data["stage_totals"] = stage_totals
     
@@ -2077,8 +1360,356 @@ async def get_all_stages(
     )
 
 
-async def get_draft_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
-    """Get draft data for a given FAB with file URLs"""
+# ============ HELPER FUNCTIONS FOR FAB QUERIES ============
+
+async def _apply_templating_filters(
+    db: AsyncSession,
+    templater_id: Optional[int],
+    schedule_start_date: Optional[date],
+    schedule_due_date: Optional[date],
+    schedule_status: Optional[str],
+    date_filter: Optional[str]
+) -> Optional[List[int]]:
+    """
+    Apply templating-related filters and return matching FAB IDs.
+    Returns None if no templating filters applied, or a list of FAB IDs.
+    """
+    if not any([schedule_start_date, schedule_due_date, date_filter, schedule_status, templater_id is not None]):
+        return None
+    
+    templating_query = select(Templating.fab_id).distinct()
+    
+    # Apply templater_id filter
+    if templater_id is not None:
+        if templater_id == 0:
+            templating_result = await db.execute(select(Templating.fab_id).distinct())
+            fabs_with_templating = [row[0] for row in templating_result.all()]
+            if fabs_with_templating:
+                templating_query = select(Fab.id).where(~Fab.id.in_(fabs_with_templating))
+            else:
+                templating_query = select(Fab.id)
+        else:
+            templating_query = templating_query.where(Templating.technician_id == templater_id)
+    
+    # Apply date range filters
+    if schedule_start_date is not None:
+        templating_query = templating_query.where(Templating.schedule_start_date >= schedule_start_date)
+    if schedule_due_date is not None:
+        templating_query = templating_query.where(Templating.schedule_due_date <= schedule_due_date)
+    
+    # Apply schedule status filter
+    if schedule_status == "scheduled":
+        templating_query = templating_query.where(Templating.schedule_start_date.isnot(None))
+    
+    # Apply predefined date filters
+    if date_filter:
+        templating_query = _apply_date_filter(templating_query, date_filter)
+    
+    # Execute query
+    if schedule_status != "unscheduled":
+        result = await db.execute(templating_query)
+        fab_ids = [row[0] for row in result.all()]
+        return fab_ids if fab_ids else []
+    else:
+        # For unscheduled
+        unscheduled_query = select(Fab.id).where(
+            or_(
+                ~Fab.id.in_(select(Templating.fab_id)),
+                Fab.id.in_(select(Templating.fab_id).where(Templating.schedule_start_date.is_(None)))
+            )
+        )
+        result = await db.execute(unscheduled_query)
+        fab_ids = [row[0] for row in result.all()]
+        return fab_ids if fab_ids else []
+
+
+def _apply_date_filter(query, date_filter: str):
+    """Apply predefined date filters to a query."""
+    today = date.today()
+    
+    if date_filter == "today":
+        return query.where(Templating.schedule_start_date == today)
+    elif date_filter == "this_week":
+        start = today - timedelta(days=today.weekday())
+        end = start + timedelta(days=6)
+        return query.where(Templating.schedule_start_date.between(start, end))
+    elif date_filter == "last_week":
+        start = today - timedelta(days=today.weekday() + 7)
+        end = start + timedelta(days=6)
+        return query.where(Templating.schedule_start_date.between(start, end))
+    elif date_filter == "this_month":
+        start = today.replace(day=1)
+        end = (start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+        return query.where(Templating.schedule_start_date.between(start, end))
+    elif date_filter == "last_month":
+        first = today.replace(day=1)
+        last_month_end = first - timedelta(days=1)
+        last_month_start = last_month_end.replace(day=1)
+        return query.where(Templating.schedule_start_date.between(last_month_start, last_month_end))
+    elif date_filter == "next_week":
+        start = today + timedelta(days=(7 - today.weekday()))
+        end = start + timedelta(days=6)
+        return query.where(Templating.schedule_start_date.between(start, end))
+    elif date_filter == "next_month":
+        first_next = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
+        last_next = (first_next + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+        return query.where(Templating.schedule_start_date.between(first_next, last_next))
+    
+    return query
+
+
+def _build_fab_list_query(
+    job_id: Optional[int],
+    fab_type: Optional[str],
+    sales_person_id: Optional[int],
+    status_id: Optional[int],
+    current_stage: Optional[str],
+    next_stage: Optional[str],
+    search: Optional[str],
+    templating_fab_ids: Optional[List[int]],
+    latest_templating
+) -> select:
+    """Build the main FAB list query with all joins."""
+    from sqlalchemy.orm import aliased
+    
+    TechnicianUser = aliased(User)
+    DrafterUser = aliased(User)
+    DrafterAssignedByUser = aliased(User)
+    
+    query = select(
+        Fab,
+        User.first_name.label("sales_person_first_name"),
+        User.last_name.label("sales_person_last_name"),
+        StoneType.name.label("stone_type_name"),
+        StoneColor.name.label("stone_color_name"),
+        StoneThickness.thickness.label("stone_thickness_value"),
+        Edge.name.label("edge_name"),
+        latest_templating.c.schedule_start_date.label("templating_schedule_start_date"),
+        latest_templating.c.schedule_due_date.label("templating_schedule_due_date"),
+        latest_templating.c.notes.label("templating_notes"),
+        TechnicianUser.first_name.label("technician_first_name"),
+        TechnicianUser.last_name.label("technician_last_name"),
+        BusinessJob,
+        Account.name.label("account_name"),
+        Account.account_number.label("account_number"),
+        Account.contact_person.label("account_contact_person"),
+        Account.email.label("account_email"),
+        Account.phone.label("account_phone"),
+        DrafterUser.first_name.label("drafter_first_name"),
+        DrafterUser.last_name.label("drafter_last_name"),
+        DrafterAssignedByUser.first_name.label("drafter_assigned_by_first_name"),
+        DrafterAssignedByUser.last_name.label("drafter_assigned_by_last_name")
+    ).select_from(Fab)
+    
+    # Apply all joins
+    query = query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
+    query = query.join(Account, BusinessJob.account_id == Account.id, isouter=True)
+    query = query.join(User, Fab.sales_person_id == User.id, isouter=True)
+    query = query.join(StoneType, Fab.stone_type_id == StoneType.id, isouter=True)
+    query = query.join(StoneColor, Fab.stone_color_id == StoneColor.id, isouter=True)
+    query = query.join(StoneThickness, Fab.stone_thickness_id == StoneThickness.id, isouter=True)
+    query = query.join(Edge, Fab.edge_id == Edge.id, isouter=True)
+    query = query.outerjoin(latest_templating, sa.literal(True))
+    query = query.join(TechnicianUser, latest_templating.c.technician_id == TechnicianUser.id, isouter=True)
+    query = query.join(DrafterUser, Fab.drafter_id == DrafterUser.id, isouter=True)
+    query = query.join(DrafterAssignedByUser, Fab.drafter_assigned_by == DrafterAssignedByUser.id, isouter=True)
+    
+    # Apply filters
+    if job_id is not None:
+        query = query.where(Fab.job_id == job_id)
+    if fab_type:
+        query = query.where(Fab.fab_type.ilike(f"%{fab_type}%"))
+    if sales_person_id is not None:
+        query = query.where(Fab.sales_person_id == sales_person_id)
+    if status_id is not None:
+        query = query.where(Fab.status_id == status_id)
+    if current_stage:
+        query = query.where(Fab.current_stage == current_stage)
+    if next_stage:
+        query = query.where(Fab.next_stage == next_stage)
+    
+    if search:
+        search_term = f"%{search}%"
+        query = query.where(
+            or_(
+                sa.cast(Fab.id, sa.String).ilike(search_term),
+                BusinessJob.name.ilike(search_term),
+                BusinessJob.job_number.ilike(search_term)
+            )
+        )
+    
+    if templating_fab_ids is not None:
+        query = query.where(Fab.id.in_(templating_fab_ids))
+    
+    return query
+
+
+def _apply_pagination_and_ordering(query, skip: int, limit: int, current_stage: Optional[str], latest_templating):
+    """Apply pagination and stage-specific ordering."""
+    if current_stage == "templating":
+        return query.offset(skip).limit(limit).order_by(
+            latest_templating.c.schedule_start_date.asc().nullslast(),
+            Fab.updated_at.asc().nullsfirst(),
+            Fab.created_at.asc()
+        )
+    elif current_stage == "cut_list":
+        return query.offset(skip).limit(limit).order_by(
+            Fab.shop_date_schedule.asc().nullsfirst(),
+            Fab.updated_at.asc().nullsfirst(),
+            Fab.created_at.asc()
+        )
+    else:
+        return query.offset(skip).limit(limit).order_by(
+            Fab.updated_at.asc().nullsfirst(),
+            Fab.created_at.asc()
+        )
+
+
+def _convert_fab_row_to_dict(row: tuple) -> dict:
+    """Convert a fab query row to a dictionary with all related data."""
+    fab = row[0]
+    fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
+                for k, v in fab.__dict__.items() if not k.startswith('_')}
+    
+    if fab_dict.get("notes") and not isinstance(fab_dict["notes"], list):
+        fab_dict["notes"] = [fab_dict["notes"]] if fab_dict["notes"] else None
+    
+    # Unpack remaining row data
+    sales_person_first_name, sales_person_last_name = row[1], row[2]
+    stone_type_name, stone_color_name, stone_thickness_value = row[3], row[4], row[5]
+    edge_name = row[6]
+    templating_schedule_start_date, templating_schedule_due_date, templating_notes = row[7], row[8], row[9]
+    technician_first_name, technician_last_name = row[10], row[11]
+    business_job = row[12]
+    account_name, account_number, account_contact_person, account_email, account_phone = row[13:18]
+    drafter_first_name, drafter_last_name = row[18], row[19]
+    drafter_assigned_by_first_name, drafter_assigned_by_last_name = row[20], row[21]
+    
+    # Add related data
+    fab_dict["sales_person_name"] = f"{sales_person_first_name} {sales_person_last_name}" if sales_person_first_name else None
+    fab_dict["stone_type_name"] = stone_type_name
+    fab_dict["stone_color_name"] = stone_color_name
+    fab_dict["stone_thickness_value"] = stone_thickness_value
+    fab_dict["edge_name"] = edge_name
+    
+    if business_job:
+        job_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
+                   for k, v in business_job.__dict__.items() if not k.startswith('_')}
+        fab_dict["job_details"] = job_dict
+        fab_dict["account_id"] = business_job.account_id
+    else:
+        fab_dict["job_details"] = None
+        fab_dict["account_id"] = None
+    
+    fab_dict["account_name"] = account_name
+    fab_dict["account_number"] = account_number
+    fab_dict["account_contact_person"] = account_contact_person
+    fab_dict["account_email"] = account_email
+    fab_dict["account_phone"] = account_phone
+    
+    fab_dict["templating_schedule_start_date"] = templating_schedule_start_date.isoformat() if templating_schedule_start_date else None
+    fab_dict["templating_schedule_due_date"] = templating_schedule_due_date.isoformat() if templating_schedule_due_date else None
+    fab_dict["templating_notes"] = templating_notes
+    fab_dict["technician_name"] = f"{technician_first_name} {technician_last_name}" if technician_first_name else None
+    
+    fab_dict["drafter_name"] = f"{drafter_first_name} {drafter_last_name}" if drafter_first_name else None
+    fab_dict["drafter_assigned_by_name"] = f"{drafter_assigned_by_first_name} {drafter_assigned_by_last_name}" if drafter_assigned_by_first_name else None
+    fab_dict["next_stage"] = get_next_stage(fab_dict.get("current_stage"))
+    
+    return fab_dict
+
+
+async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) -> None:
+    """Batch load and attach notes, draft, and sales CT data to fab dictionaries."""
+    fab_ids = [fab["id"] for fab in fab_dicts]
+    
+    if not fab_ids:
+        for fab_dict in fab_dicts:
+            fab_dict["fab_notes"] = []
+            fab_dict["draft_data"] = None
+            fab_dict["sales_ct_data"] = None
+            fab_dict["is_complete"] = False
+            fab_dict["stage_data"] = None
+        return
+    
+    # Load notes
+    notes_by_fab = await _batch_load_fab_notes(db, fab_ids)
+    
+    # Load drafting data
+    drafting_by_fab = await _batch_load_drafting_data(db, fab_ids)
+    
+    # Load sales CT data
+    sales_ct_by_fab = await _batch_load_sales_ct_data(db, fab_ids)
+    
+    # Load stage data
+    stage_data_by_fab = await _batch_load_stage_data(db, fab_ids)
+    
+    # Attach to fab dicts
+    for fab_dict in fab_dicts:
+        fab_id = fab_dict["id"]
+        fab_dict["fab_notes"] = notes_by_fab.get(fab_id, [])
+        fab_dict["draft_data"] = drafting_by_fab.get(fab_id)
+        fab_dict["sales_ct_data"] = sales_ct_by_fab.get(fab_id)
+        
+        current_stage = fab_dict.get("current_stage")
+        if current_stage == "templating":
+            stage_info = stage_data_by_fab.get(fab_id, {"is_complete": False, "stage_data": None})
+            fab_dict["is_complete"] = stage_info["is_complete"]
+            fab_dict["stage_data"] = stage_info["stage_data"]
+        else:
+            fab_dict["is_complete"] = False
+            fab_dict["stage_data"] = None
+
+
+async def _batch_load_fab_notes(db: AsyncSession, fab_ids: List[int]) -> dict:
+    """Load last 10 notes per FAB."""
+    from sqlalchemy.orm import aliased
+    
+    CreatorUser = aliased(User)
+    UpdaterUser = aliased(User)
+    
+    query = select(
+        FabNotes,
+        CreatorUser.first_name.label("creator_first_name"),
+        CreatorUser.last_name.label("creator_last_name"),
+        UpdaterUser.first_name.label("updater_first_name"),
+        UpdaterUser.last_name.label("updater_last_name")
+    ).where(FabNotes.fab_id.in_(fab_ids))\
+     .join(CreatorUser, FabNotes.created_by == CreatorUser.id, isouter=True)\
+     .join(UpdaterUser, FabNotes.updated_by == UpdaterUser.id, isouter=True)\
+     .order_by(FabNotes.fab_id, FabNotes.created_at.desc())
+    
+    result = await db.execute(query)
+    rows = result.all()
+    
+    notes_by_fab = {}
+    for row in rows:
+        note = row[0]
+        creator_first, creator_last = row[1], row[2]
+        updater_first, updater_last = row[3], row[4]
+        
+        if note.fab_id not in notes_by_fab:
+            notes_by_fab[note.fab_id] = []
+        
+        if len(notes_by_fab[note.fab_id]) < 10:
+            notes_by_fab[note.fab_id].append({
+                "id": note.id,
+                "fab_id": note.fab_id,
+                "stage": note.stage,
+                "note": note.note,
+                "created_by": note.created_by,
+                "created_by_name": f"{creator_first} {creator_last}" if creator_first else None,
+                "created_at": note.created_at.isoformat() if note.created_at else None,
+                "updated_at": note.updated_at.isoformat() if note.updated_at else None,
+                "updated_by": note.updated_by,
+                "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
+            })
+    
+    return notes_by_fab
+
+
+async def _batch_load_drafting_data(db: AsyncSession, fab_ids: List[int]) -> dict:
+    """Load drafting data with files for each FAB."""
     from src.app.database.drafting import Drafting
     from src.app.database.file import File
     from sqlalchemy.orm import aliased
@@ -2092,74 +1723,74 @@ async def get_draft_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
         DrafterUser.last_name.label("drafter_last_name"),
         UpdaterUser.first_name.label("updater_first_name"),
         UpdaterUser.last_name.label("updater_last_name")
-    ).where(Drafting.fab_id == fab_id)
-    
-    query = query.join(DrafterUser, Drafting.drafter_id == DrafterUser.id, isouter=True)
-    query = query.join(UpdaterUser, Drafting.updated_by == UpdaterUser.id, isouter=True)
-    query = query.order_by(Drafting.id.desc()).limit(1)  # Get latest drafting record
+    ).where(Drafting.fab_id.in_(fab_ids))\
+     .join(DrafterUser, Drafting.drafter_id == DrafterUser.id, isouter=True)\
+     .join(UpdaterUser, Drafting.updated_by == UpdaterUser.id, isouter=True)\
+     .order_by(Drafting.fab_id, Drafting.id.desc())
     
     result = await db.execute(query)
-    row = result.first()
+    rows = result.all()
     
-    if not row:
-        return None
+    # Get all file IDs first
+    all_file_ids = set()
+    for row in rows:
+        draft = row[0]
+        if draft.file_ids:
+            all_file_ids.update(int(fid.strip()) for fid in draft.file_ids.split(",") if fid.strip())
     
-    drafting = row[0]
-    drafter_first = row[1]
-    drafter_last = row[2]
-    updater_first = row[3]
-    updater_last = row[4]
+    # Batch load files
+    files_by_id = {}
+    if all_file_ids:
+        files_query = select(File).where(File.id.in_(all_file_ids))
+        files_result = await db.execute(files_query)
+        for file in files_result.scalars().all():
+            filename = os.path.basename(file.file_path)
+            file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
+            files_by_id[file.id] = {
+                "id": file.id,
+                "name": file.name,
+                "file_url": file_url,
+                "file_type": file.file_type,
+                "file_size": file.file_size,
+                "created_at": file.created_at.isoformat() if file.created_at else None
+            }
     
-    # Get file information if file_ids exist
-    files_data = []
-    if drafting.file_ids:
-        file_id_list = [int(fid.strip()) for fid in drafting.file_ids.split(",") if fid.strip()]
-        
-        if file_id_list:
-            # Fetch all files by IDs
-            files_query = select(File).where(File.id.in_(file_id_list))
-            files_result = await db.execute(files_query)
-            files = files_result.scalars().all()
+    # Group by FAB (get latest only)
+    drafting_by_fab = {}
+    for row in rows:
+        draft = row[0]
+        if draft.fab_id not in drafting_by_fab:
+            files_data = []
+            if draft.file_ids:
+                file_id_list = [int(fid.strip()) for fid in draft.file_ids.split(",") if fid.strip()]
+                files_data = [files_by_id[fid] for fid in file_id_list if fid in files_by_id]
             
-            for file in files:
-                # Extract filename from file_path
-                filename = os.path.basename(file.file_path)
-                file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
-                
-                files_data.append({
-                    "id": file.id,
-                    "name": file.name,
-                    "file_url": file_url,
-                    "file_type": file.file_type,
-                    "file_size": file.file_size,
-                    "created_at": file.created_at.isoformat() if file.created_at else None
-                })
-    draft_dict = {
-        "id": drafting.id,
-        "fab_id": drafting.fab_id,
-        "drafter_id": drafting.drafter_id,
-        "drafter_name": f"{drafter_first} {drafter_last}" if drafter_first else None,
-        "drafter_start_date": drafting.drafter_start_date.isoformat() if drafting.drafter_start_date else None,
-        "drafter_end_date": drafting.drafter_end_date.isoformat() if drafting.drafter_end_date else None,
-        "total_sqft_drafted": float(drafting.total_sqft_drafted) if drafting.total_sqft_drafted else None,
-        "no_of_piece_drafted": drafting.no_of_piece_drafted,
-        "draft_note": drafting.draft_note,
-        "mentions": drafting.mentions,
-        "total_hours_drafted": float(drafting.total_hours_drafted) if drafting.total_hours_drafted else None,
-        "file_ids": drafting.file_ids,
-        "files": files_data,  # ← Add file details with URLs
-        "status_id": drafting.status_id,
-        "created_at": drafting.created_at.isoformat() if drafting.created_at else None,
-        "updated_at": drafting.updated_at.isoformat() if drafting.updated_at else None,
-        "updated_by": drafting.updated_by,
-        "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
-    }
+            drafting_by_fab[draft.fab_id] = {
+                "id": draft.id,
+                "fab_id": draft.fab_id,
+                "drafter_id": draft.drafter_id,
+                "drafter_name": f"{row[1]} {row[2]}" if row[1] else None,
+                "drafter_start_date": draft.drafter_start_date.isoformat() if draft.drafter_start_date else None,
+                "drafter_end_date": draft.drafter_end_date.isoformat() if draft.drafter_end_date else None,
+                "total_sqft_drafted": float(draft.total_sqft_drafted) if draft.total_sqft_drafted else None,
+                "no_of_piece_drafted": draft.no_of_piece_drafted,
+                "draft_note": draft.draft_note,
+                "mentions": draft.mentions,
+                "total_hours_drafted": float(draft.total_hours_drafted) if draft.total_hours_drafted else None,
+                "file_ids": draft.file_ids,
+                "files": files_data,
+                "status_id": draft.status_id,
+                "created_at": draft.created_at.isoformat() if draft.created_at else None,
+                "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
+                "updated_by": draft.updated_by,
+                "updated_by_name": f"{row[3]} {row[4]}" if row[3] else None
+            }
     
-    return draft_dict
+    return drafting_by_fab
 
 
-async def get_sales_ct_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
-    """Get Sales CT data for a given FAB with revision reason and file URLs"""
+async def _batch_load_sales_ct_data(db: AsyncSession, fab_ids: List[int]) -> dict:
+    """Load sales CT data with files for each FAB."""
     from src.app.database.sales_ct import SalesCT
     from src.app.database.file import File
     from sqlalchemy.orm import aliased
@@ -2173,109 +1804,100 @@ async def get_sales_ct_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
         DrafterUser.last_name.label("drafter_last_name"),
         UpdaterUser.first_name.label("updater_first_name"),
         UpdaterUser.last_name.label("updater_last_name")
-    ).where(SalesCT.fab_id == fab_id)
-    
-    query = query.join(DrafterUser, SalesCT.drafter_id == DrafterUser.id, isouter=True)
-    query = query.join(UpdaterUser, SalesCT.updated_by == UpdaterUser.id, isouter=True)
-    query = query.order_by(SalesCT.id.desc()).limit(1)  # Get latest Sales CT record
+    ).where(SalesCT.fab_id.in_(fab_ids))\
+     .join(DrafterUser, SalesCT.drafter_id == DrafterUser.id, isouter=True)\
+     .join(UpdaterUser, SalesCT.updated_by == UpdaterUser.id, isouter=True)\
+     .order_by(SalesCT.fab_id, SalesCT.id.desc())
     
     result = await db.execute(query)
-    row = result.first()
+    rows = result.all()
     
-    if not row:
-        return None
+    # Get all file IDs
+    all_file_ids = set()
+    for row in rows:
+        sct = row[0]
+        if sct.file_ids:
+            all_file_ids.update(int(fid.strip()) for fid in sct.file_ids.split(",") if fid.strip())
     
-    sales_ct = row[0]
-    drafter_first = row[1]
-    drafter_last = row[2]
-    updater_first = row[3]
-    updater_last = row[4]
+    # Batch load files
+    files_by_id = {}
+    if all_file_ids:
+        files_query = select(File).where(File.id.in_(all_file_ids))
+        files_result = await db.execute(files_query)
+        for file in files_result.scalars().all():
+            filename = os.path.basename(file.file_path)
+            file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
+            files_by_id[file.id] = {
+                "id": file.id,
+                "name": file.name,
+                "file_url": file_url,
+                "file_type": file.file_type,
+                "file_size": file.file_size,
+                "created_at": file.created_at.isoformat() if file.created_at else None
+            }
     
-    # Get file information if file_ids exist
-    files_data = []
-    if sales_ct.file_ids:
-        file_id_list = [int(fid.strip()) for fid in sales_ct.file_ids.split(",") if fid.strip()]
-        
-        if file_id_list:
-            # Fetch all files by IDs
-            files_query = select(File).where(File.id.in_(file_id_list))
-            files_result = await db.execute(files_query)
-            files = files_result.scalars().all()
+    # Group by FAB (get latest only)
+    sales_ct_by_fab = {}
+    for row in rows:
+        sct = row[0]
+        if sct.fab_id not in sales_ct_by_fab:
+            files_data = []
+            if sct.file_ids:
+                file_id_list = [int(fid.strip()) for fid in sct.file_ids.split(",") if fid.strip()]
+                files_data = [files_by_id[fid] for fid in file_id_list if fid in files_by_id]
             
-            for file in files:
-                # Extract filename from file_path
-                filename = os.path.basename(file.file_path)
-                file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
-                
-                files_data.append({
-                    "id": file.id,
-                    "name": file.name,
-                    "file_url": file_url,
-                    "file_type": file.file_type,
-                    "file_size": file.file_size,
-                    "created_at": file.created_at.isoformat() if file.created_at else None
-                })
-    sales_ct_dict = {
-        "id": sales_ct.id,
-        "fab_id": sales_ct.fab_id,
-        "slab_smith_type": sales_ct.slab_smith_type,
-        "drafter_id": sales_ct.drafter_id,
-        "drafter_name": f"{drafter_first} {drafter_last}" if drafter_first else None,
-        "start_date": sales_ct.start_date.isoformat() if sales_ct.start_date else None,
-        "end_date": sales_ct.end_date.isoformat() if sales_ct.end_date else None,
-        "total_sqft_completed": sales_ct.total_sqft_completed,
-        "is_revision_needed": sales_ct.is_revision_needed,
-        "is_revision_completed": sales_ct.is_revision_completed,
-        "no_of_revisions": sales_ct.no_of_revisions,
-        "current_revision_count": sales_ct.current_revision_count,
-        "revision_reason": sales_ct.revision_reason,  # ← Include revision reason
-        "file_ids": sales_ct.file_ids,
-        "files": files_data,  # ← Include file details with URLs
-        "status_id": sales_ct.status_id,
-        "created_at": sales_ct.created_at.isoformat() if sales_ct.created_at else None,
-        "updated_at": sales_ct.updated_at.isoformat() if sales_ct.updated_at else None,
-        "updated_by": sales_ct.updated_by,
-        "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
-    }
+            sales_ct_by_fab[sct.fab_id] = {
+                "id": sct.id,
+                "fab_id": sct.fab_id,
+                "slab_smith_type": sct.slab_smith_type,
+                "drafter_id": sct.drafter_id,
+                "drafter_name": f"{row[1]} {row[2]}" if row[1] else None,
+                "start_date": sct.start_date.isoformat() if sct.start_date else None,
+                "end_date": sct.end_date.isoformat() if sct.end_date else None,
+                "total_sqft_completed": sct.total_sqft_completed,
+                "is_revision_needed": sct.is_revision_needed,
+                "is_revision_completed": sct.is_revision_completed,
+                "no_of_revisions": sct.no_of_revisions,
+                "current_revision_count": sct.current_revision_count,
+                "revision_reason": sct.revision_reason,
+                "file_ids": sct.file_ids,
+                "files": files_data,
+                "status_id": sct.status_id,
+                "created_at": sct.created_at.isoformat() if sct.created_at else None,
+                "updated_at": sct.updated_at.isoformat() if sct.updated_at else None,
+                "updated_by": sct.updated_by,
+                "updated_by_name": f"{row[3]} {row[4]}" if row[3] else None
+            }
     
-    return sales_ct_dict
+    return sales_ct_by_fab
 
-@router.patch("/fabs/{fab_id}/hold", response_model=SuccessResponse[FabResponse])
-async def set_fab_hold(
-    fab_id: int,
-    on_hold: Optional[bool] = Query(None, description="If provided, set hold state. If omitted, toggle between on-hold (0) and active (1)"),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Mark or toggle a FAB as on-hold.
-    - on_hold=true  -> status_id=0
-    - on_hold=false -> status_id=1
-    - on_hold omitted -> toggle 0 <-> 1
-    """
-    result = await db.execute(select(Fab).where(Fab.id == fab_id))
-    fab = result.scalar_one_or_none()
-    if not fab:
-        raise HTTPException(status_code=404, detail="Fab not found")
 
-    # Only allow toggling between Active(1) and On-Hold(0)
-    if fab.status_id not in (0, 1) and on_hold is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Toggle allowed only when status_id is 0 (on-hold) or 1 (active). Provide on_hold=true/false to set explicitly."
-        )
-
-    if on_hold is None:
-        # Toggle
-        fab.status_id = 0 if fab.status_id == 1 else 1
-    else:
-        fab.status_id = 0 if on_hold else 1
-
-    fab.updated_at = utc_now()
-    fab.updated_by = current_user.id
-
-    await db.commit()
-    await db.refresh(fab)
-
-    # Reuse existing serializer for consistent response
-    return await get_fab(fab_id, db, current_user)
+async def _batch_load_stage_data(db: AsyncSession, fab_ids: List[int]) -> dict:
+    """Load templating stage data for templating stage FABs."""
+    query = select(Templating).where(
+        Templating.fab_id.in_(fab_ids),
+        Templating.is_templating_schedule == True
+    ).order_by(Templating.fab_id, Templating.id.desc())
+    
+    result = await db.execute(query)
+    rows = result.scalars().all()
+    
+    stage_data_by_fab = {}
+    for templating in rows:
+        if templating.fab_id not in stage_data_by_fab:
+            stage_data_by_fab[templating.fab_id] = {
+                "is_complete": templating.is_completed,
+                "stage_data": {
+                    "templating_id": templating.id,
+                    "technician_id": templating.technician_id,
+                    "schedule_start_date": templating.schedule_start_date.isoformat() if templating.schedule_start_date else None,
+                    "schedule_due_date": templating.schedule_due_date.isoformat() if templating.schedule_due_date else None,
+                    "actual_start_date": templating.actual_start_date.isoformat() if templating.actual_start_date else None,
+                    "duration": templating.duration,
+                    "total_sqft": templating.total_sqft,
+                    "is_completed": templating.is_completed,
+                    "notes": templating.notes
+                }
+            }
+    
+    return stage_data_by_fab
