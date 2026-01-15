@@ -555,6 +555,7 @@ class DraftingResponse(BaseModel):
     id: int
     fab_id: int
     drafter_id: int
+    drafter_name: Optional[str] = None
     scheduled_start_date: datetime
     scheduled_end_date: datetime
     drafter_start_date: Optional[datetime]
