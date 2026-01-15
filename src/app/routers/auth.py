@@ -319,14 +319,15 @@ async def login(
             ip_address,
             browser,
         )
-        background_tasks.add_task(
-            send_notification,
-            db,
-            user.email,
-            NOTIF_LOGIN_SUCCESSFUL,
-            f"Welcome {login_data.username}",
-            user.id,
-        )
+        # TEMPORARILY DISABLED: Login successful email notification (for testing)
+        # background_tasks.add_task(
+        #     send_notification,
+        #     db,
+        #     user.email,
+        #     NOTIF_LOGIN_SUCCESSFUL,
+        #     f"Welcome {login_data.username}",
+        #     user.id,
+        # )
         
         return success_response(tokens_and_permissions, MSG_LOGIN_SUCCESSFUL)
 
