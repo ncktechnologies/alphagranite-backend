@@ -274,12 +274,16 @@ async def get_fabs(
     
     # First, get FAB IDs that match the templating date filters (if applicable)
     templating_fab_ids = None
-    if schedule_start_date or schedule_due_date or date_filter or schedule_status or templater_id:
+    if schedule_start_date or schedule_due_date or date_filter or schedule_status or templater_id is not None:
         templating_query = select(Templating.fab_id).distinct()
         
         # Apply templater_id filter if provided
         if templater_id is not None:
-            templating_query = templating_query.where(Templating.technician_id == templater_id)
+            if templater_id == 0:
+                # Special case: return FABs with NO templater assigned
+                templating_query = templating_query.where(Templating.technician_id.is_(None))
+            else:
+                templating_query = templating_query.where(Templating.technician_id == templater_id)
         
         # Apply custom date range filters
         if schedule_start_date is not None:
