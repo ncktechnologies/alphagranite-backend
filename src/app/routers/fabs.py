@@ -280,8 +280,21 @@ async def get_fabs(
         # Apply templater_id filter if provided
         if templater_id is not None:
             if templater_id == 0:
-                # Special case: return FABs with NO templater assigned
-                templating_query = templating_query.where(Templating.technician_id.is_(None))
+                # Special case: return FABs with NO templating records at all
+                # Get FAB IDs that are NOT in the Templating table
+                templating_query = select(Templating.fab_id).distinct()
+                templating_query = templating_query.where(Templating.fab_id.in_(select(Fab.id)))
+                
+                # Execute to get FAB IDs that have templating records
+                templating_result = await db.execute(templating_query)
+                fabs_with_templating = [row[0] for row in templating_result.all()]
+                
+                # Filter main query to exclude FABs that have templating records
+                if fabs_with_templating:
+                    templating_query = select(Fab.id).where(~Fab.id.in_(fabs_with_templating))
+                else:
+                    # All FABs have no templating records
+                    templating_query = select(Fab.id)
             else:
                 templating_query = templating_query.where(Templating.technician_id == templater_id)
         
@@ -1542,6 +1555,7 @@ async def get_fabs_by_job(
         fab_dict["draft_data"] = draft_data  # ← Add this if missing
         
         # Fetch Sales CT data
+       
         sales_ct_data = await get_sales_ct_data(db, fab_dict["id"])  # ← Add this
         fab_dict["sales_ct_data"] = sales_ct_data  # ← Add this
     
@@ -1711,12 +1725,12 @@ async def get_fabs_by_stage(
         fab_dict["fab_notes"] = fab_notes
         
         # Fetch draft data
-        draft_data = await get_draft_data(db, fab_dict["id"])  # ← Add this if missing
-        fab_dict["draft_data"] = draft_data  # ← Add this if missing
+        draft_data = await get_draft_data(db, fab_dict["id"])
+        fab_dict["draft_data"] = draft_data
         
         # Fetch Sales CT data
-        sales_ct_data = await get_sales_ct_data(db, fab_dict["id"])  # ← Add this
-        fab_dict["sales_ct_data"] = sales_ct_data  # ← Add this
+        sales_ct_data = await get_sales_ct_data(db, fab_dict["id"])
+        fab_dict["sales_ct_data"] = sales_ct_data
     
     return success_response(fabs, f"Found {len(fabs)} FABs in stage '{stage_name}'")
 
