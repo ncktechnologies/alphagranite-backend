@@ -468,7 +468,8 @@ async def create_drafting(
     
     # Validate drafter exists
     drafter_result = await db.execute(select(User).where(User.id == drafting_data.drafter_id))
-    if not drafter_result.scalar_one_or_none():
+    drafter = drafter_result.scalar_one_or_none()
+    if not drafter:
         raise error_response("Drafter not found", 404)
     
     # Extract fab IDs from items
@@ -513,7 +514,22 @@ async def create_drafting(
     for drafting in drafting_entries:
         await db.refresh(drafting)
     
-    return success_response(drafting_entries, f"Drafting created successfully for {len(drafting_entries)} fabs")
+    # Build response with drafter info
+    drafter_name = f"{drafter.first_name} {drafter.last_name}" if drafter.first_name else drafter.last_name
+    
+    # Convert to response format with drafter details
+    response_data = []
+    for drafting in drafting_entries:
+        drafting_dict = {
+            **drafting.__dict__,
+            "drafter_id": drafting.drafter_id,
+            "drafter_name": drafter_name,
+        }
+        # Remove SQLAlchemy internal attributes
+        drafting_dict = {k: v for k, v in drafting_dict.items() if not k.startswith('_')}
+        response_data.append(drafting_dict)
+    
+    return success_response(response_data, f"Drafting created successfully for {len(drafting_entries)} fabs")
 
 
 @router.put("/drafting/{drafting_id}", response_model=SuccessResponse[DraftingResponse])
