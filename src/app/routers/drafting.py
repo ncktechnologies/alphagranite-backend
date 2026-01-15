@@ -443,51 +443,70 @@ async def get_drafting_session_history(
 
 # ============ DRAFTING ENDPOINTS ============
 
-@router.post("/drafting", response_model=SuccessResponse[DraftingResponse], status_code=201)
+from pydantic import BaseModel
+from typing import List
+
+# Add this new schema for bulk drafting creation
+class DraftingCreateBulk(BaseModel):
+    fab_ids: List[int]
+    drafter_id: int
+    scheduled_start_date: datetime
+    scheduled_end_date: datetime
+    total_sqft_required_to_draft: float
+
+@router.post("/drafting", response_model=SuccessResponse[List[DraftingResponse]], status_code=201)
 async def create_drafting(
-    drafting_data: DraftingCreate,
+    drafting_data: DraftingCreateBulk,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Create a new drafting entry"""
-    
-    # Validate fab exists
-    fab_result = await db.execute(select(Fab).where(Fab.id == drafting_data.fab_id))
-    if not fab_result.scalar_one_or_none():
-        raise error_response("Fab not found", 404)
+    """Create drafting entries for multiple fabs"""
     
     # Validate drafter exists
     drafter_result = await db.execute(select(User).where(User.id == drafting_data.drafter_id))
     if not drafter_result.scalar_one_or_none():
         raise error_response("Drafter not found", 404)
     
-    # Create drafting
-    drafting = Drafting(
-        fab_id=drafting_data.fab_id,
-        drafter_id=drafting_data.drafter_id,
-        scheduled_start_date=strip_timezone(drafting_data.scheduled_start_date),
-        scheduled_end_date=strip_timezone(drafting_data.scheduled_end_date),
-        total_sqft_required_to_draft=drafting_data.total_sqft_required_to_draft,
-        drafter_start_date=None,
-        drafter_end_date=None,
-        total_sqft_drafted=None,
-        no_of_piece_drafted=None,
-        total_hours_drafted=None,
-        draft_note=None,
-        mentions=None,
-        file_ids=None,
-        is_redrafting=False,
-        status_id=1,
-        created_at=utc_now(),
-        updated_at=None,
-        updated_by=None
-    )
+    # Validate all fabs exist
+    fabs_result = await db.execute(select(Fab).where(Fab.id.in_(drafting_data.fab_ids)))
+    fabs = fabs_result.scalars().all()
     
-    db.add(drafting)
+    if len(fabs) != len(drafting_data.fab_ids):
+        raise error_response("One or more fab IDs not found", 404)
+    
+    # Create drafting entries for all fabs
+    drafting_entries = []
+    for fab_id in drafting_data.fab_ids:
+        drafting = Drafting(
+            fab_id=fab_id,
+            drafter_id=drafting_data.drafter_id,
+            scheduled_start_date=strip_timezone(drafting_data.scheduled_start_date),
+            scheduled_end_date=strip_timezone(drafting_data.scheduled_end_date),
+            total_sqft_required_to_draft=drafting_data.total_sqft_required_to_draft,
+            drafter_start_date=None,
+            drafter_end_date=None,
+            total_sqft_drafted=None,
+            no_of_piece_drafted=None,
+            total_hours_drafted=None,
+            draft_note=None,
+            mentions=None,
+            file_ids=None,
+            is_redrafting=False,
+            status_id=1,
+            created_at=utc_now(),
+            updated_at=None,
+            updated_by=None
+        )
+        drafting_entries.append(drafting)
+        db.add(drafting)
+    
     await db.commit()
-    await db.refresh(drafting)
     
-    return success_response(drafting, "Drafting created successfully")
+    # Refresh all entries
+    for drafting in drafting_entries:
+        await db.refresh(drafting)
+    
+    return success_response(drafting_entries, f"Drafting created successfully for {len(drafting_entries)} fabs")
 
 
 @router.put("/drafting/{drafting_id}", response_model=SuccessResponse[DraftingResponse])
