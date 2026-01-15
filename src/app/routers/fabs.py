@@ -3,7 +3,7 @@ from typing import List, Optional
 from decimal import Decimal
 import sqlalchemy as sa
 from sqlalchemy.future import select
-from sqlalchemy import func
+from sqlalchemy import func, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
@@ -20,7 +20,7 @@ from src.app.database.stone_type import StoneType
 from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness
 from src.app.database.templating import Templating
-from src.app.database.sales_ct import SalesCT  # ← Add this import
+from src.app.database.sales_ct import SalesCT
 from src.app.interface.business_schemas import (
     FabCreate, FabUpdate, FabResponse,
 )
