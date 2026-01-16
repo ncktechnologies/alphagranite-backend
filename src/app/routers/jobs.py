@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File a
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func
+from fastapi.responses import FileResponse
+import mimetypes
 
 from src.app.database import get_db
 from src.app.database.business_job import BusinessJob
@@ -195,15 +197,15 @@ async def get_job_media(
         uploader_first = row[1]
         uploader_last = row[2]
         
-        # Generate direct static URL
-        file_url = f"{BASE_URL}/static/jobs/{file.file_path}"
+        # Generate API view URL (NEW - FastAPI based)
+        file_url = f"{BASE_URL}/jobs/{job_id}/media/{file.id}/view"
         
         media_files.append({
             "id": file.id,
             "name": file.name,
             "file_type": file.file_type,
             "file_size": file.file_size,
-            "file_url": file_url,
+            "file_url": file_url,  # This now points to the FastAPI endpoint
             "uploaded_by": file.uploaded_by,
             "uploader_name": f"{uploader_first} {uploader_last}" if uploader_first else None,
             "created_at": file.created_at.isoformat() if file.created_at else None
@@ -230,8 +232,6 @@ async def download_job_media(
     current_user: User = Depends(get_current_user)
 ):
     """Download a media file for a job"""
-    from fastapi.responses import FileResponse
-    
     # Verify file belongs to this job
     file_result = await db.execute(
         select(File).where(File.id == file_id, File.job_id == job_id)
@@ -249,6 +249,42 @@ async def download_job_media(
         path=file.file_path,
         filename=file.name,
         media_type="application/octet-stream"
+    )
+
+
+@router.get("/jobs/{job_id}/media/{file_id}/view")
+async def view_job_media(
+    job_id: int,
+    file_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Stream a media file for viewing in browser"""
+    # Verify file belongs to this job
+    file_result = await db.execute(
+        select(File).where(File.id == file_id, File.job_id == job_id)
+    )
+    file = file_result.scalar_one_or_none()
+    
+    if not file:
+        return error_response("File not found", 404)
+    
+    # Construct absolute path
+    absolute_path = os.path.join("/app/static", file.file_path)
+    
+    # Verify file exists on disk
+    if not os.path.exists(absolute_path):
+        return error_response("File not found on server", 404)
+    
+    # Guess media type
+    media_type, _ = mimetypes.guess_type(absolute_path)
+    if not media_type:
+        media_type = "application/octet-stream"
+    
+    return FileResponse(
+        path=absolute_path,
+        media_type=media_type,
+        filename=file.name
     )
 
 
@@ -412,8 +448,8 @@ async def get_job_details(
         uploader_first = row[1]
         uploader_last = row[2]
 
-        # Generate direct static URL
-        file_url = f"{BASE_URL}/static/jobs/{file.file_path}"
+        # Generate API view URL (NEW - FastAPI based)
+        file_url = f"{BASE_URL}/jobs/{job_id}/media/{file.id}/view"
 
         media_files.append({
             "id": file.id,
