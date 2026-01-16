@@ -25,7 +25,7 @@ from src.app.utils.permissions import PermissionChecker
 router = APIRouter()
 
 BASE_URL = os.getenv("BASE_URL", "https://api.ag.easybusiness.ng")
-UPLOAD_DIR = os.getenv("UPLOAD_DIR", "static/uploads/jobs")
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", "/root/alphagranite/alpha-granit/static/uploads/jobs")
 
 
 @router.post("/jobs", response_model=JobResponse, status_code=201)
