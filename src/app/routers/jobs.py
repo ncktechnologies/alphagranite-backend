@@ -269,7 +269,7 @@ async def view_job_media(
         return error_response("File not found", 404)
     
     # Construct absolute path
-    absolute_path = os.path.join("/app/static", file.file_path)
+    absolute_path = os.path.join("/app/static/jobs", file.file_path)
     
     # Verify file exists on disk
     if not os.path.exists(absolute_path):
