@@ -147,6 +147,16 @@ async def upload_job_media(
             # Set file permissions to be readable by Nginx (www-data)
             os.chmod(file_path, 0o644)
             
+            # Also try to change ownership if running as root
+            try:
+                import pwd
+                import grp
+                www_data_uid = pwd.getpwnam('www-data').pw_uid
+                www_data_gid = grp.getgrnam('www-data').gr_gid
+                os.chown(file_path, www_data_uid, www_data_gid)
+            except Exception:
+                pass  # Silently fail if not running as root
+            
             # Determine file type
             if file_ext in {'jpg', 'jpeg', 'png', 'gif', 'webp'}:
                 file_type = "photo"
