@@ -110,7 +110,8 @@ async def get_jobs(
     limit: int = 100,
     account_id: Optional[int] = None,
     status_id: Optional[int] = None,
-    priority: Optional[str] = None
+    priority: Optional[str] = None,
+    need_to_invoice: Optional[bool] = None
 ) -> List[dict]:
     """
     Get list of jobs with optional filtering and pagination.
@@ -122,6 +123,7 @@ async def get_jobs(
         account_id: Filter by account ID
         status_id: Filter by status ID
         priority: Filter by priority
+        need_to_invoice: Filter by invoice flag (true/false)
         
     Returns:
         List of Job dicts with account details
@@ -145,7 +147,8 @@ async def get_jobs(
         query = query.where(BusinessJob.status_id == status_id)
     if priority:
         query = query.where(BusinessJob.priority == priority)
-    
+    if need_to_invoice is not None:
+        query = query.where(BusinessJob.need_to_invoice == need_to_invoice)
     # Apply pagination
     query = query.offset(skip).limit(limit).order_by(BusinessJob.created_at.desc())
     

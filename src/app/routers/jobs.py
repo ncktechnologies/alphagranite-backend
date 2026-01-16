@@ -46,11 +46,12 @@ async def get_jobs(
     account_id: Optional[int] = Query(None, description="Filter by account ID"),
     status_id: Optional[int] = Query(None, description="Filter by status ID"),
     priority: Optional[str] = Query(None, description="Filter by priority"),
+    need_to_invoice: Optional[bool] = Query(None, description="Filter by invoice flag (true/false)"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(PermissionChecker("jobs", "read"))
 ):
     """Get list of jobs with optional filtering"""
-    jobs = await job_crud.get_jobs(db, skip, limit, account_id, status_id, priority)
+    jobs = await job_crud.get_jobs(db, skip, limit, account_id, status_id, priority, need_to_invoice)
     return jobs
 
 
