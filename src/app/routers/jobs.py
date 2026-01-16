@@ -3,7 +3,8 @@ from typing import List, Optional
 from decimal import Decimal
 import os
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File as FileUpload, status, Request
-from fastapi.security import HTTPBearer, HTTPAuthCredentials
+from fastapi.security import HTTPBearer
+from starlette.security import HTTPAuthCredentials
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func
