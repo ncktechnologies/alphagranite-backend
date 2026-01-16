@@ -7,6 +7,7 @@ from src.app.service.file import FileService
 from src.app.utils.config import get_db, get_settings
 from src.app.utils.helpers import success_response, call_service
 from src.app.middleware.jwt_auth import JWTBearer, get_current_user
+import pwd, grp, os
 
 router = APIRouter(
     prefix="/files",
@@ -73,6 +74,12 @@ async def upload_file(
         file_type=file_type,
         request=request
     )
+    
+    file_path = f"{directory}/{file.filename}"
+    uid = pwd.getpwnam("www-data").pw_uid
+    gid = grp.getgrnam("www-data").gr_gid
+    os.chown(file_path, uid, gid)
+    os.chmod(file_path, 0o777)
     
     return success_response(
         data=file_data,

@@ -23,7 +23,6 @@ services:
       - FILE_UPLOAD_ROOT=/app/static   # root for FileService
       - UPLOAD_DIR=/app/static/jobs    # if your code reads this
       - BASE_URL=https://api.ag.easybusiness.ng
-    user: "www-data"
 
   nginx:
     image: nginx:alpine
