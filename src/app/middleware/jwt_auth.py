@@ -20,6 +20,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             request.url.path.startswith("/favicon.ico") or
             request.url.path.startswith("/api/v1/test-public/") or
             request.url.path.startswith("/api/v1/files/download/") or
+            request.url.path.startswith("/api/v1/jobs/") or
             request.url.path.startswith("/static")):
             return await call_next(request)
             
