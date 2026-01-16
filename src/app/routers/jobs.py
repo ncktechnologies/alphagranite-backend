@@ -135,8 +135,8 @@ async def upload_job_media(
             
             # Generate unique filename
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            unique_filename = f"{timestamp}_{file.filename}"
-            file_path = os.path.join(job_upload_dir, unique_filename)
+            unique_filename = f"job_{job_id}_{timestamp}_{file.filename}"
+            file_path = os.path.join(UPLOAD_DIR, unique_filename)
             
             # Save file to disk
             with open(file_path, 'wb') as f:
@@ -153,25 +153,25 @@ async def upload_job_media(
             # Store file metadata in database
             db_file = File(
                 name=file.filename,
-                file_path=file_path,
+                file_path=unique_filename,  # Store just the filename, not full path
                 file_type=file_type,
-                file_size=str(file_size),  # Convert to string
+                file_size=str(file_size),
                 job_id=job_id,
                 uploaded_by=current_user.id,
                 created_at=datetime.now()
             )
             
             db.add(db_file)
-            await db.flush()  # Flush to get the ID
+            await db.flush()
             
-            # Generate download URL
-            file_url = f"{BASE_URL}/api/v1/jobs/{job_id}/media/{db_file.id}/download"
+            # Generate direct static URL
+            file_url = f"{BASE_URL}/static/jobs/{unique_filename}"
             
             uploaded_files.append({
                 "id": db_file.id,
                 "name": file.filename,
                 "file_type": file_type,
-                "file_size": file_size,  # Return as int in response
+                "file_size": file_size,
                 "file_url": file_url,
                 "uploaded_by": current_user.id,
                 "created_at": db_file.created_at.isoformat()
@@ -209,10 +209,7 @@ async def get_job_media(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """
-    Get all media files uploaded for a job.
-    Optionally filter by media type (photo, video, document).
-    """
+    """Get all media files uploaded for a job."""
     # Verify job exists
     job_result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
     if not job_result.scalar_one_or_none():
@@ -251,7 +248,8 @@ async def get_job_media(
         uploader_first = row[1]
         uploader_last = row[2]
         
-        file_url = f"{BASE_URL}/api/v1/jobs/{job_id}/media/{file.id}/download"
+        # Generate direct static URL
+        file_url = f"{BASE_URL}/static/jobs/{file.file_path}"
         
         media_files.append({
             "id": file.id,
@@ -467,7 +465,8 @@ async def get_job_details(
         uploader_first = row[1]
         uploader_last = row[2]
 
-        file_url = f"{BASE_URL}/api/v1/jobs/{job_id}/media/{file.id}/download"
+        # Generate direct static URL
+        file_url = f"{BASE_URL}/static/jobs/{file.file_path}"
 
         media_files.append({
             "id": file.id,
