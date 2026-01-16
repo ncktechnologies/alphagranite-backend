@@ -1654,6 +1654,7 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
             fab_dict["fab_notes"] = []
             fab_dict["draft_data"] = None
             fab_dict["sales_ct_data"] = None
+            fab_dict["latest_revision"] = None
             fab_dict["is_complete"] = False
             fab_dict["stage_data"] = None
         return
@@ -1669,6 +1670,9 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
     
     # Load stage data
     stage_data_by_fab = await _batch_load_stage_data(db, fab_ids)
+
+    #Load latest revisions 
+    latest_revisions_by_fab = await _batch_load_latest_revisions(db, fab_ids)
     
     # Attach to fab dicts
     for fab_dict in fab_dicts:
@@ -1676,7 +1680,7 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
         fab_dict["fab_notes"] = notes_by_fab.get(fab_id, [])
         fab_dict["draft_data"] = drafting_by_fab.get(fab_id)
         fab_dict["sales_ct_data"] = sales_ct_by_fab.get(fab_id)
-        
+        fab_dict["latest_revision"] = latest_revisions_by_fab.get(fab_id)
         current_stage = fab_dict.get("current_stage")
         if current_stage == "templating":
             stage_info = stage_data_by_fab.get(fab_id, {"is_complete": False, "stage_data": None})
@@ -2078,3 +2082,90 @@ async def get_sales_ct_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
         "updated_by": sct.updated_by,
         "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
     }
+
+from src.app.interface.generated_schemas import Revision
+
+async def _batch_load_latest_revisions(db: AsyncSession, fab_ids: List[int]) -> dict:
+    """Load the most recent revision for each FAB."""
+    from sqlalchemy.orm import aliased
+    
+    RequestedByUser = aliased(User)
+    AssignedToUser = aliased(User)
+    UpdatedByUser = aliased(User)
+    
+    query = select(
+        Revision,
+        RequestedByUser.first_name.label("requested_by_first_name"),
+        RequestedByUser.last_name.label("requested_by_last_name"),
+        AssignedToUser.first_name.label("assigned_to_first_name"),
+        AssignedToUser.last_name.label("assigned_to_last_name"),
+        UpdatedByUser.first_name.label("updated_by_first_name"),
+        UpdatedByUser.last_name.label("updated_by_last_name")
+    ).where(Revision.fab_id.in_(fab_ids))\
+     .join(RequestedByUser, Revision.requested_by == RequestedByUser.id, isouter=True)\
+     .join(AssignedToUser, Revision.assigned_to == AssignedToUser.id, isouter=True)\
+     .join(UpdatedByUser, Revision.updated_by == UpdatedByUser.id, isouter=True)\
+     .order_by(Revision.fab_id, Revision.created_at.desc())
+    
+    result = await db.execute(query)
+    rows = result.all()
+    
+    # Get all file IDs
+    all_file_ids = set()
+    for row in rows:
+        rev = row[0]
+        if rev.file_ids:
+            all_file_ids.update(int(fid.strip()) for fid in rev.file_ids.split(",") if fid.strip())
+    
+    # Batch load files
+    files_by_id = {}
+    if all_file_ids:
+        from src.app.database.file import File
+        files_query = select(File).where(File.id.in_(all_file_ids))
+        files_result = await db.execute(files_query)
+        for file in files_result.scalars().all():
+            filename = os.path.basename(file.file_path)
+            file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
+            files_by_id[file.id] = {
+                "id": file.id,
+                "name": file.name,
+                "file_url": file_url,
+                "file_type": file.file_type,
+                "file_size": file.file_size,
+                "created_at": file.created_at.isoformat() if file.created_at else None
+            }
+    
+    # Group by FAB (get latest only)
+    latest_revisions = {}
+    for row in rows:
+        rev = row[0]
+        if rev.fab_id not in latest_revisions:
+            files_data = []
+            if rev.file_ids:
+                file_id_list = [int(fid.strip()) for fid in rev.file_ids.split(",") if fid.strip()]
+                files_data = [files_by_id[fid] for fid in file_id_list if fid in files_by_id]
+            
+            latest_revisions[rev.fab_id] = {
+                "id": rev.id,
+                "fab_id": rev.fab_id,
+                "revision_type": rev.revision_type,
+                "requested_by": rev.requested_by,
+                "requested_by_name": f"{row[1]} {row[2]}" if row[1] else None,
+                "assigned_to": rev.assigned_to,
+                "assigned_to_name": f"{row[3]} {row[4]}" if row[3] else None,
+                "scheduled_start_date": rev.scheduled_start_date.isoformat() if rev.scheduled_start_date else None,
+                "scheduled_end_date": rev.scheduled_end_date.isoformat() if rev.scheduled_end_date else None,
+                "actual_start_date": rev.actual_start_date.isoformat() if rev.actual_start_date else None,
+                "actual_end_date": rev.actual_end_date.isoformat() if rev.actual_end_date else None,
+                "revision_notes": rev.revision_notes,
+                "is_completed": rev.is_completed,
+                "status_id": rev.status_id,
+                "file_ids": rev.file_ids,
+                "files": files_data,
+                "created_at": rev.created_at.isoformat() if rev.created_at else None,
+                "updated_at": rev.updated_at.isoformat() if rev.updated_at else None,
+                "updated_by": rev.updated_by,
+                "updated_by_name": f"{row[5]} {row[6]}" if row[5] else None
+            }
+    
+    return latest_revisions
