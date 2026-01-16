@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func
 from fastapi.responses import FileResponse
 import mimetypes
+import logging
 
 from src.app.database import get_db
 from src.app.database.business_job import BusinessJob
@@ -31,6 +32,8 @@ router = APIRouter()
 
 BASE_URL = os.getenv("BASE_URL", "https://api.ag.easybusiness.ng")
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "/root/alphagranite/alpha-granit/static/uploads/jobs")
+
+logger = logging.getLogger(__name__)
 
 
 @router.post("/jobs", response_model=JobResponse, status_code=201)
@@ -259,6 +262,8 @@ async def view_job_media(
     db: AsyncSession = Depends(get_db)
 ):
     """Stream a media file for viewing in browser"""
+    logger.info(f"Viewing media - job_id: {job_id}, file_id: {file_id}")
+    
     # Verify file belongs to this job
     file_result = await db.execute(
         select(File).where(File.id == file_id, File.job_id == job_id)
@@ -266,19 +271,35 @@ async def view_job_media(
     file = file_result.scalar_one_or_none()
     
     if not file:
+        logger.error(f"File not found in database - job_id: {job_id}, file_id: {file_id}")
         return error_response("File not found", 404)
     
+    logger.info(f"File found in DB - file.file_path: {file.file_path}, file.name: {file.name}")
+    
     # Construct absolute path
-    absolute_path = os.path.join("/app/static/jobs", file.file_path)
+    absolute_path = os.path.join("/app/static", file.file_path)
+    logger.info(f"Constructed absolute path: {absolute_path}")
     
     # Verify file exists on disk
     if not os.path.exists(absolute_path):
+        logger.error(f"File not found on disk: {absolute_path}")
+        # List directory contents for debugging
+        dir_path = os.path.dirname(absolute_path)
+        if os.path.exists(dir_path):
+            files_in_dir = os.listdir(dir_path)
+            logger.info(f"Files in {dir_path}: {files_in_dir}")
+        else:
+            logger.error(f"Directory does not exist: {dir_path}")
         return error_response("File not found on server", 404)
+    
+    logger.info(f"File exists on disk, serving: {absolute_path}")
     
     # Guess media type
     media_type, _ = mimetypes.guess_type(absolute_path)
     if not media_type:
         media_type = "application/octet-stream"
+    
+    logger.info(f"Media type: {media_type}")
     
     return FileResponse(
         path=absolute_path,
