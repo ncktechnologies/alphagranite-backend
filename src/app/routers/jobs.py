@@ -256,8 +256,7 @@ async def download_job_media(
 async def view_job_media(
     job_id: int,
     file_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: AsyncSession = Depends(get_db)
 ):
     """Stream a media file for viewing in browser"""
     # Verify file belongs to this job
