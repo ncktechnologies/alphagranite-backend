@@ -32,6 +32,7 @@ router = APIRouter()
 
 BASE_URL = os.getenv("BASE_URL", "https://api.ag.easybusiness.ng")
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "/root/alphagranite/alpha-granit/static/uploads/jobs")
+API_PREFIX = os.getenv("API_PREFIX", "/api/v1")
 
 logger = logging.getLogger(__name__)
 
@@ -200,8 +201,8 @@ async def get_job_media(
         uploader_first = row[1]
         uploader_last = row[2]
         
-        # Generate API view URL (NEW - FastAPI based)
-        file_url = f"{BASE_URL}/jobs/{job_id}/media/{file.id}/view"
+        # Generate API view URL (FastAPI based)
+        file_url = f"{BASE_URL}{API_PREFIX}/jobs/{job_id}/media/{file.id}/view"
         
         media_files.append({
             "id": file.id,
@@ -468,8 +469,8 @@ async def get_job_details(
         uploader_first = row[1]
         uploader_last = row[2]
 
-        # Generate API view URL (NEW - FastAPI based)
-        file_url = f"{BASE_URL}/jobs/{job_id}/media/{file.id}/view"
+        # Generate API view URL (FastAPI based)
+        file_url = f"{BASE_URL}{API_PREFIX}/jobs/{job_id}/media/{file.id}/view"
 
         media_files.append({
             "id": file.id,
