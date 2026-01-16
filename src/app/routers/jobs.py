@@ -117,9 +117,11 @@ async def upload_job_media(
         'pdf', 'doc', 'docx', 'txt'           # Documents
     }
     
-    # Ensure upload directory exists
+    # Ensure upload directory exists with proper permissions
     try:
         os.makedirs(UPLOAD_DIR, exist_ok=True)
+        # Set directory permissions to 755
+        os.chmod(UPLOAD_DIR, 0o755)
     except Exception as e:
         return error_response(f"Failed to create upload directory: {str(e)}", 500)
     
@@ -144,18 +146,8 @@ async def upload_job_media(
             with open(file_path, 'wb') as f:
                 f.write(file_content)
             
-            # Set file permissions to be readable by Nginx (www-data)
+            # Set file permissions to be readable by everyone (644)
             os.chmod(file_path, 0o644)
-            
-            # Also try to change ownership if running as root
-            try:
-                import pwd
-                import grp
-                www_data_uid = pwd.getpwnam('www-data').pw_uid
-                www_data_gid = grp.getgrnam('www-data').gr_gid
-                os.chown(file_path, www_data_uid, www_data_gid)
-            except Exception:
-                pass  # Silently fail if not running as root
             
             # Determine file type
             if file_ext in {'jpg', 'jpeg', 'png', 'gif', 'webp'}:
