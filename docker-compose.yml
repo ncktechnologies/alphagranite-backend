@@ -20,8 +20,10 @@ services:
     entrypoint: []
     command: uvicorn src.app.main:app --host 0.0.0.0 --port 8000
     environment:
-      - UPLOAD_DIR=/app/static/jobs
+      - FILE_UPLOAD_ROOT=/app/static   # root for FileService
+      - UPLOAD_DIR=/app/static/jobs    # if your code reads this
       - BASE_URL=https://api.ag.easybusiness.ng
+    user: "www-data"
 
   nginx:
     image: nginx:alpine
