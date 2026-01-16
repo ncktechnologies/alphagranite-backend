@@ -1360,6 +1360,32 @@ async def get_all_stages(
     )
 
 
+@router.patch("/fabs/{fab_id}/hold")
+async def toggle_fab_hold(
+    fab_id: int,
+    on_hold: bool = Query(..., description="Set fab on hold (true) or release it (false)"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Toggle FAB hold status by changing status_id (0=on hold, 1=active)"""
+    fab_result = await db.execute(
+        select(Fab).where(Fab.id == fab_id)
+    )
+    fab = fab_result.scalar_one_or_none()
+    
+    if not fab:
+        return error_response("FAB not found", 404)
+    
+    # Set status_id: 0 for on hold, 1 for active
+    fab.status_id = 0 if on_hold else 1
+    fab.updated_at = datetime.now()
+    fab.updated_by = current_user.id
+    await db.commit()
+    
+    return success_response(
+        {"fab_id": fab_id, "on_hold": on_hold, "status_id": fab.status_id},
+        f"FAB {fab_id} {'placed on hold' if on_hold else 'released from hold'}"
+    )
 # ============ HELPER FUNCTIONS FOR FAB QUERIES ============
 
 async def _apply_templating_filters(
