@@ -16,11 +16,12 @@ services:
       - ./static/uploads:/app/static/uploads
       - ./static/defaults:/app/static/defaults
       - ./logs:/app/logs
+      - /root/alphagranite/alpha-granit/static:/app/static
     entrypoint: []
     command: uvicorn src.app.main:app --host 0.0.0.0 --port 8000
     environment:
-      UPLOAD_DIR: /root/alphagranite/alpha-granit/static/uploads/jobs
-      BASE_URL: https://api.ag.easybusiness.ng
+      - UPLOAD_DIR=/app/static/jobs
+      - BASE_URL=https://api.ag.easybusiness.ng
 
   nginx:
     image: nginx:alpine
