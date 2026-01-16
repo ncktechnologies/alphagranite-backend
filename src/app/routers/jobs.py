@@ -117,6 +117,10 @@ async def upload_job_media(
         'pdf', 'doc', 'docx', 'txt'           # Documents
     }
     
+    # Create upload directory for this job if it doesn't exist
+    job_upload_dir = os.path.join(UPLOAD_DIR, f"job_{job_id}")
+    os.makedirs(job_upload_dir, exist_ok=True)
+    
     for file in files:
         try:
             # Validate file extension
@@ -129,18 +133,17 @@ async def upload_job_media(
             file_content = await file.read()
             file_size = len(file_content)
             
-            # Create upload directory if it doesn't exist
-            job_upload_dir = os.path.join(UPLOAD_DIR, f"job_{job_id}")
-            os.makedirs(job_upload_dir, exist_ok=True)
-            
             # Generate unique filename
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             unique_filename = f"job_{job_id}_{timestamp}_{file.filename}"
-            file_path = os.path.join(UPLOAD_DIR, unique_filename)
+            file_path = os.path.join(job_upload_dir, unique_filename)  # Save inside job_X directory
             
             # Save file to disk
             with open(file_path, 'wb') as f:
                 f.write(file_content)
+            
+            # Set file permissions to be readable by Nginx (www-data)
+            os.chmod(file_path, 0o644)
             
             # Determine file type
             if file_ext in {'jpg', 'jpeg', 'png', 'gif', 'webp'}:
@@ -150,10 +153,11 @@ async def upload_job_media(
             else:
                 file_type = "document"
             
-            # Store file metadata in database
+            # Store file metadata in database with relative path
+            relative_path = os.path.join(f"job_{job_id}", unique_filename)
             db_file = File(
                 name=file.filename,
-                file_path=unique_filename,  # Store just the filename, not full path
+                file_path=relative_path,
                 file_type=file_type,
                 file_size=str(file_size),
                 job_id=job_id,
@@ -165,7 +169,7 @@ async def upload_job_media(
             await db.flush()
             
             # Generate direct static URL
-            file_url = f"{BASE_URL}/static/jobs/{unique_filename}"
+            file_url = f"{BASE_URL}/static/jobs/{relative_path}"
             
             uploaded_files.append({
                 "id": db_file.id,
