@@ -26,20 +26,11 @@ async def upload_file(
     current_user: User = Depends(get_current_user),
     settings = Depends(get_settings)
 ):
-    """
-    Upload a file and get its metadata including a URL to access it
-    
-    The file will be stored in the server's file system and its metadata
-    will be stored in the database for later retrieval.
-    
-    Returns the file's metadata including its ID which can be used to
-    retrieve the file later.
-    """
+    """Upload a file and get its metadata including a URL to access it"""
     # Check file size
     file_size = 0
     chunk_size = 1024 * 1024  # 1MB chunks for checking
     
-    # Read file in chunks to determine size without loading whole file in memory
     while True:
         chunk = await file.read(chunk_size)
         if not chunk:
@@ -52,7 +43,6 @@ async def upload_file(
                 detail=f"File too large. Maximum size is {settings.MAX_UPLOAD_SIZE} bytes"
             )
     
-    # Reset file pointer for later use
     await file.seek(0)
     
     # Check file extension
@@ -75,11 +65,18 @@ async def upload_file(
         request=request
     )
     
-    file_path = f"{directory}/{file.filename}"
-    uid = pwd.getpwnam("www-data").pw_uid
-    gid = grp.getgrnam("www-data").gr_gid
-    os.chown(file_path, uid, gid)
-    os.chmod(file_path, 0o777)
+    # Fix ownership and permissions using absolute path
+    # file_data["file_path"] is relative like "jobs/uuid.jpg"
+    # Construct absolute path
+    absolute_file_path = os.path.join("/app/static", file_data["file_path"])
+    
+    try:
+        uid = pwd.getpwnam("www-data").pw_uid
+        gid = grp.getgrnam("www-data").gr_gid
+        os.chown(absolute_file_path, uid, gid)
+        os.chmod(absolute_file_path, 0o777)
+    except Exception as e:
+        print(f"Warning: Could not fix file permissions: {e}")
     
     return success_response(
         data=file_data,
