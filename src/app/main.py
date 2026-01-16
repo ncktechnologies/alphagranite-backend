@@ -98,6 +98,10 @@ async def authentication_middleware(request: Request, call_next):
     if request.url.path.startswith("/api/v1/files/download"):
         return await call_next(request)
     
+    # Skip authentication for job media view
+    if request.url.path.startswith("/api/v1/jobs/") and "/media/" in request.url.path and request.url.path.endswith("/view"):
+        return await call_next(request)
+    
     # Apply authentication for other routes
     return await call_next(request)
 

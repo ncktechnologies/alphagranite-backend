@@ -3,7 +3,6 @@ from typing import List, Optional
 from decimal import Decimal
 import os
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File as FileUpload, status, Request
-from fastapi.security import HTTPBearer, HTTPAuthCredentials
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func
@@ -29,8 +28,6 @@ from src.app.utils.helpers import call_service
 from src.app.utils.permissions import PermissionChecker
 
 router = APIRouter()
-
-security = HTTPBearer(auto_error=False)
 
 BASE_URL = os.getenv("BASE_URL", "https://api.ag.easybusiness.ng")
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "/root/alphagranite/alpha-granit/static/uploads/jobs")
@@ -259,8 +256,7 @@ async def download_job_media(
 async def view_job_media(
     job_id: int,
     file_id: int,
-    db: AsyncSession = Depends(get_db),
-    credentials: HTTPAuthCredentials = Depends(security)  # Optional auth, don't require it
+    db: AsyncSession = Depends(get_db)
 ):
     """Stream a media file for viewing in browser"""
     # Verify file belongs to this job
