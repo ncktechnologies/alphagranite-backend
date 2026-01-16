@@ -20,8 +20,9 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             request.url.path.startswith("/favicon.ico") or
             request.url.path.startswith("/api/v1/test-public/") or
             request.url.path.startswith("/api/v1/files/download/") or
-            request.url.path.startswith("/api/v1/jobs/") or
-            request.url.path.startswith("/static")):
+            request.url.path.startswith("/static") or
+            # Skip job media view endpoints
+            (request.url.path.startswith("/jobs/") and "/media/" in request.url.path and request.url.path.endswith("/view"))):
             return await call_next(request)
             
         auth_header = request.headers.get("Authorization")
