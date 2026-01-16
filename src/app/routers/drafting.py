@@ -704,9 +704,14 @@ async def get_drafting_by_fab(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get drafting details by fab ID"""
+    """Get latest drafting details by fab ID"""
     
-    result = await db.execute(select(Drafting).where(Drafting.fab_id == fab_id))
+    result = await db.execute(
+        select(Drafting)
+        .where(Drafting.fab_id == fab_id)
+        .order_by(Drafting.id.desc())
+        .limit(1)
+    )
     drafting = result.scalar_one_or_none()
     
     if not drafting:
@@ -815,7 +820,7 @@ async def create_pre_draft_review(
     
     db.add(review)
     
-    # If review is completed, move fab to next stage
+    # If review is completed, move fab to drafting stage
     if review_data.is_completed:
         db.add(fab)
         fab.current_stage = "drafting"
