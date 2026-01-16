@@ -36,6 +36,31 @@ API_PREFIX = os.getenv("API_PREFIX", "/api/v1")
 
 logger = logging.getLogger(__name__)
 
+PHOTO_EXTS = {"jpg","jpeg","png","gif","webp","heic","bmp","tiff"}
+VIDEO_EXTS = {"mp4","mov","avi","mkv","webm","m4v","wmv"}
+DOC_EXTS   = {"pdf","doc","docx","xls","xlsx","ppt","pptx","txt","csv"}
+
+def classify_file(upload: UploadFile) -> str:
+    # Default to document
+    name = upload.filename or ""
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if ext in PHOTO_EXTS:
+        return "photo"
+    if ext in VIDEO_EXTS:
+        return "video"
+    if ext in DOC_EXTS:
+        return "document"
+    # Fallback: use mimetype
+    mime, _ = mimetypes.guess_type(name)
+    if mime:
+        if mime.startswith("image/"):
+            return "photo"
+        if mime.startswith("video/"):
+            return "video"
+        if mime in ("application/pdf",):
+            return "document"
+    return "document"
+
 
 @router.post("/jobs", response_model=JobResponse, status_code=201)
 async def create_job(
@@ -118,23 +143,30 @@ async def upload_job_media(
 
     for file in files:
         try:
-            # Delegate upload & validation to FileService; store under "jobs" directory
+            file_type = classify_file(file)  # photo | video | document
+
             file_data = await call_service(
                 FileService.upload_file,
                 db=db,
                 file=file,
                 user_id=current_user.id,
-                directory="jobs",   # reuse your working file layout
-                file_type=None,
+                directory="jobs",
+                file_type=file_type,
                 request=request
             )
-            # Attach job_id to the File row
+
             await db.execute(
                 File.__table__.update()
                 .where(File.id == file_data["id"])
-                .values(job_id=job_id)
+                .values(job_id=job_id, file_type=file_type)
             )
-            # Ensure JSON-serializable payload
+
+            # Add view URL
+            view_url = f"{BASE_URL}{API_PREFIX}/jobs/{job_id}/media/{file_data['id']}/view"
+            file_data["url"] = view_url
+            file_data["view_url"] = view_url
+            file_data["file_type"] = file_type
+
             serialized = {
                 k: (v.isoformat() if isinstance(v, datetime) else v)
                 for k, v in file_data.items()
