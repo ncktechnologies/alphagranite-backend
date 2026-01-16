@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import List, Optional
 from decimal import Decimal
 import os
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File as FileUpload, status
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File as FileUpload, status, Request
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func
@@ -20,6 +20,9 @@ from src.app.interface.business_schemas import (
     JobCreate, JobUpdate, JobResponse,
 )
 from src.app.service import job_crud
+from src.app.service.file import FileService
+from src.app.utils.config import get_settings
+from src.app.utils.helpers import call_service
 from src.app.utils.permissions import PermissionChecker
 
 router = APIRouter()
@@ -93,118 +96,50 @@ async def delete_job(
 async def upload_job_media(
     job_id: int,
     files: List[UploadFile] = FileUpload(...),
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    settings = Depends(get_settings),
 ):
-    """
-    Upload media files (photos, videos, etc) for a job.
-    Supports multiple file uploads at once.
-    """
     # Verify job exists
     job_result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
     job = job_result.scalar_one_or_none()
-    
     if not job:
         return error_response("Job not found", 404)
-    
+
     uploaded_files = []
     errors = []
-    
-    # Allowed file types
-    ALLOWED_EXTENSIONS = {
-        'jpg', 'jpeg', 'png', 'gif', 'webp',  # Images
-        'mp4', 'avi', 'mov', 'mkv', 'webm',  # Videos
-        'pdf', 'doc', 'docx', 'txt'           # Documents
-    }
-    
-    # Ensure upload directory exists with proper permissions
-    try:
-        os.makedirs(UPLOAD_DIR, exist_ok=True)
-        # Set directory permissions to 755
-        os.chmod(UPLOAD_DIR, 0o755)
-    except Exception as e:
-        return error_response(f"Failed to create upload directory: {str(e)}", 500)
-    
+
     for file in files:
         try:
-            # Validate file extension
-            file_ext = file.filename.split('.')[-1].lower()
-            if file_ext not in ALLOWED_EXTENSIONS:
-                errors.append(f"{file.filename}: File type not allowed")
-                continue
-            
-            # Read file content
-            file_content = await file.read()
-            file_size = len(file_content)
-            
-            # Generate unique filename with job_id for tracking
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            unique_filename = f"job_{job_id}_{timestamp}_{file.filename}"
-            file_path = os.path.join(UPLOAD_DIR, unique_filename)
-            
-            # Save file to disk
-            with open(file_path, 'wb') as f:
-                f.write(file_content)
-            
-            # Set file permissions to be readable by everyone (644)
-            os.chmod(file_path, 0o644)
-            
-            # Determine file type
-            if file_ext in {'jpg', 'jpeg', 'png', 'gif', 'webp'}:
-                file_type = "photo"
-            elif file_ext in {'mp4', 'avi', 'mov', 'mkv', 'webm'}:
-                file_type = "video"
-            else:
-                file_type = "document"
-            
-            # Store file metadata in database - just store filename
-            db_file = File(
-                name=file.filename,
-                file_path=unique_filename,
-                file_type=file_type,
-                file_size=str(file_size),
-                job_id=job_id,
-                uploaded_by=current_user.id,
-                created_at=datetime.now()
+            # Delegate upload & validation to FileService; store under "jobs" directory
+            file_data = await call_service(
+                FileService.upload_file,
+                db=db,
+                file=file,
+                user_id=current_user.id,
+                directory="jobs",   # reuse your working file layout
+                file_type=None,
+                request=request
             )
-            
-            db.add(db_file)
-            await db.flush()
-            
-            # Generate direct static URL
-            file_url = f"{BASE_URL}/static/jobs/{unique_filename}"
-            
-            uploaded_files.append({
-                "id": db_file.id,
-                "name": file.filename,
-                "file_type": file_type,
-                "file_size": file_size,
-                "file_url": file_url,
-                "uploaded_by": current_user.id,
-                "created_at": db_file.created_at.isoformat()
-            })
-        
+            # Attach job_id to the File row
+            await db.execute(
+                File.__table__.update()
+                .where(File.id == file_data["id"])
+                .values(job_id=job_id)
+            )
+            uploaded_files.append(file_data)
         except Exception as e:
             errors.append(f"{file.filename}: {str(e)}")
-    
+
     await db.commit()
-    
-    response = {
-        "uploaded": uploaded_files,
-        "errors": errors if errors else None
-    }
-    
+
     if uploaded_files:
         return success_response(
-            response,
-            f"Successfully uploaded {len(uploaded_files)} file(s)" + 
-            (f" with {len(errors)} error(s)" if errors else "")
+            {"uploaded": uploaded_files, "errors": errors or None},
+            f"Successfully uploaded {len(uploaded_files)} file(s)" + (f" with {len(errors)} error(s)" if errors else "")
         )
-    else:
-        return error_response(
-            {"errors": errors},
-            400
-        )
+    return error_response({"errors": errors}, 400)
 
 
 @router.get("/jobs/{job_id}/media")
