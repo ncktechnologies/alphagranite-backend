@@ -305,7 +305,7 @@ async def view_job_media(
     return FileResponse(
         path=absolute_path,
         media_type=media_type,
-        filename=file.name
+        headers={"Content-Disposition": f'inline; filename="{file.name}"'}
     )
 
 
