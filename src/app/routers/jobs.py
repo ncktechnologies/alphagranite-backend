@@ -128,7 +128,12 @@ async def upload_job_media(
                 .where(File.id == file_data["id"])
                 .values(job_id=job_id)
             )
-            uploaded_files.append(file_data)
+            # Ensure JSON-serializable payload
+            serialized = {
+                k: (v.isoformat() if isinstance(v, datetime) else v)
+                for k, v in file_data.items()
+            }
+            uploaded_files.append(serialized)
         except Exception as e:
             errors.append(f"{file.filename}: {str(e)}")
 
