@@ -89,8 +89,8 @@ class TechnicianClockInput(BaseModel):
     fab_id: int
     technician_id: int
     table_name: str
-    started_at: str
-    completed_at: str
+    started_at: datetime  # Change from str to datetime
+    completed_at: datetime  # Change from str to datetime
     total_sqft_done: str
     notes: Optional[str] = None
     pause_reason: Optional[str] = None
@@ -100,7 +100,8 @@ class TechnicianClockInput(BaseModel):
     @classmethod
     def parse_datetime(cls, v):
         if isinstance(v, str):
-            # Handle ISO format with or without 'Z'
+            # Handle ISO format with or without 'Z' and remove spaces
+            v = v.replace('. ', '.')
             return datetime.fromisoformat(v.replace('Z', '+00:00')).replace(tzinfo=None)
         return v
 
@@ -114,8 +115,8 @@ async def save_technician_clock(
         fab_id=clock_data.fab_id,
         technician_id=clock_data.technician_id,
         table_name=clock_data.table_name,
-        started_at=clock_data.started_at,  # Now a datetime object
-        completed_at=clock_data.completed_at,  # Now a datetime object
+        started_at=clock_data.started_at,
+        completed_at=clock_data.completed_at,
         total_sqft_done=clock_data.total_sqft_done,
         notes=clock_data.notes,
         pause_reason=clock_data.pause_reason,
