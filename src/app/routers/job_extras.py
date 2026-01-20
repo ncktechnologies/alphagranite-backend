@@ -20,7 +20,7 @@ from src.app.interface.generated_schemas import (
 from src.app.service.drafting import DraftingService
 from src.app.service.templating import TemplatingService
 from src.app.utils.helpers import success_response, error_response
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File as FastAPIFile, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 from pydantic import BaseModel
