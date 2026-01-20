@@ -6,6 +6,7 @@ from typing import List, Optional
 from sqlmodel import Session, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select as async_select
+from pydantic import BaseModel
 
 from src.app.database.fab import Fab
 from src.app.database.job import Job
@@ -76,31 +77,34 @@ def set_predraft_redraft(fab_id: int, redraft_notes: str, db: Session = Depends(
     db.refresh(fab)
     return success_response({"templating": result, "fab": fab}, "Predraft set to redraft successfully")
 
+class TechnicianClockInput(BaseModel):
+    fab_id: int
+    technician_id: int
+    table_name: str
+    started_at: str
+    completed_at: str
+    total_sqft_done: str
+    notes: Optional[str] = None
+    pause_reason: Optional[str] = None
+    table_id: Optional[int] = None
+
 @router.post("/technician/clock")
 def save_technician_clock(
-    fab_id: int,
-    technician_id: int,
-    table_name: str,
-    started_at: str,
-    completed_at: str,
-    total_sqft_done: str,
-    notes: Optional[str] = None,
-    pause_reason: Optional[str] = None,
-    table_id: int = None,
+    clock_data: TechnicianClockInput,
     db: Session = Depends(get_db),
     created_by: int = 1
 ):
     workflow = JobTechnicianWorkflow(
-        fab_id=fab_id,
-        technician_id=technician_id,
-        table_name=table_name,
-        started_at=started_at,
-        completed_at=completed_at,
-        total_sqft_done=total_sqft_done,
-        notes=notes,
-        pause_reason=pause_reason,
-        table_id=table_id,
-        created_at=started_at,
+        fab_id=clock_data.fab_id,
+        technician_id=clock_data.technician_id,
+        table_name=clock_data.table_name,
+        started_at=clock_data.started_at,
+        completed_at=clock_data.completed_at,
+        total_sqft_done=clock_data.total_sqft_done,
+        notes=clock_data.notes,
+        pause_reason=clock_data.pause_reason,
+        table_id=clock_data.table_id,
+        created_at=clock_data.started_at,
         created_by=created_by
     )
     db.add(workflow)

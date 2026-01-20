@@ -112,6 +112,10 @@ async def schedule_templating(
     fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     
+    # Update revenue if provided
+    if templating_data.revenue is not None:
+        fab.revenue = templating_data.revenue
+    
     # After creating/updating templating, keep Fab in sync
     await _sync_fab_total_sqft(db, templating.fab_id, templating_data.total_sqft, current_user.id)
     await db.commit()

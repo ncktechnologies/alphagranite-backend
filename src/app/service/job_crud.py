@@ -61,6 +61,8 @@ async def create_job(
         due_date=job_dict.get("due_date"),
         project_value=job_dict.get("project_value"),
         sales_person_id=job_dict.get("sales_person_id"),
+        need_to_invoice=job_dict.get("need_to_invoice", False),
+        sq_ft=job_dict.get("sq_ft"),
         status_id=job_dict.get("status_id", 1),
         created_by=user_id,
         created_at=datetime.now()

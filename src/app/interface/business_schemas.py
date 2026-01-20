@@ -12,6 +12,7 @@ class JobCreate(BaseModel):
     project_value: Optional[float] = Field(None, ge=0, description="Project value/amount")
     sales_person_id: Optional[int] = Field(None, gt=0, description="Sales person ID")
     need_to_invoice: bool = False
+    sq_ft: Optional[float] = Field(None, ge=0, description="Square footage")
 
 
 class JobUpdate(BaseModel):
@@ -366,6 +367,8 @@ class TemplatingScheduleCreate(BaseModel):
     schedule_due_date: datetime = Field(..., description="Scheduled due date")
     total_sqft: Optional[str] = Field(None, description="Total square feet")
     notes: Optional[List[str]] = Field(None, description="Additional notes as array")
+    revenue: Optional[float] = Field(None, ge=0, description="Revenue amount for the fab")
+    
 
 
 class TemplatingScheduleUpdate(BaseModel):
@@ -1109,14 +1112,25 @@ class FinalProgrammingComplete(BaseModel):
 # Drafting Session Schemas
 class DraftingSessionAction(BaseModel):
     """Schema for drafting session actions"""
-    action: str = Field(..., description="Action: 'start', 'pause', 'resume', 'on_hold', or 'end'")
-    drafter_id: int = Field(..., gt=0)
-    timestamp: Optional[datetime] = Field(default=None)
-    note: Optional[str] = Field(None, description="Session note")
-    sqft_drafted: Optional[str] = Field(None, description="Square feet drafted so far")
-    work_percentage_done: Optional[int] = Field(None, ge=0, le=100)
-    session_start_time: Optional[datetime] = Field(None)
-    session_end_time: Optional[datetime] = Field(None)
+    drafter_id: int
+    action: str  # start, pause, resume, on_hold, end
+    session_start_time: Optional[datetime] = None
+    session_end_time: Optional[datetime] = None
+    timestamp: Optional[datetime] = None
+    sqft_drafted: Optional[str] = None
+    work_percentage_done: Optional[float] = None
+    note: Optional[str] = None
+    
+    @field_validator('timestamp', 'session_start_time', 'session_end_time', mode='before')
+    @classmethod
+    def clean_iso_timestamp(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, str):
+            # Remove spaces before fractional seconds: "2026-01-23T07:30:22. 723Z" -> "2026-01-23T07:30:22.723Z"
+            v = v.replace('. ', '.')
+            return datetime.fromisoformat(v.replace('Z', '+00:00'))
+        return v
 
 
 class DraftingSessionNoteResponse(BaseModel):
