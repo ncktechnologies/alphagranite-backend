@@ -450,6 +450,10 @@ async def get_job_details(
         k: v.isoformat() if isinstance(v, (datetime,)) else (float(v) if isinstance(v, Decimal) else v)
         for k, v in job.__dict__.items() if not k.startswith('_')
     }
+
+    # Explicitly include sq_ft (in case it wasn't captured above)
+    job_dict["sq_ft"] = float(job.sq_ft) if job.sq_ft else None
+    
     
     # Add account details
     job_dict["account_name"] = account_name
