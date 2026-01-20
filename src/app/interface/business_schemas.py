@@ -12,7 +12,7 @@ class JobCreate(BaseModel):
     project_value: Optional[float] = Field(None, ge=0, description="Project value/amount")
     sales_person_id: Optional[int] = Field(None, gt=0, description="Sales person ID")
     need_to_invoice: bool = False
-    sq_ft: Optional[float] = Field(None, ge=0, description="Square footage")
+    sq_ft: Optional[float] = Field(None, description="Square footage")
 
 
 class JobUpdate(BaseModel):
