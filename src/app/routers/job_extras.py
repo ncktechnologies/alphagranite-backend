@@ -29,7 +29,6 @@ from src.app.database import get_db
 from src.app.database.user import User
 from src.app.middleware.jwt_auth import get_current_user  # ADD THIS LINE
 from src.app.interface.response_wrappers import success_response, error_response
-from src.app.database.job_technician_workflow import JobTechnicianWorkflow
 
 router = APIRouter()
 
