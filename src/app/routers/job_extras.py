@@ -6,7 +6,7 @@ from typing import List, Optional
 from sqlmodel import Session, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select as async_select
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from src.app.database.fab import Fab
 from src.app.database.job import Job
@@ -95,6 +95,14 @@ class TechnicianClockInput(BaseModel):
     notes: Optional[str] = None
     pause_reason: Optional[str] = None
     table_id: Optional[int] = None
+    
+    @field_validator('started_at', 'completed_at', mode='before')
+    @classmethod
+    def parse_datetime(cls, v):
+        if isinstance(v, str):
+            # Handle ISO format with or without 'Z'
+            return datetime.fromisoformat(v.replace('Z', '+00:00')).replace(tzinfo=None)
+        return v
 
 @router.post("/technician/clock")
 async def save_technician_clock(
@@ -106,8 +114,8 @@ async def save_technician_clock(
         fab_id=clock_data.fab_id,
         technician_id=clock_data.technician_id,
         table_name=clock_data.table_name,
-        started_at=clock_data.started_at,
-        completed_at=clock_data.completed_at,
+        started_at=clock_data.started_at,  # Now a datetime object
+        completed_at=clock_data.completed_at,  # Now a datetime object
         total_sqft_done=clock_data.total_sqft_done,
         notes=clock_data.notes,
         pause_reason=clock_data.pause_reason,
