@@ -20,7 +20,16 @@ from src.app.interface.generated_schemas import (
 from src.app.service.drafting import DraftingService
 from src.app.service.templating import TemplatingService
 from src.app.utils.helpers import success_response, error_response
-from fastapi import APIRouter, Depends, Query, Form, UploadFile, File as FastAPIFile
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Optional
+from pydantic import BaseModel
+
+from src.app.database import get_db
+from src.app.database.user import User
+from src.app.middleware.jwt_auth import get_current_user  # ADD THIS LINE
+from src.app.interface.response_wrappers import success_response, error_response
+from src.app.database.job_technician_workflow import JobTechnicianWorkflow
 
 router = APIRouter()
 
