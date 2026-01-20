@@ -127,7 +127,24 @@ async def save_technician_clock(
     db.add(workflow)
     await db.commit()
     await db.refresh(workflow)
-    return success_response(workflow, "Technician clock saved successfully")
+    
+    # Convert to dict for JSON serialization
+    workflow_dict = {
+        "id": workflow.id,
+        "fab_id": workflow.fab_id,
+        "technician_id": workflow.technician_id,
+        "table_name": workflow.table_name,
+        "started_at": workflow.started_at.isoformat() if workflow.started_at else None,
+        "completed_at": workflow.completed_at.isoformat() if workflow.completed_at else None,
+        "total_sqft_done": workflow.total_sqft_done,
+        "notes": workflow.notes,
+        "pause_reason": workflow.pause_reason,
+        "table_id": workflow.table_id,
+        "created_at": workflow.created_at.isoformat() if workflow.created_at else None,
+        "created_by": workflow.created_by
+    }
+    
+    return success_response(workflow_dict, "Technician clock saved successfully")
 
 @router.put("/technician/clock/{workflow_id}")
 def update_technician_clock(
