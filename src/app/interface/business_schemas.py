@@ -40,6 +40,7 @@ class JobResponse(BaseModel):
     due_date: Optional[datetime] = None
     project_value: Optional[float] = None
     sales_person_id: Optional[int] = None
+    sq_ft: Optional[float] = None
     sales_person_name: Optional[str] = None
     status_id: int
     created_at: datetime
