@@ -375,7 +375,7 @@ async def delete_job_media(
     )
 
 
-@router.get("/jobs/{job_id}")
+@router.get("/jobs/details/{job_id}")
 async def get_job_by_id(
     job_id: int,
     db: AsyncSession = Depends(get_db),
