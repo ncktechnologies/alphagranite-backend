@@ -89,10 +89,10 @@ class TechnicianClockInput(BaseModel):
     table_id: Optional[int] = None
 
 @router.post("/technician/clock")
-def save_technician_clock(
+async def save_technician_clock(
     clock_data: TechnicianClockInput,
-    db: Session = Depends(get_db),
-    created_by: int = 1
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     workflow = JobTechnicianWorkflow(
         fab_id=clock_data.fab_id,
@@ -105,11 +105,11 @@ def save_technician_clock(
         pause_reason=clock_data.pause_reason,
         table_id=clock_data.table_id,
         created_at=clock_data.started_at,
-        created_by=created_by
+        created_by=current_user.id
     )
     db.add(workflow)
-    db.commit()
-    db.refresh(workflow)
+    await db.commit()
+    await db.refresh(workflow)
     return success_response(workflow, "Technician clock saved successfully")
 
 @router.put("/technician/clock/{workflow_id}")

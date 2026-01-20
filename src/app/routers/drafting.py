@@ -76,12 +76,15 @@ async def manage_drafting_session(
                 detail="An active session already exists for this fab"
             )
         
+        # Strip timezone from timestamp
+        session_start = strip_timezone(session_data.session_start_time or timestamp)
+        
         # Create new session
         session = DraftingSession(
             fab_id=fab_id,
             drafter_id=session_data.drafter_id,
             status="drafting",
-            session_start_time=session_data.session_start_time or timestamp,
+            session_start_time=session_start,  # Use stripped timezone
             cumulative_sqft_drafted=session_data.sqft_drafted or "0",
             work_percentage_done=session_data.work_percentage_done or 0,
             created_at=utc_now()
@@ -89,12 +92,12 @@ async def manage_drafting_session(
         db.add(session)
         await db.flush()
         
-        # Create session note
+        # Create session note with stripped timestamp
         note = DraftingSessionNote(
             session_id=session.id,
             fab_id=fab_id,
             action="start",
-            timestamp=timestamp,
+            timestamp=strip_timezone(timestamp),  # Strip timezone here too
             note=session_data.note,
             sqft_drafted=session_data.sqft_drafted,
             work_percentage_done=session_data.work_percentage_done,
