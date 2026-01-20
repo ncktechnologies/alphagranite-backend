@@ -98,6 +98,7 @@ async def create_job(
         "project_value": job.project_value,
         "status_id": job.status_id,
         "sales_person_id": job.sales_person_id,
+        "sq_ft": job.sq_ft,
         "sales_person_name": f"{sales_person.first_name} {sales_person.last_name}" if sales_person else None,
         "created_at": job.created_at,
         "created_by": job.created_by,
