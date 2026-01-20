@@ -1655,6 +1655,7 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
             fab_dict["draft_data"] = None
             fab_dict["sales_ct_data"] = None
             fab_dict["latest_revision"] = None
+            fab_dict["drafting_session"] = None
             fab_dict["is_complete"] = False
             fab_dict["stage_data"] = None
         return
@@ -1670,6 +1671,7 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
     
     # Load stage data
     stage_data_by_fab = await _batch_load_stage_data(db, fab_ids)
+    drafting_sessions_by_fab = await _batch_load_drafting_sessions(db, fab_ids)  # NEW
 
     #Load latest revisions 
     latest_revisions_by_fab = await _batch_load_latest_revisions(db, fab_ids)
@@ -1681,6 +1683,8 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
         fab_dict["draft_data"] = drafting_by_fab.get(fab_id)
         fab_dict["sales_ct_data"] = sales_ct_by_fab.get(fab_id)
         fab_dict["latest_revision"] = latest_revisions_by_fab.get(fab_id)
+        fab_dict["drafting_session"] = drafting_sessions_by_fab.get(fab_id)  # NEW
+
         current_stage = fab_dict.get("current_stage")
         if current_stage == "templating":
             stage_info = stage_data_by_fab.get(fab_id, {"is_complete": False, "stage_data": None})
@@ -2169,3 +2173,61 @@ async def _batch_load_latest_revisions(db: AsyncSession, fab_ids: List[int]) -> 
             }
     
     return latest_revisions
+
+
+from src.app.database.drafting import DraftingSession, DraftingSessionNote  # add with other imports
+
+async def _batch_load_drafting_sessions(db: AsyncSession, fab_ids: List[int]) -> dict:
+    """Load the latest drafting session (and its notes) for each FAB."""
+    # Fetch sessions ordered by latest first per fab
+    session_rows = await db.execute(
+        select(DraftingSession)
+        .where(DraftingSession.fab_id.in_(fab_ids))
+        .order_by(DraftingSession.fab_id, DraftingSession.id.desc())
+    )
+    sessions = session_rows.scalars().all()
+
+    latest_by_fab = {}
+    session_ids = []
+    for s in sessions:
+        if s.fab_id not in latest_by_fab:
+            latest_by_fab[s.fab_id] = s
+            session_ids.append(s.id)
+
+    # Fetch notes for the chosen sessions
+    notes_by_session = {}
+    if session_ids:
+        note_rows = await db.execute(
+            select(DraftingSessionNote)
+            .where(DraftingSessionNote.session_id.in_(session_ids))
+            .order_by(DraftingSessionNote.timestamp.asc())
+        )
+        for n in note_rows.scalars().all():
+            notes_by_session.setdefault(n.session_id, []).append({
+                "timestamp": n.timestamp.isoformat() if n.timestamp else None,
+                "action": n.action,
+                "note": n.note,
+                "sqft_drafted": n.sqft_drafted,
+                "work_percentage_done": n.work_percentage_done,
+            })
+
+    # Build dict payload
+    result = {}
+    for fab_id, s in latest_by_fab.items():
+        result[fab_id] = {
+            "id": s.id,
+            "fab_id": s.fab_id,
+            "drafter_id": s.drafter_id,
+            "status": s.status,
+            "session_start_time": s.session_start_time.isoformat() if s.session_start_time else None,
+            "session_end_time": s.session_end_time.isoformat() if s.session_end_time else None,
+            "current_pause_start_time": s.current_pause_start_time.isoformat() if s.current_pause_start_time else None,
+            "total_pause_duration": s.total_pause_duration,
+            "total_time_spent": s.total_time_spent,
+            "cumulative_sqft_drafted": s.cumulative_sqft_drafted,
+            "work_percentage_done": s.work_percentage_done,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+            "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+            "notes": notes_by_session.get(s.id, []),
+        }
+    return result
