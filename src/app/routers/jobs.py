@@ -9,6 +9,7 @@ from sqlalchemy import func
 from fastapi.responses import FileResponse
 import mimetypes
 import logging
+from pydantic import BaseModel, Field
 
 from src.app.database import get_db
 from src.app.database.business_job import BusinessJob
@@ -81,11 +82,12 @@ async def get_jobs(
     status_id: Optional[int] = Query(None, description="Filter by status ID"),
     priority: Optional[str] = Query(None, description="Filter by priority"),
     need_to_invoice: Optional[bool] = Query(None, description="Filter by invoice flag (true/false)"),
+    search: Optional[str] = Query(None, description="Search by job name or job number"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(PermissionChecker("jobs", "read"))
 ):
     """Get list of jobs with optional filtering"""
-    jobs = await job_crud.get_jobs(db, skip, limit, account_id, status_id, priority, need_to_invoice)
+    jobs = await job_crud.get_jobs(db, skip, limit, account_id, status_id, priority, need_to_invoice, search)
     return jobs
 
 
@@ -538,16 +540,20 @@ async def get_job_details(
     return success_response(job_dict, f"Job details retrieved successfully")
 
 
+class InvoiceToggleRequest(BaseModel):
+    note: Optional[str] = Field(None, description="Optional note about invoice status change")
+
 @router.patch("/jobs/{job_id}/toggle-invoice")
 async def toggle_need_to_invoice(
     job_id: int,
+    invoice_data: InvoiceToggleRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Toggle the need_to_invoice flag for a job"""
+    """Toggle the need_to_invoice flag for a job with optional note"""
     from src.app.service.job_crud import toggle_job_invoice_flag
     
-    result = await toggle_job_invoice_flag(db, job_id, current_user.id)
+    result = await toggle_job_invoice_flag(db, job_id, current_user.id, invoice_data.note)
     
     return {
         "success": True,

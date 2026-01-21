@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends
@@ -104,13 +104,14 @@ async def update_slabsmith(
     slabsmith.updated_at = datetime.now()
     slabsmith.updated_by = current_user.id
 
-    # If completed, move the related FAB to cut_list stage
+    # If completed, move the related FAB to cut_list stage and save completion date
     if update_data.get("is_completed") is True:
         fab_result = await db.execute(select(Fab).where(Fab.id == slabsmith.fab_id))
         fab = fab_result.scalar_one_or_none()
         if fab:
             fab.current_stage = "cut_list"
             fab.next_stage = "final_programming"
+            fab.slabsmith_completed_date = datetime.now()  # ADD THIS
             fab.updated_at = datetime.now()
             fab.updated_by = current_user.id
 
@@ -311,12 +312,13 @@ async def set_review_needed_no(
     sales_ct.updated_at = datetime.now()
     sales_ct.updated_by = current_user.id
     
-    # Update fab to next stage (cut list)
+    # Update fab to next stage (cut list) and save completion date
     fab_result = await db.execute(select(Fab).where(Fab.id == sales_ct.fab_id))
     fab = fab_result.scalar_one_or_none()
     if fab:
         fab.current_stage = "cut_list"
         fab.next_stage = "final_programming"
+        fab.sales_ct_completed_date = datetime.now()  # ADD THIS
         fab.updated_at = datetime.now()
         fab.updated_by = current_user.id
     
@@ -381,6 +383,10 @@ async def update_revision_type(
     if not sales_ct:
         raise error_response("Sales CT not found", 404)
     
+    # Update revision_type if provided
+    if revision_data.revision_type:
+        sales_ct.revision_type = revision_data.revision_type
+    
     if revision_data.is_revision_completed:
         sales_ct.is_revision_completed = True
         sales_ct.status_id = 3  # Completed
@@ -408,12 +414,35 @@ async def get_sales_ct_by_fab(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get sales CT by fab ID"""
+    """Get sales CT by fab ID, ordered by newest first"""
     
-    result = await db.execute(select(SalesCT).where(SalesCT.fab_id == fab_id))
+    result = await db.execute(
+        select(SalesCT)
+        .where(SalesCT.fab_id == fab_id)
+        .order_by(SalesCT.created_at.desc())
+    )
     sales_ct = result.scalar_one_or_none()
     
     if not sales_ct:
         raise error_response("Sales CT not found for this fab", 404)
     
     return success_response(serialize_datetime_fields(sales_ct), "Sales CT fetched successfully")
+
+@router.get("/sales-ct", response_model=SuccessResponse[List[SalesCTResponse]])
+async def get_all_sales_ct(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get all sales CT entries ordered by completion date (oldest first)"""
+    
+    result = await db.execute(
+        select(SalesCT, Fab.sales_ct_completed_date)
+        .join(Fab, SalesCT.fab_id == Fab.id)
+        .order_by(Fab.sales_ct_completed_date.asc().nulls_last())
+    )
+    sales_cts = [row[0] for row in result.all()]
+    
+    return success_response(
+        [serialize_datetime_fields(sct) for sct in sales_cts],
+        "Sales CT entries fetched successfully"
+    )

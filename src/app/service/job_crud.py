@@ -63,6 +63,7 @@ async def create_job(
         sales_person_id=job_dict.get("sales_person_id"),
         need_to_invoice=job_dict.get("need_to_invoice", False),
         sq_ft=job_dict.get("sq_ft"),
+        invoice_note=job_dict.get("invoice_note"),
         status_id=job_dict.get("status_id", 1),
         created_by=user_id,
         created_at=datetime.now()
@@ -104,7 +105,8 @@ async def create_job(
         "created_by": job.created_by,
         "updated_at": job.updated_at,
         "updated_by": job.updated_by,
-        "need_to_invoice": job.need_to_invoice
+        "need_to_invoice": job.need_to_invoice,
+        "invoice_note": job.invoice_note
     }
 
 async def get_jobs(
@@ -114,7 +116,9 @@ async def get_jobs(
     account_id: Optional[int] = None,
     status_id: Optional[int] = None,
     priority: Optional[str] = None,
-    need_to_invoice: Optional[bool] = None
+    need_to_invoice: Optional[bool] = None,
+    search: Optional[str] = None
+
 ) -> List[dict]:
     """
     Get list of jobs with optional filtering and pagination.
@@ -127,7 +131,7 @@ async def get_jobs(
         status_id: Filter by status ID
         priority: Filter by priority
         need_to_invoice: Filter by invoice flag (true/false)
-        
+        search: Search term for job name or job number
     Returns:
         List of Job dicts with account details
     """
@@ -152,6 +156,13 @@ async def get_jobs(
         query = query.where(BusinessJob.priority == priority)
     if need_to_invoice is not None:
         query = query.where(BusinessJob.need_to_invoice == need_to_invoice)
+
+    if search:
+        search_term = f"%{search}%"
+        query = query.where(
+            (BusinessJob.name.ilike(search_term)) |
+            (BusinessJob.job_number.ilike(search_term))
+        )
     # Apply pagination
     query = query.offset(skip).limit(limit).order_by(BusinessJob.created_at.desc())
     
@@ -185,7 +196,9 @@ async def get_jobs(
             "created_by": job.created_by,
             "updated_at": job.updated_at,
             "updated_by": job.updated_by,
-            "need_to_invoice": job.need_to_invoice
+            "need_to_invoice": job.need_to_invoice,
+            "invoice_note": job.invoice_note
+
         })
     
     return jobs_list
@@ -251,7 +264,8 @@ async def get_job_by_id(
         "created_by": job.created_by,
         "updated_at": job.updated_at,
         "updated_by": job.updated_by,
-        "need_to_invoice": job.need_to_invoice
+        "need_to_invoice": job.need_to_invoice,
+        "invoice_note": job.invoice_note
     }
 
 async def update_job(
@@ -334,12 +348,14 @@ async def update_job(
         "project_value": job.project_value,
         "status_id": job.status_id,
         "sales_person_id": job.sales_person_id,
+        "sq_ft": job.sq_ft,
         "sales_person_name": f"{sales_person.first_name} {sales_person.last_name}" if sales_person else None,
         "created_at": job.created_at,
         "created_by": job.created_by,
         "updated_at": job.updated_at,
         "updated_by": job.updated_by,
-        "need_to_invoice": job.need_to_invoice
+        "need_to_invoice": job.need_to_invoice,
+        "invoice_note": job.invoice_note
     }
 
 
@@ -460,36 +476,31 @@ async def check_job_number_exists(
 async def toggle_job_invoice_flag(
     db: AsyncSession,
     job_id: int,
-    user_id: int
-) -> dict:
-    """
-    Toggle the need_to_invoice flag for a job.
-    
-    Args:
-        db: Database session
-        job_id: ID of job to toggle invoice flag
-        user_id: ID of user toggling the flag
-        
-    Returns:
-        Dict with job_id and new need_to_invoice value
-        
-    Raises:
-        HTTPException: If job not found
-    """
+    user_id: int,
+    note: Optional[str] = None
+):
+    """Toggle need_to_invoice flag and optionally update invoice note"""
     result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
     job = result.scalar_one_or_none()
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
+    # Toggle the flag
     job.need_to_invoice = not job.need_to_invoice
     job.updated_at = datetime.now()
     job.updated_by = user_id
+    
+    # Update invoice note if provided
+    if note:
+        job.invoice_note = note
     
     await db.commit()
     await db.refresh(job)
     
     return {
         "job_id": job.id,
-        "need_to_invoice": job.need_to_invoice
+        "need_to_invoice": job.need_to_invoice,
+        "invoice_note": job.invoice_note,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None
     }
