@@ -648,8 +648,8 @@ class SlabSmithResponse(BaseModel):
 class SalesCTCreate(BaseModel):
     fab_id: int = Field(..., description="FAB ID")
     is_revision_needed: bool = Field(..., description="Whether revision is needed")
-    revision_reason: Optional[str] = Field(None, description="Reason for revision if needed")  # ✅ Add this field
-    
+    revision_reason: Optional[str] = Field(None, description="Reason for revision if needed")  
+    revision_type: Optional[str] = Field(None, description="Type of revision")
     class Config:
         from_attributes = True
 

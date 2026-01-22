@@ -267,6 +267,7 @@ async def create_sales_ct(
             fab_id=sales_ct_data.fab_id,
             is_revision_needed=sales_ct_data.is_revision_needed,
             revision_reason=sales_ct_data.revision_reason,
+            revision_type=sales_ct_data.revision_type if hasattr(sales_ct_data, 'revision_type') else None,
             is_revision_completed=None,
             no_of_revisions=None,
             current_revision_count=None,
