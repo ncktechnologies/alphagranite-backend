@@ -541,7 +541,7 @@ async def update_drafting(
     # Get update data
     update_data = drafting_data.model_dump(exclude_unset=True)
     
-    is_complete = update_data.get('is_completed', False)
+    is_complete = update_data.get('is_completed', False) or update_data.get('is_complete', False)
     
     # Map frontend fields to database fields
     field_mapping = {
@@ -576,10 +576,11 @@ async def update_drafting(
         # IMPORTANT: Add fab to session explicitly
         db.add(fab)
         
-        # Update fab stages and mark draft as completed
-        fab.current_stage = fab.next_stage
+        # Update fab stages to sales_ct
+        fab.current_stage = "sales_ct"
+        fab.next_stage = "cut_list"
         fab.draft_completed = True
-        fab.draft_completed_date = utc_now()  # NEW - Add completion timestamp
+        fab.draft_completed_date = utc_now()
         fab.updated_at = utc_now()
         fab.updated_by = current_user.id
     
