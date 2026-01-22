@@ -448,12 +448,16 @@ from pydantic import BaseModel
 from typing import List
 
 # Add this new schema for bulk drafting creation
-class DraftingCreateBulk(BaseModel):
-    fab_ids: List[int]
-    drafter_id: int
+# Add this new schema for bulk drafting creation
+class DraftingItem(BaseModel):
+    fab_id: int
     scheduled_start_date: datetime
     scheduled_end_date: datetime
     total_sqft_required_to_draft: float
+
+class DraftingCreateBulk(BaseModel):
+    drafter_id: int
+    items: List[DraftingItem]
 
 @router.post("/drafting", response_model=SuccessResponse[List[DraftingResponse]], status_code=201)
 async def create_drafting(
@@ -468,22 +472,25 @@ async def create_drafting(
     if not drafter_result.scalar_one_or_none():
         raise error_response("Drafter not found", 404)
     
+    # Extract fab_ids from items
+    fab_ids = [item.fab_id for item in drafting_data.items]
+    
     # Validate all fabs exist
-    fabs_result = await db.execute(select(Fab).where(Fab.id.in_(drafting_data.fab_ids)))
+    fabs_result = await db.execute(select(Fab).where(Fab.id.in_(fab_ids)))
     fabs = fabs_result.scalars().all()
     
-    if len(fabs) != len(drafting_data.fab_ids):
+    if len(fabs) != len(fab_ids):
         raise error_response("One or more fab IDs not found", 404)
     
-    # Create drafting entries for all fabs
+    # Create drafting entries for all items
     drafting_entries = []
-    for fab_id in drafting_data.fab_ids:
+    for item in drafting_data.items:
         drafting = Drafting(
-            fab_id=fab_id,
+            fab_id=item.fab_id,
             drafter_id=drafting_data.drafter_id,
-            scheduled_start_date=strip_timezone(drafting_data.scheduled_start_date),
-            scheduled_end_date=strip_timezone(drafting_data.scheduled_end_date),
-            total_sqft_required_to_draft=str(drafting_data.total_sqft_required_to_draft),  # Convert to string
+            scheduled_start_date=strip_timezone(item.scheduled_start_date),
+            scheduled_end_date=strip_timezone(item.scheduled_end_date),
+            total_sqft_required_to_draft=str(item.total_sqft_required_to_draft),
             drafter_start_date=None,
             drafter_end_date=None,
             total_sqft_drafted=None,
@@ -508,7 +515,6 @@ async def create_drafting(
         await db.refresh(drafting)
     
     return success_response(drafting_entries, f"Drafting created successfully for {len(drafting_entries)} fabs")
-
 
 @router.put("/drafting/{drafting_id}", response_model=SuccessResponse[DraftingResponse])
 async def update_drafting(
