@@ -223,9 +223,14 @@ async def get_slabsmith_by_fab(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get slab smith by fab ID"""
+    """Get slab smith by fab ID (returns latest if multiple exist)"""
     
-    result = await db.execute(select(SlabSmith).where(SlabSmith.fab_id == fab_id))
+    result = await db.execute(
+        select(SlabSmith)
+        .where(SlabSmith.fab_id == fab_id)
+        .order_by(SlabSmith.id.desc())  # Get the latest one
+        .limit(1)
+    )
     slabsmith = result.scalar_one_or_none()
     
     if not slabsmith:

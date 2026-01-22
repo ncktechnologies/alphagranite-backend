@@ -78,3 +78,8 @@ class Fab(SQLModel, table=True):
     cost_of_stone_id: Optional[int] = Field(default=None, foreign_key="cost_of_stones.id")
     slabsmith_completed_date: Optional[datetime] = Field(default=None, description="Date when slabsmith was completed")
     sales_ct_completed_date: Optional[datetime] = Field(default=None, description="Date when sales CT was completed")
+    template_completed_date: Optional[datetime] = Field(default=None, description="When templating was completed")
+    predraft_completed_date: Optional[datetime] = Field(default=None, description="When pre-draft review was completed")
+    draft_completed_date: Optional[datetime] = Field(default=None, description="When drafting was completed")
+    revision_completed_date: Optional[datetime] = Field(default=None, description="When revision was completed")
+    sct_completed_date: Optional[datetime] = Field(default=None, description="When sales CT was completed (legacy)")

@@ -82,12 +82,13 @@ async def get_jobs(
     status_id: Optional[int] = Query(None, description="Filter by status ID"),
     priority: Optional[str] = Query(None, description="Filter by priority"),
     need_to_invoice: Optional[bool] = Query(None, description="Filter by invoice flag (true/false)"),
+    is_invoiced: Optional[bool] = Query(None, description="Filter by invoiced status (true=invoiced, false=not invoiced)"),  # NEW
     search: Optional[str] = Query(None, description="Search by job name or job number"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(PermissionChecker("jobs", "read"))
 ):
     """Get list of jobs with optional filtering"""
-    jobs = await job_crud.get_jobs(db, skip, limit, account_id, status_id, priority, need_to_invoice, search)
+    jobs = await job_crud.get_jobs(db, skip, limit, account_id, status_id, priority, need_to_invoice, search, is_invoiced)  # Pass new param
     return jobs
 
 
@@ -560,3 +561,19 @@ async def toggle_need_to_invoice(
         "message": "Invoice flag toggled successfully",
         "data": result
     }
+
+
+class MarkInvoicedRequest(BaseModel):
+    invoiced_at: Optional[datetime] = Field(None, description="When the job was invoiced (defaults to now)")
+
+@router.patch("/jobs/{job_id}/mark-invoiced")
+async def mark_job_invoiced(
+    job_id: int,
+    data: MarkInvoicedRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Mark job as invoiced and store the invoiced date"""
+    from src.app.service.job_crud import mark_job_invoiced as svc
+    result = await svc(db, job_id, current_user.id, data.invoiced_at)
+    return success_response(result, "Job marked as invoiced")

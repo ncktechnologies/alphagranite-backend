@@ -76,15 +76,12 @@ async def manage_drafting_session(
                 detail="An active session already exists for this fab"
             )
         
-        # Strip timezone from timestamp
-        session_start = strip_timezone(session_data.session_start_time or timestamp)
-        
         # Create new session
         session = DraftingSession(
             fab_id=fab_id,
             drafter_id=session_data.drafter_id,
             status="drafting",
-            session_start_time=session_start,  # Use stripped timezone
+            session_start_time=session_data.session_start_time or timestamp,
             cumulative_sqft_drafted=session_data.sqft_drafted or "0",
             work_percentage_done=session_data.work_percentage_done or 0,
             created_at=utc_now()
@@ -92,12 +89,12 @@ async def manage_drafting_session(
         db.add(session)
         await db.flush()
         
-        # Create session note with stripped timestamp
+        # Create session note
         note = DraftingSessionNote(
             session_id=session.id,
             fab_id=fab_id,
             action="start",
-            timestamp=strip_timezone(timestamp),  # Strip timezone here too
+            timestamp=timestamp,
             note=session_data.note,
             sqft_drafted=session_data.sqft_drafted,
             work_percentage_done=session_data.work_percentage_done,
@@ -451,15 +448,12 @@ from pydantic import BaseModel
 from typing import List
 
 # Add this new schema for bulk drafting creation
-class DraftingCreateItem(BaseModel):
-    fab_id: int
-    scheduled_start_date: Optional[datetime] = None
-    scheduled_end_date: Optional[datetime] = None
-    total_sqft_required_to_draft: Optional[float] = None
-
 class DraftingCreateBulk(BaseModel):
+    fab_ids: List[int]
     drafter_id: int
-    items: List[DraftingCreateItem]
+    scheduled_start_date: datetime
+    scheduled_end_date: datetime
+    total_sqft_required_to_draft: float
 
 @router.post("/drafting", response_model=SuccessResponse[List[DraftingResponse]], status_code=201)
 async def create_drafting(
@@ -467,33 +461,29 @@ async def create_drafting(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Create drafting entries for multiple fabs with individual details"""
+    """Create drafting entries for multiple fabs"""
     
     # Validate drafter exists
     drafter_result = await db.execute(select(User).where(User.id == drafting_data.drafter_id))
-    drafter = drafter_result.scalar_one_or_none()
-    if not drafter:
+    if not drafter_result.scalar_one_or_none():
         raise error_response("Drafter not found", 404)
     
-    # Extract fab IDs from items
-    fab_ids = [item.fab_id for item in drafting_data.items]
-    
     # Validate all fabs exist
-    fabs_result = await db.execute(select(Fab).where(Fab.id.in_(fab_ids)))
+    fabs_result = await db.execute(select(Fab).where(Fab.id.in_(drafting_data.fab_ids)))
     fabs = fabs_result.scalars().all()
     
-    if len(fabs) != len(fab_ids):
+    if len(fabs) != len(drafting_data.fab_ids):
         raise error_response("One or more fab IDs not found", 404)
     
     # Create drafting entries for all fabs
     drafting_entries = []
-    for item in drafting_data.items:
+    for fab_id in drafting_data.fab_ids:
         drafting = Drafting(
-            fab_id=item.fab_id,
+            fab_id=fab_id,
             drafter_id=drafting_data.drafter_id,
-            scheduled_start_date=strip_timezone(item.scheduled_start_date) if item.scheduled_start_date else None,
-            scheduled_end_date=strip_timezone(item.scheduled_end_date) if item.scheduled_end_date else None,
-            total_sqft_required_to_draft=str(item.total_sqft_required_to_draft) if item.total_sqft_required_to_draft else None,
+            scheduled_start_date=strip_timezone(drafting_data.scheduled_start_date),
+            scheduled_end_date=strip_timezone(drafting_data.scheduled_end_date),
+            total_sqft_required_to_draft=str(drafting_data.total_sqft_required_to_draft),  # Convert to string
             drafter_start_date=None,
             drafter_end_date=None,
             total_sqft_drafted=None,
@@ -517,41 +507,7 @@ async def create_drafting(
     for drafting in drafting_entries:
         await db.refresh(drafting)
     
-    # Build drafter name
-    drafter_name = f"{drafter.first_name} {drafter.last_name}".strip()
-    if not drafter_name:
-        drafter_name = drafter.email  # Fallback to email if names are empty
-    
-    # Convert to response format with drafter details
-    response_data = []
-    for drafting in drafting_entries:
-        # Convert model to dict with proper serialization
-        drafting_dict = {
-            "id": drafting.id,
-            "fab_id": drafting.fab_id,
-            "drafter_id": drafting.drafter_id,
-            "drafter_name": drafter_name,
-            "scheduled_start_date": drafting.scheduled_start_date.isoformat() if drafting.scheduled_start_date else None,
-            "scheduled_end_date": drafting.scheduled_end_date.isoformat() if drafting.scheduled_end_date else None,
-            "drafter_start_date": drafting.drafter_start_date.isoformat() if drafting.drafter_start_date else None,
-            "drafter_end_date": drafting.drafter_end_date.isoformat() if drafting.drafter_end_date else None,
-            "total_sqft_required_to_draft": drafting.total_sqft_required_to_draft,
-            "total_sqft_drafted": drafting.total_sqft_drafted,
-            "no_of_piece_drafted": drafting.no_of_piece_drafted,
-            "total_hours_drafted": drafting.total_hours_drafted,
-            "draft_note": drafting.draft_note,
-            "mentions": drafting.mentions,
-            "file_ids": drafting.file_ids,
-            "is_redrafting": drafting.is_redrafting,
-            "is_completed": drafting.is_completed if hasattr(drafting, 'is_completed') else False,
-            "status_id": drafting.status_id,
-            "created_at": drafting.created_at.isoformat() if drafting.created_at else None,
-            "updated_at": drafting.updated_at.isoformat() if drafting.updated_at else None,
-            "updated_by": drafting.updated_by
-        }
-        response_data.append(drafting_dict)
-    
-    return success_response(response_data, f"Drafting created successfully for {len(drafting_entries)} fabs")
+    return success_response(drafting_entries, f"Drafting created successfully for {len(drafting_entries)} fabs")
 
 
 @router.put("/drafting/{drafting_id}", response_model=SuccessResponse[DraftingResponse])
@@ -617,6 +573,7 @@ async def update_drafting(
         # Update fab stages and mark draft as completed
         fab.current_stage = fab.next_stage
         fab.draft_completed = True
+        fab.draft_completed_date = utc_now()  # NEW - Add completion timestamp
         fab.updated_at = utc_now()
         fab.updated_by = current_user.id
     
@@ -707,14 +664,9 @@ async def get_drafting_by_fab(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get latest drafting details by fab ID"""
+    """Get drafting details by fab ID"""
     
-    result = await db.execute(
-        select(Drafting)
-        .where(Drafting.fab_id == fab_id)
-        .order_by(Drafting.id.desc())
-        .limit(1)
-    )
+    result = await db.execute(select(Drafting).where(Drafting.fab_id == fab_id))
     drafting = result.scalar_one_or_none()
     
     if not drafting:
@@ -823,7 +775,7 @@ async def create_pre_draft_review(
     
     db.add(review)
     
-    # If review is completed, move fab to drafting stage
+    # If review is completed, move fab to next stage
     if review_data.is_completed:
         db.add(fab)
         fab.current_stage = "drafting"
@@ -872,6 +824,7 @@ async def mark_predraft_review_completed(
         fab.next_stage = "sales_check"
         fab.updated_at = utc_now()
         fab.updated_by = current_user.id
+        fab.predraft_completed_date = utc_now()
     
     if notes:
         review.draft_notes = notes  # Store as string

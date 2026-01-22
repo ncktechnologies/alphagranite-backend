@@ -19,10 +19,11 @@ class JobUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     job_number: Optional[str] = Field(None, min_length=1, max_length=100)
     project_value: Optional[float] = Field(None, ge=0)
+    account_id: Optional[int] = None
     status_id: Optional[int] = None
     sales_person_id: Optional[int] = None
     need_to_invoice: Optional[bool] = None
-
+    sq_ft: Optional[float] = None
 
 class JobResponse(BaseModel):
     id: int
@@ -355,6 +356,11 @@ class FabResponse(BaseModel):
     fab_notes: Optional[List[dict]] = None
     cost_of_stone_id: Optional[int] = Field(None, description="Cost of stone record ID")
     cost_of_stone: Optional[Decimal] = Field(None, description="Cost of stone amount")
+
+    predraft_completed_date: Optional[datetime] = None
+    template_review_complete: Optional[bool] = None
+    template_completed_date: Optional[datetime] = None
+
 
     class Config:
         from_attributes = True

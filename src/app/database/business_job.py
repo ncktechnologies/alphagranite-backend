@@ -37,7 +37,7 @@ class BusinessJobBase(SQLModel):
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
     need_to_invoice: bool = Field(default=False)
     invoice_note: Optional[str] = Field(default=None, description="Note about invoice status")
-
+    invoiced_at: Optional[datetime] = Field(default=None, description="Date the job was invoiced")  # NEW
 
 
 class BusinessJob(BusinessJobBase, table=True):

@@ -12,7 +12,7 @@ from src.app.database.business_job import BusinessJob
 from src.app.database.account import Account
 from src.app.database.user import User
 from src.app.interface.business_schemas import JobCreate, JobUpdate
-
+from src.app.utils.helpers import utc_now
 
 async def create_job(
     db: AsyncSession,
@@ -106,7 +106,8 @@ async def create_job(
         "updated_at": job.updated_at,
         "updated_by": job.updated_by,
         "need_to_invoice": job.need_to_invoice,
-        "invoice_note": job.invoice_note
+        "invoice_note": job.invoice_note,
+        "invoiced_at": job.invoiced_at.isoformat() if job.invoiced_at else None
     }
 
 async def get_jobs(
@@ -117,7 +118,8 @@ async def get_jobs(
     status_id: Optional[int] = None,
     priority: Optional[str] = None,
     need_to_invoice: Optional[bool] = None,
-    search: Optional[str] = None
+    search: Optional[str] = None,
+    is_invoiced: Optional[bool] = None
 
 ) -> List[dict]:
     """
@@ -132,6 +134,8 @@ async def get_jobs(
         priority: Filter by priority
         need_to_invoice: Filter by invoice flag (true/false)
         search: Search term for job name or job number
+        is_invoiced: Filter by invoiced status (true/false)
+        
     Returns:
         List of Job dicts with account details
     """
@@ -156,6 +160,12 @@ async def get_jobs(
         query = query.where(BusinessJob.priority == priority)
     if need_to_invoice is not None:
         query = query.where(BusinessJob.need_to_invoice == need_to_invoice)
+
+    if is_invoiced is not None:
+        if is_invoiced:
+            query = query.where(BusinessJob.invoiced_at.is_not(None))
+        else:
+            query = query.where(BusinessJob.invoiced_at.is_(None))
 
     if search:
         search_term = f"%{search}%"
@@ -197,8 +207,8 @@ async def get_jobs(
             "updated_at": job.updated_at,
             "updated_by": job.updated_by,
             "need_to_invoice": job.need_to_invoice,
-            "invoice_note": job.invoice_note
-
+            "invoice_note": job.invoice_note,
+            "invoiced_at": job.invoiced_at.isoformat() if job.invoiced_at else None
         })
     
     return jobs_list
@@ -265,7 +275,8 @@ async def get_job_by_id(
         "updated_at": job.updated_at,
         "updated_by": job.updated_by,
         "need_to_invoice": job.need_to_invoice,
-        "invoice_note": job.invoice_note
+        "invoice_note": job.invoice_note,
+        "invoiced_at": job.invoiced_at.isoformat() if job.invoiced_at else None
     }
 
 async def update_job(
@@ -352,10 +363,11 @@ async def update_job(
         "sales_person_name": f"{sales_person.first_name} {sales_person.last_name}" if sales_person else None,
         "created_at": job.created_at,
         "created_by": job.created_by,
-        "updated_at": job.updated_at,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
         "updated_by": job.updated_by,
         "need_to_invoice": job.need_to_invoice,
-        "invoice_note": job.invoice_note
+        "invoice_note": job.invoice_note,
+        "invoiced_at": job.invoiced_at.isoformat() if job.invoiced_at else None
     }
 
 
@@ -502,5 +514,31 @@ async def toggle_job_invoice_flag(
         "job_id": job.id,
         "need_to_invoice": job.need_to_invoice,
         "invoice_note": job.invoice_note,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None
+    }
+
+async def mark_job_invoiced(
+    db: AsyncSession,
+    job_id: int,
+    user_id: int,
+    invoiced_at: Optional[datetime] = None
+):
+    result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job.need_to_invoice = False
+    job.invoiced_at = invoiced_at or utc_now()
+    job.updated_at = utc_now()
+    job.updated_by = user_id
+
+    await db.commit()
+    await db.refresh(job)
+
+    return {
+        "job_id": job.id,
+        "need_to_invoice": job.need_to_invoice,
+        "invoiced_at": job.invoiced_at.isoformat() if job.invoiced_at else None,
         "updated_at": job.updated_at.isoformat() if job.updated_at else None
     }
