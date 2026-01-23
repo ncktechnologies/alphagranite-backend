@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional, List
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +26,8 @@ from src.app.database.fab_notes import FabNotes
 
 router = APIRouter()
 
+def _to_date(dt: Optional[datetime]) -> Optional[date]:
+    return dt.date() if isinstance(dt, datetime) else None
 
 # helper to keep Fab.total_sqft in sync with Templating
 async def _sync_fab_total_sqft(db: AsyncSession, fab_id: int, total_sqft, user_id: int):
@@ -75,7 +77,7 @@ async def schedule_templating(
         raise error_response("Templating already scheduled for this fab", 400)
 
     # Strip timezone info from datetime fields
-    schedule_start = templating_data.schedule_start_date.replace(tzinfo=None) if templating_data.schedule_start_date else None
+    schedule_start = _to_date(templating_data.schedule_start_date)
     schedule_due = templating_data.schedule_due_date.replace(tzinfo=None) if templating_data.schedule_due_date else None
 
     # If templating exists but was unscheduled, update it instead of creating new
@@ -399,10 +401,10 @@ async def get_templating(
         fab_id=templating.fab_id,
         technician_id=templating.technician_id,
         technician_name=f"{technician.first_name} {technician.last_name}" if technician else None,
-        schedule_start_date=templating.schedule_start_date.date() if templating.schedule_start_date else None,
-        schedule_due_date=templating.schedule_due_date.date() if templating.schedule_due_date else None,
+        schedule_start_date=_to_date(templating.schedule_start_date),
+        schedule_due_date=_to_date(templating.schedule_due_date),
         total_sqft=templating.total_sqft,
-        actual_start_date=templating.actual_start_date,
+        actual_start_date=_to_date(templating.actual_start_date),
         duration=templating.duration,
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
@@ -441,10 +443,10 @@ async def get_templating_by_fab(
         fab_id=templating.fab_id,
         technician_id=templating.technician_id,
         technician_name=f"{technician.first_name} {technician.last_name}" if technician else None,
-        schedule_start_date=templating.schedule_start_date.date() if templating.schedule_start_date else None,
-        schedule_due_date=templating.schedule_due_date.date() if templating.schedule_due_date else None,
+        schedule_start_date=_to_date(templating.schedule_start_date),
+        schedule_due_date=_to_date(templating.schedule_due_date),
         total_sqft=templating.total_sqft,
-        actual_start_date=templating.actual_start_date,
+        actual_start_date=_to_date(templating.actual_start_date),
         duration=templating.duration,
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
