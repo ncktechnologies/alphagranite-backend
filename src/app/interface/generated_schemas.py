@@ -132,6 +132,7 @@ class SalesCT(SQLModel, table=True):
     __tablename__ = "sales_cts"
     id: Optional[int] = Field(default=None, primary_key=True)
     fab_id: int = Field(foreign_key="fabs.id", unique=True)  # ← Add unique=True
+    revision_type: Optional[str] = Field(default=None)  # <-- add this
     is_revision_needed: bool = Field()
     is_revision_completed: Optional[bool] = Field(default=None)
     is_completed: bool = Field(default=False)
