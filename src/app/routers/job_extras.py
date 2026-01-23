@@ -447,16 +447,35 @@ def update_sct_revision(
     return success_response(sct, "Sales CT revision updated successfully")
 
 @router.post("/slabsmith/{slabsmith_id}/complete")
-def mark_slabsmith_completed(slabsmith_id: int, db: Session = Depends(get_db), updated_by: int = 1):
-    slabsmith = db.get(SlabSmith, slabsmith_id)
+async def mark_slabsmith_completed(
+    slabsmith_id: int, 
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    result = await db.execute(async_select(SlabSmith).where(SlabSmith.id == slabsmith_id))
+    slabsmith = result.scalar_one_or_none()
+    
     if not slabsmith:
         raise error_response("SlabSmith not found", 404)
-    slabsmith.status_id = 2
+    
+    slabsmith.status_id = 3  # Completed status
     slabsmith.end_date = datetime.now()
     slabsmith.updated_at = datetime.now()
-    slabsmith.updated_by = updated_by
-    db.commit()
-    db.refresh(slabsmith)
+    slabsmith.updated_by = current_user.id
+    
+    # Update fab stage to sales_ct and set slabsmith_completed_date
+    fab_result = await db.execute(async_select(Fab).where(Fab.id == slabsmith.fab_id))
+    fab = fab_result.scalar_one_or_none()
+    if fab:
+        fab.current_stage = "sales_ct"
+        fab.next_stage = "cut_list"
+        fab.slabsmith_completed_date = datetime.now()
+        fab.updated_at = datetime.now()
+        fab.updated_by = current_user.id
+    
+    await db.commit()
+    await db.refresh(slabsmith)
+    
     return success_response(slabsmith, "SlabSmith marked as completed successfully")
 
 @router.post("/slabsmith/{slabsmith_id}/files")

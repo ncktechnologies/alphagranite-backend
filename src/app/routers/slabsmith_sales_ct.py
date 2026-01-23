@@ -336,11 +336,12 @@ async def set_review_needed_no(
 async def set_review_needed_yes(
     sales_ct_id: int,
     revision_reason: str,
+    revision_type: Optional[str] = None,
     file_ids: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Set review needed as Yes, add revision reason and files (optional)"""
+    """Set review needed as Yes, add revision reason, revision type and files (optional)"""
     
     result = await db.execute(select(SalesCT).where(SalesCT.id == sales_ct_id))
     sales_ct = result.scalar_one_or_none()
@@ -350,7 +351,10 @@ async def set_review_needed_yes(
     
     sales_ct.is_revision_needed = True
     sales_ct.is_revision_completed = False
-    sales_ct.revision_reason = revision_reason  # ← Add this
+    sales_ct.revision_reason = revision_reason
+    
+    if revision_type:
+        sales_ct.revision_type = revision_type
     
     # Increment revision count
     if sales_ct.current_revision_count:
