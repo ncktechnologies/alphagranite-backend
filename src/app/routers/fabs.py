@@ -2105,7 +2105,7 @@ async def _batch_load_stage_data(db: AsyncSession, fab_ids: List[int]) -> dict:
 
 async def _batch_load_slabsmith_data(db: AsyncSession, fab_ids: List[int]) -> dict:
     """Load slabsmith data with files for each FAB."""
-    from src.app.database.slabsmith import SlabSmith
+    from src.app.database.slab_smith import SlabSmith
     from src.app.database.file import File
     from sqlalchemy.orm import aliased
     
