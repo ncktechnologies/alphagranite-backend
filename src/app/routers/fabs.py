@@ -1809,7 +1809,7 @@ def _convert_fab_row_to_dict(row: tuple) -> dict:
 
 
 async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) -> None:
-    """Batch load and attach notes, draft, and sales CT data to fab dictionaries."""
+    """Batch load and attach notes, draft, sales CT, and slabsmith data to fab dictionaries."""
     fab_ids = [fab["id"] for fab in fab_dicts]
     
     if not fab_ids:
@@ -1817,6 +1817,7 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
             fab_dict["fab_notes"] = []
             fab_dict["draft_data"] = None
             fab_dict["sales_ct_data"] = None
+            fab_dict["slabsmith_data"] = None
             fab_dict["latest_revision"] = None
             fab_dict["drafting_session"] = None
             fab_dict["is_complete"] = False
@@ -1832,11 +1833,12 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
     # Load sales CT data
     sales_ct_by_fab = await _batch_load_sales_ct_data(db, fab_ids)
     
+    # Load slabsmith data
+    slabsmith_by_fab = await _batch_load_slabsmith_data(db, fab_ids)
+    
     # Load stage data
     stage_data_by_fab = await _batch_load_stage_data(db, fab_ids)
-    drafting_sessions_by_fab = await _batch_load_drafting_sessions(db, fab_ids)  # NEW
-
-    #Load latest revisions 
+    drafting_sessions_by_fab = await _batch_load_drafting_sessions(db, fab_ids)
     latest_revisions_by_fab = await _batch_load_latest_revisions(db, fab_ids)
     
     # Attach to fab dicts
@@ -1845,8 +1847,9 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
         fab_dict["fab_notes"] = notes_by_fab.get(fab_id, [])
         fab_dict["draft_data"] = drafting_by_fab.get(fab_id)
         fab_dict["sales_ct_data"] = sales_ct_by_fab.get(fab_id)
+        fab_dict["slabsmith_data"] = slabsmith_by_fab.get(fab_id)
         fab_dict["latest_revision"] = latest_revisions_by_fab.get(fab_id)
-        fab_dict["drafting_session"] = drafting_sessions_by_fab.get(fab_id)  # NEW
+        fab_dict["drafting_session"] = drafting_sessions_by_fab.get(fab_id)
 
         current_stage = fab_dict.get("current_stage")
         if current_stage == "templating":
@@ -2100,6 +2103,78 @@ async def _batch_load_stage_data(db: AsyncSession, fab_ids: List[int]) -> dict:
     return stage_data_by_fab
 
 
+async def _batch_load_slabsmith_data(db: AsyncSession, fab_ids: List[int]) -> dict:
+    """Load slabsmith data with files for each FAB."""
+    from src.app.database.slabsmith import SlabSmith
+    from src.app.database.file import File
+    from sqlalchemy.orm import aliased
+    
+    UpdaterUser = aliased(User)
+    
+    query = select(
+        SlabSmith,
+        UpdaterUser.first_name.label("updater_first_name"),
+        UpdaterUser.last_name.label("updater_last_name")
+    ).where(SlabSmith.fab_id.in_(fab_ids))\
+     .join(UpdaterUser, SlabSmith.updated_by == UpdaterUser.id, isouter=True)\
+     .order_by(SlabSmith.fab_id, SlabSmith.id.desc())
+    
+    result = await db.execute(query)
+    rows = result.all()
+    
+    # Get all file IDs
+    all_file_ids = set()
+    for row in rows:
+        slabsmith = row[0]
+        if slabsmith.file_ids:
+            all_file_ids.update(int(fid.strip()) for fid in slabsmith.file_ids.split(",") if fid.strip())
+    
+    # Batch load files
+    files_by_id = {}
+    if all_file_ids:
+        files_query = select(File).where(File.id.in_(all_file_ids))
+        files_result = await db.execute(files_query)
+        for file in files_result.scalars().all():
+            filename = os.path.basename(file.file_path)
+            file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
+            files_by_id[file.id] = {
+                "id": file.id,
+                "name": file.name,
+                "file_url": file_url,
+                "file_type": file.file_type,
+                "file_size": file.file_size,
+                "created_at": file.created_at.isoformat() if file.created_at else None
+            }
+    
+    # Group by FAB (get latest only)
+    slabsmith_by_fab = {}
+    for row in rows:
+        slabsmith = row[0]
+        if slabsmith.fab_id not in slabsmith_by_fab:
+            files_data = []
+            if slabsmith.file_ids:
+                file_id_list = [int(fid.strip()) for fid in slabsmith.file_ids.split(",") if fid.strip()]
+                files_data = [files_by_id[fid] for fid in file_id_list if fid in files_by_id]
+            
+            slabsmith_by_fab[slabsmith.fab_id] = {
+                "id": slabsmith.id,
+                "fab_id": slabsmith.fab_id,
+                "slab_smith_type": slabsmith.slab_smith_type,
+                "drafter_id": slabsmith.drafter_id,
+                "start_date": slabsmith.start_date.isoformat() if slabsmith.start_date else None,
+                "end_date": slabsmith.end_date.isoformat() if slabsmith.end_date else None,
+                "total_sqft_completed": slabsmith.total_sqft_completed,
+                "file_ids": slabsmith.file_ids,
+                "files": files_data,
+                "status_id": slabsmith.status_id,
+                "created_at": slabsmith.created_at.isoformat() if slabsmith.created_at else None,
+                "updated_at": slabsmith.updated_at.isoformat() if slabsmith.updated_at else None,
+                "updated_by": slabsmith.updated_by,
+                "updated_by_name": f"{row[1]} {row[2]}" if row[1] else None
+            }
+    
+    return slabsmith_by_fab
+
 # Add these helper functions before the router endpoints
 
 async def get_draft_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
@@ -2249,6 +2324,71 @@ async def get_sales_ct_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
         "updated_by": sct.updated_by,
         "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
     }
+
+
+async def get_slabsmith_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
+    """Get the latest slabsmith data for a FAB"""
+    from src.app.database.slabsmith import SlabSmith
+    from src.app.database.file import File
+    from sqlalchemy.orm import aliased
+    
+    UpdaterUser = aliased(User)
+    
+    query = select(
+        SlabSmith,
+        UpdaterUser.first_name.label("updater_first_name"),
+        UpdaterUser.last_name.label("updater_last_name")
+    ).where(SlabSmith.fab_id == fab_id)\
+     .join(UpdaterUser, SlabSmith.updated_by == UpdaterUser.id, isouter=True)\
+     .order_by(SlabSmith.id.desc())\
+     .limit(1)
+    
+    result = await db.execute(query)
+    row = result.first()
+    
+    if not row:
+        return None
+    
+    slabsmith = row[0]
+    updater_first = row[1]
+    updater_last = row[2]
+    
+    # Get files if any
+    files_data = []
+    if slabsmith.file_ids:
+        file_id_list = [int(fid.strip()) for fid in slabsmith.file_ids.split(",") if fid.strip()]
+        if file_id_list:
+            files_query = select(File).where(File.id.in_(file_id_list))
+            files_result = await db.execute(files_query)
+            for file in files_result.scalars().all():
+                filename = os.path.basename(file.file_path)
+                file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
+                files_data.append({
+                    "id": file.id,
+                    "name": file.name,
+                    "file_url": file_url,
+                    "file_type": file.file_type,
+                    "file_size": file.file_size,
+                    "created_at": file.created_at.isoformat() if file.created_at else None
+                })
+    
+    return {
+        "id": slabsmith.id,
+        "fab_id": slabsmith.fab_id,
+        "slab_smith_type": slabsmith.slab_smith_type,
+        "drafter_id": slabsmith.drafter_id,
+        "start_date": slabsmith.start_date.isoformat() if slabsmith.start_date else None,
+        "end_date": slabsmith.end_date.isoformat() if slabsmith.end_date else None,
+        "total_sqft_completed": slabsmith.total_sqft_completed,
+        "file_ids": slabsmith.file_ids,
+        "files": files_data,
+        "status_id": slabsmith.status_id,
+        "created_at": slabsmith.created_at.isoformat() if slabsmith.created_at else None,
+        "updated_at": slabsmith.updated_at.isoformat() if slabsmith.updated_at else None,
+        "updated_by": slabsmith.updated_by,
+        "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
+    }
+
 
 from src.app.interface.generated_schemas import Revision
 
