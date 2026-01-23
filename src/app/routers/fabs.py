@@ -1728,15 +1728,16 @@ def _apply_pagination_and_ordering(query, skip: int, limit: int, current_stage: 
             Fab.created_at.asc()
         )
     elif current_stage == "sales_ct":
+        # Sort by draft_completed_date (oldest first, nulls last)
         return query.offset(skip).limit(limit).order_by(
-            Fab.draft_completed_date.asc().nullsfirst(),
+            Fab.draft_completed_date.asc().nullslast(),
             Fab.updated_at.asc().nullsfirst(),
             Fab.created_at.asc()
         )
     elif current_stage == "revision":
-        # NEW: Sort by sct_completed_date (oldest first)
+        # Sort by sct_completed_date (oldest first, nulls last)
         return query.offset(skip).limit(limit).order_by(
-            Fab.sct_completed_date.asc().nullsfirst(),
+            Fab.sct_completed_date.asc().nullslast(),
             Fab.updated_at.asc().nullsfirst(),
             Fab.created_at.asc()
         )
@@ -1751,6 +1752,7 @@ def _apply_pagination_and_ordering(query, skip: int, limit: int, current_stage: 
             Fab.updated_at.asc().nullsfirst(),
             Fab.created_at.asc()
         )
+    
 
 def _convert_fab_row_to_dict(row: tuple) -> dict:
     """Convert a fab query row to a dictionary with all related data."""
