@@ -302,7 +302,8 @@ async def get_fabs(
         job_id, fab_type, sales_person_id, status_id, current_stage, next_stage, 
         search, templating_fab_ids, latest_templating, shop_date_start, shop_date_end,
         template_completed_start, template_completed_end, predraft_completed_start, predraft_completed_end,
-        draft_completed_start, draft_completed_end, sct_completed_start, sct_completed_end  # NEW params
+        draft_completed_start, draft_completed_end, sct_completed_start, sct_completed_end,
+        date_filter  # Pass date_filter here
     )
     
     # Step 4: Apply pagination and ordering
@@ -317,12 +318,12 @@ async def get_fabs(
     # Step 6: Batch load related data
     await _batch_load_fab_related_data(db, fabs)
     
-    # Step 7: Get total count
+    # Step 7: Get total count with stage-specific date filtering
     count_query = select(func.count(Fab.id)).select_from(Fab)
     count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
     count_query = count_query.outerjoin(latest_templating, sa.literal(True))
     
-    # Apply all filters to count query
+    # Apply all basic filters to count query
     if job_id is not None:
         count_query = count_query.where(Fab.job_id == job_id)
     if fab_type:
@@ -336,31 +337,46 @@ async def get_fabs(
     if next_stage:
         count_query = count_query.where(Fab.next_stage == next_stage)
     
-    if shop_date_start:
-        count_query = count_query.where(Fab.shop_date_schedule >= shop_date_start)
-    if shop_date_end:
-        count_query = count_query.where(Fab.shop_date_schedule <= shop_date_end)
-    
-    if template_completed_start:
-        count_query = count_query.where(Fab.template_completed_date >= template_completed_start)
-    if template_completed_end:
-        count_query = count_query.where(Fab.template_completed_date <= template_completed_end)
-    
-    if predraft_completed_start:
-        count_query = count_query.where(Fab.predraft_completed_date >= predraft_completed_start)
-    if predraft_completed_end:
-        count_query = count_query.where(Fab.predraft_completed_date <= predraft_completed_end)
-    
-    if draft_completed_start:
-        count_query = count_query.where(Fab.draft_completed_date >= draft_completed_start)
-    if draft_completed_end:
-        count_query = count_query.where(Fab.draft_completed_date <= draft_completed_end)
-    
-    # NEW: Apply sct_completed_date filters to count
-    if sct_completed_start:
-        count_query = count_query.where(Fab.sct_completed_date >= sct_completed_start)
-    if sct_completed_end:
-        count_query = count_query.where(Fab.sct_completed_date <= sct_completed_end)
+    # Apply stage-specific date filtering to count
+    if current_stage:
+        if current_stage == "pre_draft_review":
+            date_start, date_end = template_completed_start, template_completed_end
+        elif current_stage == "drafting":
+            date_start, date_end = predraft_completed_start, predraft_completed_end
+        elif current_stage == "sales_ct":
+            date_start, date_end = draft_completed_start, draft_completed_end
+        elif current_stage == "revision":
+            date_start, date_end = sct_completed_start, sct_completed_end
+        elif current_stage == "cut_list":
+            date_start, date_end = shop_date_start, shop_date_end
+        else:
+            date_start, date_end = None, None
+        
+        count_query = _apply_stage_specific_date_filter(
+            count_query, current_stage, date_filter, date_start, date_end
+        )
+    else:
+        # Apply all date filters when no specific stage
+        if shop_date_start:
+            count_query = count_query.where(Fab.shop_date_schedule >= shop_date_start)
+        if shop_date_end:
+            count_query = count_query.where(Fab.shop_date_schedule <= shop_date_end)
+        if template_completed_start:
+            count_query = count_query.where(Fab.template_completed_date >= template_completed_start)
+        if template_completed_end:
+            count_query = count_query.where(Fab.template_completed_date <= template_completed_end)
+        if predraft_completed_start:
+            count_query = count_query.where(Fab.predraft_completed_date >= predraft_completed_start)
+        if predraft_completed_end:
+            count_query = count_query.where(Fab.predraft_completed_date <= predraft_completed_end)
+        if draft_completed_start:
+            count_query = count_query.where(Fab.draft_completed_date >= draft_completed_start)
+        if draft_completed_end:
+            count_query = count_query.where(Fab.draft_completed_date <= draft_completed_end)
+        if sct_completed_start:
+            count_query = count_query.where(Fab.sct_completed_date >= sct_completed_start)
+        if sct_completed_end:
+            count_query = count_query.where(Fab.sct_completed_date <= sct_completed_end)
     
     if search:
         search_term = f"%{search}%"
@@ -892,13 +908,13 @@ async def get_fabs_by_job(
         fab_dict["fab_notes"] = fab_notes
         
         # Fetch draft data
-        draft_data = await get_draft_data(db, fab_dict["id"])  # ← Add this if missing
-        fab_dict["draft_data"] = draft_data  # ← Add this if missing
+        draft_data = await get_draft_data(db, fab_dict["id"])
+        fab_dict["draft_data"] = draft_data
         
         # Fetch Sales CT data
        
-        sales_ct_data = await get_sales_ct_data(db, fab_dict["id"])  # ← Add this
-        fab_dict["sales_ct_data"] = sales_ct_data  # ← Add this
+        sales_ct_data = await get_sales_ct_data(db, fab_dict["id"])
+        fab_dict["sales_ct_data"] = sales_ct_data  # ← Add this if missing
     
     return success_response(fabs, f"Found {len(fabs)} FABs for job {job_id}")
 
@@ -1602,8 +1618,9 @@ def _build_fab_list_query(
     predraft_completed_end: Optional[date] = None,
     draft_completed_start: Optional[date] = None,
     draft_completed_end: Optional[date] = None,
-    sct_completed_start: Optional[date] = None,  # NEW
-    sct_completed_end: Optional[date] = None  # NEW
+    sct_completed_start: Optional[date] = None,
+    sct_completed_end: Optional[date] = None,
+    date_filter: Optional[str] = None  # NEW parameter
 ) -> select:
     """Build the main FAB list query with all joins."""
     from sqlalchemy.orm import aliased
@@ -1650,7 +1667,7 @@ def _build_fab_list_query(
     query = query.join(DrafterUser, Fab.drafter_id == DrafterUser.id, isouter=True)
     query = query.join(DrafterAssignedByUser, Fab.drafter_assigned_by == DrafterAssignedByUser.id, isouter=True)
     
-    # Apply filters
+    # Apply basic filters
     if job_id is not None:
         query = query.where(Fab.job_id == job_id)
     if fab_type:
@@ -1664,31 +1681,51 @@ def _build_fab_list_query(
     if next_stage:
         query = query.where(Fab.next_stage == next_stage)
     
-    if shop_date_start:
-        query = query.where(Fab.shop_date_schedule >= shop_date_start)
-    if shop_date_end:
-        query = query.where(Fab.shop_date_schedule <= shop_date_end)
-    
-    if template_completed_start:
-        query = query.where(Fab.template_completed_date >= template_completed_start)
-    if template_completed_end:
-        query = query.where(Fab.template_completed_date <= template_completed_end)
-    
-    if predraft_completed_start:
-        query = query.where(Fab.predraft_completed_date >= predraft_completed_start)
-    if predraft_completed_end:
-        query = query.where(Fab.predraft_completed_date <= predraft_completed_end)
-    
-    if draft_completed_start:
-        query = query.where(Fab.draft_completed_date >= draft_completed_start)
-    if draft_completed_end:
-        query = query.where(Fab.draft_completed_date <= draft_completed_end)
-    
-    # NEW: Apply sct_completed_date filters
-    if sct_completed_start:
-        query = query.where(Fab.sct_completed_date >= sct_completed_start)
-    if sct_completed_end:
-        query = query.where(Fab.sct_completed_date <= sct_completed_end)
+    # Apply stage-specific date filtering
+    if current_stage:
+        # Determine which date field to filter on based on stage
+        if current_stage == "templating":
+            # For templating, this is handled separately via templating_fab_ids
+            return query
+        elif current_stage == "pre_draft_review":
+            date_start, date_end = template_completed_start, template_completed_end
+        elif current_stage == "drafting":
+            date_start, date_end = predraft_completed_start, predraft_completed_end
+        elif current_stage == "sales_ct":
+            date_start, date_end = draft_completed_start, draft_completed_end
+        elif current_stage == "revision":
+            date_start, date_end = sct_completed_start, sct_completed_end
+        elif current_stage == "cut_list":
+            date_start, date_end = shop_date_start, shop_date_end
+        else:
+            date_start, date_end = None, None
+        
+        # Apply the stage-specific date filter
+        query = _apply_stage_specific_date_filter(
+            query, current_stage, date_filter, date_start, date_end
+        )
+    else:
+        # If no stage specified, apply all date filters generically
+        if shop_date_start:
+            query = query.where(Fab.shop_date_schedule >= shop_date_start)
+        if shop_date_end:
+            query = query.where(Fab.shop_date_schedule <= shop_date_end)
+        if template_completed_start:
+            query = query.where(Fab.template_completed_date >= template_completed_start)
+        if template_completed_end:
+            query = query.where(Fab.template_completed_date <= template_completed_end)
+        if predraft_completed_start:
+            query = query.where(Fab.predraft_completed_date >= predraft_completed_start)
+        if predraft_completed_end:
+            query = query.where(Fab.predraft_completed_date <= predraft_completed_end)
+        if draft_completed_start:
+            query = query.where(Fab.draft_completed_date >= draft_completed_start)
+        if draft_completed_end:
+            query = query.where(Fab.draft_completed_date <= draft_completed_end)
+        if sct_completed_start:
+            query = query.where(Fab.sct_completed_date >= sct_completed_start)
+        if sct_completed_end:
+            query = query.where(Fab.sct_completed_date <= sct_completed_end)
     
     if search:
         search_term = f"%{search}%"
@@ -1702,6 +1739,82 @@ def _build_fab_list_query(
     
     if templating_fab_ids is not None:
         query = query.where(Fab.id.in_(templating_fab_ids))
+    
+    return query
+
+
+def _apply_stage_specific_date_filter(
+    query,
+    current_stage: Optional[str],
+    date_filter: Optional[str],
+    date_start: Optional[date],
+    date_end: Optional[date]
+) -> select:
+    """
+    Apply stage-specific date filtering based on the stage's primary date field.
+    Supports both predefined filters (today, this_week, etc.) and custom date ranges.
+    """
+    if not current_stage:
+        return query
+    
+    # Determine which date field to filter on based on stage
+    date_field = None
+    
+    if current_stage == "templating":
+        # For templating, this is handled separately via templating_fab_ids
+        return query
+    elif current_stage == "pre_draft_review":
+        date_field = Fab.template_completed_date
+    elif current_stage == "drafting":
+        date_field = Fab.predraft_completed_date
+    elif current_stage == "sales_ct":
+        date_field = Fab.draft_completed_date
+    elif current_stage == "revision":
+        date_field = Fab.sct_completed_date
+    elif current_stage == "cut_list":
+        date_field = Fab.shop_date_schedule
+    else:
+        # For other stages, no specific date filtering
+        return query
+    
+    # Apply predefined date filter if provided
+    if date_filter and date_field is not None:
+        today = date.today()
+        
+        if date_filter == "today":
+            query = query.where(date_field == today)
+        elif date_filter == "this_week":
+            start = today - timedelta(days=today.weekday())
+            end = start + timedelta(days=6)
+            query = query.where(date_field.between(start, end))
+        elif date_filter == "last_week":
+            start = today - timedelta(days=today.weekday() + 7)
+            end = start + timedelta(days=6)
+            query = query.where(date_field.between(start, end))
+        elif date_filter == "this_month":
+            start = today.replace(day=1)
+            end = (start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+            query = query.where(date_field.between(start, end))
+        elif date_filter == "last_month":
+            first = today.replace(day=1)
+            last_month_end = first - timedelta(days=1)
+            last_month_start = last_month_end.replace(day=1)
+            query = query.where(date_field.between(last_month_start, last_month_end))
+        elif date_filter == "next_week":
+            start = today + timedelta(days=(7 - today.weekday()))
+            end = start + timedelta(days=6)
+            query = query.where(date_field.between(start, end))
+        elif date_filter == "next_month":
+            first_next = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
+            last_next = (first_next + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+            query = query.where(date_field.between(first_next, last_next))
+    
+    # Apply custom date range if provided (and no predefined filter)
+    elif date_field is not None:
+        if date_start:
+            query = query.where(date_field >= date_start)
+        if date_end:
+            query = query.where(date_field <= date_end)
     
     return query
 
@@ -2325,7 +2438,6 @@ async def get_sales_ct_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
         "updated_by": sct.updated_by,
         "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
     }
-
 
 
 async def get_slabsmith_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
