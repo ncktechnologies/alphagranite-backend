@@ -3,10 +3,13 @@ Business Job model for work orders and project tracking.
 This is separate from recruitment jobs in job.py
 """
 from datetime import datetime, date
-from typing import Optional
+from typing import Optional, TYPE_CHECKING, List
 from sqlmodel import SQLModel, Field, Column, Integer, String, Text, DateTime, Date, Numeric, func
 from decimal import Decimal
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, Mapped
+
+if TYPE_CHECKING:
+    from src.app.database.job_note import JobNote
 
 
 class BusinessJobBase(SQLModel):
@@ -47,5 +50,12 @@ class BusinessJob(BusinessJobBase, table=True):
     
     id: Optional[int] = Field(default=None, primary_key=True)
     
-    # Add relationship to notes
-    notes = relationship("JobNote", back_populates="job", cascade="all, delete-orphan")
+    # Add relationship to notes - use Mapped with init=False to exclude from Pydantic
+    notes: Mapped[List["JobNote"]] = relationship(
+        back_populates="job",
+        cascade="all, delete-orphan",
+        sa_relationship_kwargs={"lazy": "selectin"}
+    )
+    
+    class Config:
+        arbitrary_types_allowed = True
