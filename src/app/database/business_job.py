@@ -6,6 +6,7 @@ from datetime import datetime, date
 from typing import Optional
 from sqlmodel import SQLModel, Field, Column, Integer, String, Text, DateTime, Date, Numeric, func
 from decimal import Decimal
+from sqlalchemy.orm import relationship
 
 
 class BusinessJobBase(SQLModel):
@@ -45,3 +46,6 @@ class BusinessJob(BusinessJobBase, table=True):
     __tablename__ = "business_jobs"
     
     id: Optional[int] = Field(default=None, primary_key=True)
+    
+    # Add relationship to notes
+    notes = relationship("JobNote", back_populates="job", cascade="all, delete-orphan")

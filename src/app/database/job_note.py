@@ -12,6 +12,6 @@ class JobNote(Base):
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, default=utc_now, nullable=False)
     
-    # Relationships
+    # Relationships - use string references to avoid circular imports
     job = relationship("BusinessJob", back_populates="notes")
-    creator = relationship("User")
+    creator = relationship("User", foreign_keys=[created_by])
