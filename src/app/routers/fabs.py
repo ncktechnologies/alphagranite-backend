@@ -1479,7 +1479,6 @@ async def toggle_fab_hold(
     
     # Set status_id: 0 for on hold, 1 for active
     fab.status_id = 0 if on_hold else 1
-    fab.updated_at = datetime.now()
     fab.updated_by = current_user.id
     await db.commit()
     
