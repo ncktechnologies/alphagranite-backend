@@ -145,7 +145,7 @@ async def mark_slabsmith_completed(
     fab_result = await db.execute(select(Fab).where(Fab.id == slabsmith.fab_id))
     fab = fab_result.scalar_one_or_none()
     if fab:
-        fab.current_stage = "sales_check"
+        fab.current_stage = "sales_ct"
         fab.next_stage = "cut_list"  # Will be cut_list or revision based on review
         fab.updated_at = datetime.now()
         fab.updated_by = current_user.id
