@@ -605,6 +605,31 @@ async def get_job_details(
 
     job_dict["media_files"] = media_files
     job_dict["media_summary"] = media_summary
+    
+    # Get notes for this job
+    notes_query = select(
+        JobNote,
+        User.first_name.label("creator_first_name"),
+        User.last_name.label("creator_last_name")
+    ).where(JobNote.job_id == job_id).join(User, JobNote.created_by == User.id, isouter=True)
+    
+    notes_query = notes_query.order_by(JobNote.created_at.desc())
+    
+    notes_result = await db.execute(notes_query)
+    notes_rows = notes_result.all()
+    
+    notes = []
+    for row in notes_rows:
+        note = row[0]
+        notes.append({
+            "id": note.id,
+            "note": note.note,
+            "created_by": note.created_by,
+            "creator_name": f"{row[1]} {row[2]}" if row[1] else None,
+            "created_at": note.created_at.isoformat() if note.created_at else None
+        })
+    
+    job_dict["notes"] = notes
 
     return success_response(job_dict, f"Job details retrieved successfully")
 
