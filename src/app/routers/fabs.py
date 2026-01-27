@@ -2060,6 +2060,7 @@ async def _batch_load_sales_ct_data(db: AsyncSession, fab_ids: List[int]) -> dic
                 "no_of_revisions": sct.no_of_revisions,
                 "current_revision_count": sct.current_revision_count,
                 "revision_reason": sct.revision_reason,
+                "revision_type": sct.revision_type,
                 "file_ids": sct.file_ids,
                 "files": files_data,
                 "status_id": sct.status_id,
@@ -2316,6 +2317,7 @@ async def get_sales_ct_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
         "no_of_revisions": sct.no_of_revisions,
         "current_revision_count": sct.current_revision_count,
         "revision_reason": sct.revision_reason,
+        "revision_type": sct.revision_type,
         "file_ids": sct.file_ids,
         "files": files_data,
         "status_id": sct.status_id,
@@ -2324,6 +2326,7 @@ async def get_sales_ct_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
         "updated_by": sct.updated_by,
         "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
     }
+
 
 
 async def get_slabsmith_data(db: AsyncSession, fab_id: int) -> Optional[dict]:

@@ -28,6 +28,7 @@ from src.app.service.file import FileService
 from src.app.utils.config import get_settings
 from src.app.utils.helpers import call_service
 from src.app.utils.permissions import PermissionChecker
+from src.app.database.job_note import JobNote
 
 router = APIRouter()
 
@@ -82,24 +83,87 @@ async def get_jobs(
     status_id: Optional[int] = Query(None, description="Filter by status ID"),
     priority: Optional[str] = Query(None, description="Filter by priority"),
     need_to_invoice: Optional[bool] = Query(None, description="Filter by invoice flag (true/false)"),
-    is_invoiced: Optional[bool] = Query(None, description="Filter by invoiced status (true=invoiced, false=not invoiced)"),  # NEW
+    is_invoiced: Optional[bool] = Query(None, description="Filter by invoiced status (true=invoiced, false=not invoiced)"),
     search: Optional[str] = Query(None, description="Search by job name or job number"),
+    include_notes: bool = Query(False, description="Include job notes in response"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(PermissionChecker("jobs", "read"))
 ):
     """Get list of jobs with optional filtering"""
-    jobs = await job_crud.get_jobs(db, skip, limit, account_id, status_id, priority, need_to_invoice, search, is_invoiced)  # Pass new param
+    jobs = await job_crud.get_jobs(db, skip, limit, account_id, status_id, priority, need_to_invoice, search, is_invoiced)
+    
+    # If include_notes is True, fetch notes for each job
+    if include_notes:
+        job_ids = [job.id for job in jobs]
+        
+        # Fetch all notes for these jobs in one query
+        notes_query = select(
+            JobNote,
+            User.first_name.label("creator_first_name"),
+            User.last_name.label("creator_last_name")
+        ).where(JobNote.job_id.in_(job_ids)).join(User, JobNote.created_by == User.id, isouter=True)
+        
+        notes_query = notes_query.order_by(JobNote.job_id, JobNote.created_at.desc())
+        
+        notes_result = await db.execute(notes_query)
+        notes_rows = notes_result.all()
+        
+        # Group notes by job_id
+        notes_by_job = {}
+        for row in notes_rows:
+            note = row[0]
+            if note.job_id not in notes_by_job:
+                notes_by_job[note.job_id] = []
+            
+            notes_by_job[note.job_id].append({
+                "id": note.id,
+                "note": note.note,
+                "created_by": note.created_by,
+                "creator_name": f"{row[1]} {row[2]}" if row[1] else None,
+                "created_at": note.created_at.isoformat() if note.created_at else None
+            })
+        
+        # Attach notes to jobs
+        for job in jobs:
+            job.notes = notes_by_job.get(job.id, [])
+    
     return jobs
 
 
 @router.get("/jobs/{job_id}", response_model=JobResponse)
 async def get_job(
     job_id: int,
+    include_notes: bool = Query(True, description="Include job notes in response"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Get a specific job by ID"""
     job = await job_crud.get_job_by_id(db, job_id)
+    
+    # Fetch notes for this job
+    if include_notes:
+        notes_query = select(
+            JobNote,
+            User.first_name.label("creator_first_name"),
+            User.last_name.label("creator_last_name")
+        ).where(JobNote.job_id == job_id).join(User, JobNote.created_by == User.id, isouter=True)
+        
+        notes_query = notes_query.order_by(JobNote.created_at.desc())
+        
+        notes_result = await db.execute(notes_query)
+        notes_rows = notes_result.all()
+        
+        job.notes = []
+        for row in notes_rows:
+            note = row[0]
+            job.notes.append({
+                "id": note.id,
+                "note": note.note,
+                "created_by": note.created_by,
+                "creator_name": f"{row[1]} {row[2]}" if row[1] else None,
+                "created_at": note.created_at.isoformat() if note.created_at else None
+            })
+    
     return job
 
 
@@ -244,7 +308,7 @@ async def get_job_media(
             "name": file.name,
             "file_type": file.file_type,
             "file_size": file.file_size,
-            "file_url": file_url,  # This now points to the FastAPI endpoint
+            "file_url": file_url,
             "uploaded_by": file.uploaded_by,
             "uploader_name": f"{uploader_first} {uploader_last}" if uploader_first else None,
             "created_at": file.created_at.isoformat() if file.created_at else None
@@ -577,3 +641,88 @@ async def mark_job_invoiced(
     from src.app.service.job_crud import mark_job_invoiced as svc
     result = await svc(db, job_id, current_user.id, data.invoiced_at)
     return success_response(result, "Job marked as invoiced")
+
+
+class JobNoteRequest(BaseModel):
+    note: str = Field(..., description="Note content", min_length=1)
+
+@router.post("/jobs/{job_id}/notes")
+async def add_job_note(
+    job_id: int,
+    note_data: JobNoteRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Add a note to a job"""
+    # Verify job exists
+    job_result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
+    job = job_result.scalar_one_or_none()
+    
+    if not job:
+        return error_response("Job not found", 404)
+    
+    # Create new note
+    new_note = JobNote(
+        job_id=job_id,
+        note=note_data.note,
+        created_by=current_user.id,
+        created_at=utc_now()
+    )
+    
+    db.add(new_note)
+    await db.commit()
+    await db.refresh(new_note)
+    
+    return success_response(
+        {
+            "id": new_note.id,
+            "job_id": job_id,
+            "note": new_note.note,
+            "created_by": current_user.id,
+            "creator_name": f"{current_user.first_name} {current_user.last_name}",
+            "created_at": new_note.created_at.isoformat()
+        },
+        "Note added successfully"
+    )
+
+@router.get("/jobs/{job_id}/notes")
+async def get_job_notes(
+    job_id: int,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get all notes for a job"""
+    # Verify job exists
+    job_result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
+    if not job_result.scalar_one_or_none():
+        return error_response("Job not found", 404)
+    
+    # Get notes with creator info
+    query = select(
+        JobNote,
+        User.first_name.label("creator_first_name"),
+        User.last_name.label("creator_last_name")
+    ).where(JobNote.job_id == job_id).join(User, JobNote.created_by == User.id)
+    
+    query = query.order_by(JobNote.created_at.desc()).offset(skip).limit(limit)
+    
+    result = await db.execute(query)
+    rows = result.all()
+    
+    notes = []
+    for row in rows:
+        note = row[0]
+        notes.append({
+            "id": note.id,
+            "note": note.note,
+            "created_by": note.created_by,
+            "creator_name": f"{row[1]} {row[2]}",
+            "created_at": note.created_at.isoformat()
+        })
+    
+    return success_response(
+        {"notes": notes, "total": len(notes)},
+        f"Retrieved {len(notes)} note(s)"
+    )
