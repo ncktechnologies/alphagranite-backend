@@ -25,6 +25,13 @@ class JobUpdate(BaseModel):
     need_to_invoice: Optional[bool] = None
     sq_ft: Optional[float] = None
 
+class JobNoteResponse(BaseModel):
+    id: int
+    note: str
+    created_by: int
+    creator_name: Optional[str] = None
+    created_at: datetime
+    
 class JobResponse(BaseModel):
     id: int
     name: str
@@ -49,6 +56,10 @@ class JobResponse(BaseModel):
     updated_at: Optional[datetime] = None
     updated_by: Optional[int] = None
     need_to_invoice: Optional[bool] = None
+    notes: List[JobNoteResponse] = []  # Add this field
+
+    class Config:
+        from_attributes = True
 
 
 # Account Schemas
