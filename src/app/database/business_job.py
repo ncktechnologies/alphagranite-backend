@@ -3,12 +3,9 @@ Business Job model for work orders and project tracking.
 This is separate from recruitment jobs in job.py
 """
 from datetime import datetime, date
-from typing import Optional, TYPE_CHECKING, List
+from typing import Optional, List, TYPE_CHECKING
 from sqlmodel import SQLModel, Field, Column, Integer, String, Text, DateTime, Date, Numeric, func, Relationship
 from decimal import Decimal
-
-if TYPE_CHECKING:
-    from src.app.database.job_note import JobNote
 
 
 class BusinessJobBase(SQLModel):
@@ -48,9 +45,3 @@ class BusinessJob(BusinessJobBase, table=True):
     __tablename__ = "business_jobs"
     
     id: Optional[int] = Field(default=None, primary_key=True)
-    
-    # Add relationship to notes using SQLModel's Relationship
-    notes: List["JobNote"] = Relationship(
-        back_populates="job",
-        sa_relationship_kwargs={"cascade": "all, delete-orphan", "lazy": "selectin"}
-    )
