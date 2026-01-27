@@ -140,6 +140,10 @@ async def get_job(
     """Get a specific job by ID"""
     job = await job_crud.get_job_by_id(db, job_id)
     
+    # Convert to dict if it's not already
+    if not isinstance(job, dict):
+        job = job.__dict__
+    
     # Fetch notes for this job
     if include_notes:
         notes_query = select(
@@ -153,10 +157,10 @@ async def get_job(
         notes_result = await db.execute(notes_query)
         notes_rows = notes_result.all()
         
-        job.notes = []
+        job["notes"] = []
         for row in notes_rows:
             note = row[0]
-            job.notes.append({
+            job["notes"].append({
                 "id": note.id,
                 "note": note.note,
                 "created_by": note.created_by,
