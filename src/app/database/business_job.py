@@ -4,9 +4,8 @@ This is separate from recruitment jobs in job.py
 """
 from datetime import datetime, date
 from typing import Optional, TYPE_CHECKING, List
-from sqlmodel import SQLModel, Field, Column, Integer, String, Text, DateTime, Date, Numeric, func
+from sqlmodel import SQLModel, Field, Column, Integer, String, Text, DateTime, Date, Numeric, func, Relationship
 from decimal import Decimal
-from sqlalchemy.orm import relationship, Mapped
 
 if TYPE_CHECKING:
     from src.app.database.job_note import JobNote
@@ -50,12 +49,8 @@ class BusinessJob(BusinessJobBase, table=True):
     
     id: Optional[int] = Field(default=None, primary_key=True)
     
-    # Add relationship to notes - use Mapped with init=False to exclude from Pydantic
-    notes: Mapped[List["JobNote"]] = relationship(
+    # Add relationship to notes using SQLModel's Relationship
+    notes: List["JobNote"] = Relationship(
         back_populates="job",
-        cascade="all, delete-orphan",
-        sa_relationship_kwargs={"lazy": "selectin"}
+        sa_relationship_kwargs={"cascade": "all, delete-orphan", "lazy": "selectin"}
     )
-    
-    class Config:
-        arbitrary_types_allowed = True
