@@ -166,6 +166,9 @@ async def manage_drafting_session(
         if active_session.current_pause_start_time:
             pause_duration = int((timestamp - active_session.current_pause_start_time).total_seconds())
             active_session.total_pause_duration += pause_duration
+        else:
+            # Optionally log or handle the missing pause start time
+            pause_duration = 0  # or skip updating total_pause_duration
         
         active_session.status = "drafting"
         active_session.current_pause_start_time = None
