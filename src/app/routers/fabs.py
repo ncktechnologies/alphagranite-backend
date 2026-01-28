@@ -1767,7 +1767,7 @@ def _apply_stage_specific_date_filter(
     date_filter: Optional[str],
     date_start: Optional[date],
     date_end: Optional[date],
-    latest_templating=None  # Add this parameter!
+    latest_templating=None
 ) -> select:
     """
     Apply stage-specific date filtering based on the stage's primary date field.
@@ -1780,9 +1780,9 @@ def _apply_stage_specific_date_filter(
     date_field = None
 
     if current_stage == "templating":
-        # Use latest_templating lateral join for schedule_due_date
+        # Use latest_templating lateral join for schedule_start_date
         if latest_templating is not None:
-            date_field = latest_templating.c.schedule_due_date
+            date_field = latest_templating.c.schedule_start_date
         else:
             return query
     elif current_stage == "pre_draft_review":
