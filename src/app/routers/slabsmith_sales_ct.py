@@ -140,6 +140,7 @@ async def mark_slabsmith_completed(
     slabsmith.end_date = datetime.now()
     slabsmith.updated_at = datetime.now()
     slabsmith.updated_by = current_user.id
+    slabsmith_completed_date = datetime.now() 
     
     # Update fab stage to next step (sales check)
     fab_result = await db.execute(select(Fab).where(Fab.id == slabsmith.fab_id))
@@ -147,6 +148,7 @@ async def mark_slabsmith_completed(
     if fab:
         fab.current_stage = "sales_ct"
         fab.next_stage = "cut_list"  # Will be cut_list or revision based on review
+        fab.slabsmith_completed_date = datetime.now()  
         fab.updated_at = datetime.now()
         fab.updated_by = current_user.id
     

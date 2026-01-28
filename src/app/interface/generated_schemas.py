@@ -38,6 +38,7 @@ class SlabSmith(SQLModel, table=True):
     end_date: Optional[datetime] = Field(default=None)
     total_sqft_completed: Optional[str] = Field(default=None)
     is_completed: bool = Field(default=False)
+    slabsmith_completed_date: Optional[datetime] = Field(default=None)
     created_at: datetime = Field()
     updated_at: Optional[datetime] = Field(default=None)
     updated_by: Optional[int] = Field(default=None)
