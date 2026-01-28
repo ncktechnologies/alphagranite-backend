@@ -1720,7 +1720,7 @@ def _build_fab_list_query(
         
         # Apply the stage-specific date filter
         query = _apply_stage_specific_date_filter(
-            query, current_stage, date_filter, date_start, date_end
+            query, current_stage, date_filter, date_start, date_end, latest_templating
         )
     else:
         # If no stage specified, apply all date filters generically
@@ -1780,9 +1780,9 @@ def _apply_stage_specific_date_filter(
     date_field = None
 
     if current_stage == "templating":
-        # Use latest_templating lateral join for schedule_start_date
+        # Use latest_templating lateral join for schedule_due_date
         if latest_templating is not None:
-            date_field = latest_templating.c.schedule_start_date
+            date_field = latest_templating.c.schedule_due_date
         else:
             return query
     elif current_stage == "pre_draft_review":
