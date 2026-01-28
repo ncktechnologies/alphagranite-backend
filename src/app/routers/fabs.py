@@ -278,7 +278,12 @@ async def get_fabs(
     
     # Step 1: Apply templating filters to get FAB IDs
     templating_fab_ids = await _apply_templating_filters(
-        db, templater_id, schedule_start_date, schedule_due_date, schedule_status, date_filter
+        db,
+        templater_id,
+        schedule_start_date,
+        schedule_due_date,
+        schedule_status,
+        date_filter if current_stage == "templating" else None
     )
     
     if templating_fab_ids is not None and len(templating_fab_ids) == 0:
