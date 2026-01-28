@@ -127,7 +127,9 @@ async def manage_drafting_session(
         # Update time spent before pausing
         if active_session.current_pause_start_time is None:
             # Calculate time since last resume or start
-            active_session.total_time_spent += int((timestamp - active_session.session_start_time).total_seconds()) - active_session.total_pause_duration
+            naive_timestamp = strip_timezone(timestamp)
+            naive_start_time = strip_timezone(active_session.session_start_time)
+            active_session.total_time_spent += int((naive_timestamp - naive_start_time).total_seconds()) - active_session.total_pause_duration
         
         active_session.status = "paused"
         active_session.current_pause_start_time = strip_timezone(timestamp)
