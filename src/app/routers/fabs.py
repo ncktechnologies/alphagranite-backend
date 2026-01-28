@@ -1578,6 +1578,7 @@ def _apply_date_filter(query, date_filter: str):
         end = start + timedelta(days=6)
         return query.where(Templating.schedule_start_date.between(start, end))
     elif date_filter == "last_week":
+        # Start from last Monday
         start = today - timedelta(days=today.weekday() + 7)
         end = start + timedelta(days=6)
         return query.where(Templating.schedule_start_date.between(start, end))
@@ -1591,6 +1592,7 @@ def _apply_date_filter(query, date_filter: str):
         last_month_start = last_month_end.replace(day=1)
         return query.where(Templating.schedule_start_date.between(last_month_start, last_month_end))
     elif date_filter == "next_week":
+        # Next Monday
         start = today + timedelta(days=(7 - today.weekday()))
         end = start + timedelta(days=6)
         return query.where(Templating.schedule_start_date.between(start, end))
@@ -1763,7 +1765,6 @@ def _apply_stage_specific_date_filter(
     date_field = None
     
     if current_stage == "templating":
-        # For templating, this is handled separately via templating_fab_ids
         return query
     elif current_stage == "pre_draft_review":
         date_field = Fab.template_completed_date
@@ -1776,50 +1777,51 @@ def _apply_stage_specific_date_filter(
     elif current_stage == "cut_list":
         date_field = Fab.shop_date_schedule
     else:
-        # For other stages, no specific date filtering
         return query
+    
+    # Cast datetime to date for comparison
+    date_field_cast = sa.cast(date_field, sa.Date)
     
     # Apply predefined date filter if provided
     if date_filter and date_field is not None:
         today = date.today()
         
         if date_filter == "today":
-            query = query.where(date_field == today)
+            query = query.where(date_field_cast == today)
         elif date_filter == "this_week":
             start = today - timedelta(days=today.weekday())
             end = start + timedelta(days=6)
-            query = query.where(date_field.between(start, end))
+            query = query.where(date_field_cast.between(start, end))
         elif date_filter == "last_week":
             start = today - timedelta(days=today.weekday() + 7)
             end = start + timedelta(days=6)
-            query = query.where(date_field.between(start, end))
+            query = query.where(date_field_cast.between(start, end))
         elif date_filter == "this_month":
             start = today.replace(day=1)
             end = (start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
-            query = query.where(date_field.between(start, end))
+            query = query.where(date_field_cast.between(start, end))
         elif date_filter == "last_month":
             first = today.replace(day=1)
             last_month_end = first - timedelta(days=1)
             last_month_start = last_month_end.replace(day=1)
-            query = query.where(date_field.between(last_month_start, last_month_end))
+            query = query.where(date_field_cast.between(last_month_start, last_month_end))
         elif date_filter == "next_week":
             start = today + timedelta(days=(7 - today.weekday()))
             end = start + timedelta(days=6)
-            query = query.where(date_field.between(start, end))
+            query = query.where(date_field_cast.between(start, end))
         elif date_filter == "next_month":
             first_next = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
             last_next = (first_next + timedelta(days=32)).replace(day=1) - timedelta(days=1)
-            query = query.where(date_field.between(first_next, last_next))
+            query = query.where(date_field_cast.between(first_next, last_next))
     
     # Apply custom date range if provided (and no predefined filter)
     elif date_field is not None:
         if date_start:
-            query = query.where(date_field >= date_start)
+            query = query.where(date_field_cast >= date_start)
         if date_end:
-            query = query.where(date_field <= date_end)
+            query = query.where(date_field_cast <= date_end)
     
     return query
-
 
 def _apply_pagination_and_ordering(query, skip: int, limit: int, current_stage: Optional[str], latest_templating):
     """Apply pagination and stage-specific ordering."""
