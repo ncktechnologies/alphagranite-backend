@@ -130,7 +130,7 @@ async def manage_drafting_session(
             active_session.total_time_spent += int((timestamp - active_session.session_start_time).total_seconds()) - active_session.total_pause_duration
         
         active_session.status = "paused"
-        active_session.current_pause_start_time = timestamp
+        active_session.current_pause_start_time = strip_timezone(timestamp)
         active_session.updated_at = strip_timezone(utc_now())
         
         if session_data.sqft_drafted:
@@ -169,7 +169,7 @@ async def manage_drafting_session(
         
         # Calculate pause duration
         if active_session.current_pause_start_time:
-            pause_start = active_session.current_pause_start_time
+            pause_start = strip_timezone(active_session.current_pause_start_time)
             if pause_start.tzinfo is None:
                 pause_start = pause_start.replace(tzinfo=timezone.utc)
             if timestamp.tzinfo is None:
@@ -208,7 +208,7 @@ async def manage_drafting_session(
         
         # Similar to pause but with different status
         if active_session.current_pause_start_time is None and active_session.status == "drafting":
-            active_session.current_pause_start_time = timestamp
+            active_session.current_pause_start_time = strip_timezone(timestamp)
         
         active_session.status = "on_hold"
         active_session.updated_at = strip_timezone(utc_now())
@@ -247,10 +247,10 @@ async def manage_drafting_session(
         
         if active_session.current_pause_start_time:
             # Was paused, add pause duration
-            pause_duration = int((end_time - active_session.current_pause_start_time).total_seconds())
+            pause_duration = int((end_time - strip_timezone(active_session.current_pause_start_time)).total_seconds())
             active_session.total_pause_duration += pause_duration
         
-        total_elapsed = int((end_time - active_session.session_start_time).total_seconds())
+        total_elapsed = int((end_time - strip_timezone(active_session.session_start_time)).total_seconds())
         active_session.total_time_spent = total_elapsed - active_session.total_pause_duration
         
         active_session.status = "completed"
