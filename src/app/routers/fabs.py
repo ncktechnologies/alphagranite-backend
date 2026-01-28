@@ -1766,7 +1766,8 @@ def _apply_stage_specific_date_filter(
     current_stage: Optional[str],
     date_filter: Optional[str],
     date_start: Optional[date],
-    date_end: Optional[date]
+    date_end: Optional[date],
+    latest_templating=None  # Add this parameter!
 ) -> select:
     """
     Apply stage-specific date filtering based on the stage's primary date field.
@@ -1774,12 +1775,16 @@ def _apply_stage_specific_date_filter(
     """
     if not current_stage:
         return query
-    
+
     # Determine which date field to filter on based on stage
     date_field = None
-    
+
     if current_stage == "templating":
-        return query
+        # Use latest_templating lateral join for schedule_start_date
+        if latest_templating is not None:
+            date_field = latest_templating.c.schedule_start_date
+        else:
+            return query
     elif current_stage == "pre_draft_review":
         date_field = Fab.template_completed_date
     elif current_stage == "drafting":
@@ -1792,14 +1797,13 @@ def _apply_stage_specific_date_filter(
         date_field = Fab.shop_date_schedule
     else:
         return query
-    
-    # Cast datetime to date for comparison
+
     date_field_cast = sa.cast(date_field, sa.Date)
-    
+
     # Apply predefined date filter if provided
     if date_filter and date_field is not None:
         today = date.today()
-        
+
         if date_filter == "today":
             query = query.where(date_field_cast == today)
         elif date_filter == "this_week":
@@ -1827,14 +1831,14 @@ def _apply_stage_specific_date_filter(
             first_next = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
             last_next = (first_next + timedelta(days=32)).replace(day=1) - timedelta(days=1)
             query = query.where(date_field_cast.between(first_next, last_next))
-    
+
     # Apply custom date range if provided (and no predefined filter)
     elif date_field is not None:
         if date_start:
             query = query.where(date_field_cast >= date_start)
         if date_end:
             query = query.where(date_field_cast <= date_end)
-    
+
     return query
 
 def _apply_pagination_and_ordering(query, skip: int, limit: int, current_stage: Optional[str], latest_templating):
