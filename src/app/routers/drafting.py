@@ -63,7 +63,7 @@ async def manage_drafting_session(
         raise error_response("Drafter not found", 404)
     
     action = session_data.action.lower()
-    timestamp = session_data.timestamp or utc_now()
+    timestamp = session_data.timestamp or strip_timezone(utc_now())
     
     # Get active session for this fab
     active_session_result = await db.execute(
@@ -180,7 +180,7 @@ async def manage_drafting_session(
             pause_duration = 0
         active_session.status = "drafting"
         active_session.current_pause_start_time = None
-        active_session.updated_at = utc_now()
+        active_session.updated_at = strip_timezone(utc_now())
         
         session = active_session
         
@@ -211,7 +211,7 @@ async def manage_drafting_session(
             active_session.current_pause_start_time = timestamp
         
         active_session.status = "on_hold"
-        active_session.updated_at = utc_now()
+        active_session.updated_at = strip_timezone(utc_now())
         
         if session_data.sqft_drafted:
             active_session.cumulative_sqft_drafted = session_data.sqft_drafted
@@ -256,7 +256,7 @@ async def manage_drafting_session(
         active_session.status = "completed"
         active_session.session_end_time = end_time
         active_session.current_pause_start_time = None
-        active_session.updated_at = utc_now()
+        active_session.updated_at = strip_timezone(utc_now())
         
         if session_data.sqft_drafted:
             active_session.cumulative_sqft_drafted = session_data.sqft_drafted
@@ -274,7 +274,7 @@ async def manage_drafting_session(
             note=session_data.note,
             sqft_drafted=session_data.sqft_drafted,
             work_percentage_done=session_data.work_percentage_done,
-            created_at=utc_now()
+            created_at=strip_timezone(utc_now())
         )
         db.add(note)
         
