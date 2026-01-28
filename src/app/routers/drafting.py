@@ -102,7 +102,7 @@ async def manage_drafting_session(
             session_id=session.id,
             fab_id=fab_id,
             action="start",
-            timestamp=timestamp,
+            timestamp=strip_timezone(timestamp),
             note=session_data.note,
             sqft_drafted=session_data.sqft_drafted,
             work_percentage_done=session_data.work_percentage_done,
@@ -145,7 +145,7 @@ async def manage_drafting_session(
             session_id=session.id,
             fab_id=fab_id,
             action="pause",
-            timestamp=timestamp,
+            timestamp=strip_timezone(timestamp),
             note=session_data.note,
             sqft_drafted=session_data.sqft_drafted,
             work_percentage_done=session_data.work_percentage_done,
@@ -189,7 +189,7 @@ async def manage_drafting_session(
             session_id=session.id,
             fab_id=fab_id,
             action="resume",
-            timestamp=timestamp,
+            timestamp=strip_timezone(timestamp),
             note=session_data.note,
             sqft_drafted=session_data.sqft_drafted,
             work_percentage_done=session_data.work_percentage_done,
@@ -225,7 +225,7 @@ async def manage_drafting_session(
             session_id=session.id,
             fab_id=fab_id,
             action="on_hold",
-            timestamp=timestamp,
+            timestamp=strip_timezone(timestamp),
             note=session_data.note,
             sqft_drafted=session_data.sqft_drafted,
             work_percentage_done=session_data.work_percentage_done,
@@ -270,7 +270,7 @@ async def manage_drafting_session(
             session_id=session.id,
             fab_id=fab_id,
             action="end",
-            timestamp=timestamp,
+            timestamp=strip_timezone(timestamp),
             note=session_data.note,
             sqft_drafted=session_data.sqft_drafted,
             work_percentage_done=session_data.work_percentage_done,
@@ -311,7 +311,7 @@ async def manage_drafting_session(
         total_pause_duration=session.total_pause_duration,
         notes=[
             DraftingSessionNoteResponse(
-                timestamp=n.timestamp,
+                timestamp=strip_timezone(n.timestamp),
                 action=n.action,
                 note=n.note,
                 sqft_drafted=n.sqft_drafted,
@@ -376,7 +376,7 @@ async def get_current_drafting_session(
         total_pause_duration=session.total_pause_duration,
         notes=[
             DraftingSessionNoteResponse(
-                timestamp=n.timestamp,
+                timestamp=strip_timezone(n.timestamp),
                 action=n.action,
                 note=n.note,
                 sqft_drafted=n.sqft_drafted,
@@ -437,7 +437,7 @@ async def get_drafting_session_history(
                 total_pause_duration=session.total_pause_duration,
                 notes=[
                     DraftingSessionNoteResponse(
-                        timestamp=n.timestamp,
+                        timestamp=strip_timezone(n.timestamp),
                         action=n.action,
                         note=n.note,
                         sqft_drafted=n.sqft_drafted,
