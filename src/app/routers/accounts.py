@@ -68,7 +68,6 @@ async def create_account(
 @router.get("/accounts", response_model=SuccessResponse[List[AccountResponse]])
 async def get_accounts(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
-    limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
     status_id: Optional[int] = Query(None, description="Filter by status ID"),
     search: Optional[str] = Query(None, description="Search by name or account number"),
     db: AsyncSession = Depends(get_db),
@@ -79,7 +78,6 @@ async def get_accounts(
     query = select(Account)
     
     # Apply filters
-    # Use explicit None check so a provided 0 (invalid) won't be treated as "no filter".
     if status_id is not None:
         query = query.where(Account.status_id == status_id)
     
@@ -90,8 +88,8 @@ async def get_accounts(
             (Account.account_number.ilike(search_term))
         )
     
-    # Apply pagination
-    query = query.offset(skip).limit(limit).order_by(Account.name.asc())
+    # Apply pagination (skip only, no limit)
+    query = query.offset(skip).order_by(Account.name.asc())
     
     result = await db.execute(query)
     accounts = result.scalars().all()
