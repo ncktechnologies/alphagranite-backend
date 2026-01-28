@@ -89,7 +89,7 @@ async def manage_drafting_session(
             fab_id=fab_id,
             drafter_id=session_data.drafter_id,
             status="drafting",
-            session_start_time=session_data.session_start_time or timestamp,
+            session_start_time=strip_timezone(session_data.session_start_time) if session_data.session_start_time else strip_timezone(timestamp),
             cumulative_sqft_drafted=session_data.sqft_drafted or "0",
             work_percentage_done=session_data.work_percentage_done or 0,
             created_at=strip_timezone(utc_now())
