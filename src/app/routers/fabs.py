@@ -415,31 +415,40 @@ async def get_fabs(
             func.sum(Fab.no_of_pieces).label("no_of_pieces")
         ).select_from(Fab).where(Fab.current_stage == current_stage)
         
-        # Apply same filters
+        # Apply same basic filters
         if job_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.job_id == job_id)
-        if shop_date_start:
-            stage_totals_query = stage_totals_query.where(Fab.shop_date_schedule >= shop_date_start)
-        if shop_date_end:
-            stage_totals_query = stage_totals_query.where(Fab.shop_date_schedule <= shop_date_end)
-        if template_completed_start:
-            stage_totals_query = stage_totals_query.where(Fab.template_completed_date >= template_completed_start)
-        if template_completed_end:
-            stage_totals_query = stage_totals_query.where(Fab.template_completed_date <= template_completed_end)
-        if predraft_completed_start:
-            stage_totals_query = stage_totals_query.where(Fab.predraft_completed_date >= predraft_completed_start)
-        if predraft_completed_end:
-            stage_totals_query = stage_totals_query.where(Fab.predraft_completed_date <= predraft_completed_end)
-        if draft_completed_start:
-            stage_totals_query = stage_totals_query.where(Fab.draft_completed_date >= draft_completed_start)
-        if draft_completed_end:
-            stage_totals_query = stage_totals_query.where(Fab.draft_completed_date <= draft_completed_end)
-        if sct_completed_start:
-            stage_totals_query = stage_totals_query.where(Fab.sct_completed_date >= sct_completed_start)
-        if sct_completed_end:
-            stage_totals_query = stage_totals_query.where(Fab.sct_completed_date <= sct_completed_end)
+        if fab_type:
+            stage_totals_query = stage_totals_query.where(Fab.fab_type.ilike(f"%{fab_type}%"))
+        if sales_person_id is not None:
+            stage_totals_query = stage_totals_query.where(Fab.sales_person_id == sales_person_id)
+        if status_id is not None:
+            stage_totals_query = stage_totals_query.where(Fab.status_id == status_id)
+        
+        # Apply stage-specific date filters (same as count_query)
+        if current_stage == "pre_draft_review":
+            date_start, date_end = template_completed_start, template_completed_end
+        elif current_stage == "templating":
+            date_start, date_end = schedule_start_date, schedule_due_date
+        elif current_stage == "drafting":
+            date_start, date_end = predraft_completed_start, predraft_completed_end
+        elif current_stage == "sales_ct":
+            date_start, date_end = draft_completed_start, draft_completed_end
+        elif current_stage == "revision":
+            date_start, date_end = sct_completed_start, sct_completed_end
+        elif current_stage == "cut_list":
+            date_start, date_end = shop_date_start, shop_date_end
+        else:
+            date_start, date_end = None, None
+        
+        # Apply the same stage-specific date filter
+        stage_totals_query = _apply_stage_specific_date_filter(
+            stage_totals_query, current_stage, date_filter, date_start, date_end
+        )
+        
         if search:
             search_term = f"%{search}%"
+            stage_totals_query = stage_totals_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
             stage_totals_query = stage_totals_query.where(
                 or_(
                     sa.cast(Fab.id, sa.String).ilike(search_term),
