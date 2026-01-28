@@ -34,6 +34,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def strip_timezone(dt: datetime) -> datetime:
+    if dt is not None and dt.tzinfo is not None:
+        return dt.replace(tzinfo=None)
+    return dt
+
 # ============ DRAFTING SESSION ENDPOINTS ============
 
 @router.post("/drafting/{fab_id}/session", response_model=SuccessResponse[DraftingSessionResponse])
@@ -87,7 +92,7 @@ async def manage_drafting_session(
             session_start_time=session_data.session_start_time or timestamp,
             cumulative_sqft_drafted=session_data.sqft_drafted or "0",
             work_percentage_done=session_data.work_percentage_done or 0,
-            created_at=utc_now()
+            created_at=strip_timezone(utc_now())
         )
         db.add(session)
         await db.flush()
@@ -101,7 +106,7 @@ async def manage_drafting_session(
             note=session_data.note,
             sqft_drafted=session_data.sqft_drafted,
             work_percentage_done=session_data.work_percentage_done,
-            created_at=utc_now()
+            created_at=strip_timezone(utc_now())
         )
         db.add(note)
         
@@ -126,7 +131,7 @@ async def manage_drafting_session(
         
         active_session.status = "paused"
         active_session.current_pause_start_time = timestamp
-        active_session.updated_at = utc_now()
+        active_session.updated_at = strip_timezone(utc_now())
         
         if session_data.sqft_drafted:
             active_session.cumulative_sqft_drafted = session_data.sqft_drafted
@@ -144,7 +149,7 @@ async def manage_drafting_session(
             note=session_data.note,
             sqft_drafted=session_data.sqft_drafted,
             work_percentage_done=session_data.work_percentage_done,
-            created_at=utc_now()
+            created_at=strip_timezone(utc_now())
         )
         db.add(note)
         
@@ -188,7 +193,7 @@ async def manage_drafting_session(
             note=session_data.note,
             sqft_drafted=session_data.sqft_drafted,
             work_percentage_done=session_data.work_percentage_done,
-            created_at=utc_now()
+            created_at=strip_timezone(utc_now())
         )
         db.add(note)
         
@@ -224,7 +229,7 @@ async def manage_drafting_session(
             note=session_data.note,
             sqft_drafted=session_data.sqft_drafted,
             work_percentage_done=session_data.work_percentage_done,
-            created_at=utc_now()
+            created_at=strip_timezone(utc_now())
         )
         db.add(note)
         
