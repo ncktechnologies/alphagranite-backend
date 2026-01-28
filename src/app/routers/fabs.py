@@ -341,6 +341,8 @@ async def get_fabs(
     if current_stage:
         if current_stage == "pre_draft_review":
             date_start, date_end = template_completed_start, template_completed_end
+        elif current_stage == "templating":
+            date_start, date_end = schedule_start_date, schedule_due_date
         elif current_stage == "drafting":
             date_start, date_end = predraft_completed_start, predraft_completed_end
         elif current_stage == "sales_ct":
