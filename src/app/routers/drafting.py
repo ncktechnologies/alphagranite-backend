@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends, Form, File, UploadFile, HTTPException, status
 from sqlalchemy import select
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from src.app.database import get_db
 from src.app.database.user import User
@@ -164,12 +164,15 @@ async def manage_drafting_session(
         
         # Calculate pause duration
         if active_session.current_pause_start_time:
-            pause_duration = int((timestamp - active_session.current_pause_start_time).total_seconds())
+            pause_start = active_session.current_pause_start_time
+            if pause_start.tzinfo is None:
+                pause_start = pause_start.replace(tzinfo=timezone.utc)
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+            pause_duration = int((timestamp - pause_start).total_seconds())
             active_session.total_pause_duration += pause_duration
         else:
-            # Optionally log or handle the missing pause start time
-            pause_duration = 0  # or skip updating total_pause_duration
-        
+            pause_duration = 0
         active_session.status = "drafting"
         active_session.current_pause_start_time = None
         active_session.updated_at = utc_now()
