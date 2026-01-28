@@ -1701,9 +1701,14 @@ def _build_fab_list_query(
     
     # Apply stage-specific date filtering
     if current_stage:
-        # Determine which date field to filter on based on stage
         if current_stage == "templating":
-            # For templating, this is handled separately via templating_fab_ids
+            # Apply date filter to latest_templating.c.schedule_start_date
+            query = _apply_stage_specific_date_filter(
+                query, current_stage, date_filter, shop_date_start, shop_date_end, latest_templating
+            )
+            # Also filter by templating_fab_ids if present
+            if templating_fab_ids is not None:
+                query = query.where(Fab.id.in_(templating_fab_ids))
             return query
         elif current_stage == "pre_draft_review":
             date_start, date_end = template_completed_start, template_completed_end
@@ -1780,7 +1785,6 @@ def _apply_stage_specific_date_filter(
     date_field = None
 
     if current_stage == "templating":
-        # Use latest_templating lateral join for schedule_start_date
         if latest_templating is not None:
             date_field = latest_templating.c.schedule_start_date
         else:
