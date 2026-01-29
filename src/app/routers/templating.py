@@ -198,7 +198,7 @@ async def update_templating(
     if not templating:
         raise error_response("Templating not found", 404)
     
-    # Update fields - explicitly handle all fields including total_sqft
+    # Update fields - explicitly handle all fields including total_sqft and is_completed
     for field, value in update_data.model_dump(exclude_unset=True).items():
         if hasattr(templating, field):  # Only set if field exists on model
             # Convert total_sqft to string if it's a float/int (database expects VARCHAR)

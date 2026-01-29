@@ -30,7 +30,8 @@ class Fab(SQLModel, table=True):
     slab_smith_ag_needed: bool = Field(default=True)
     sct_needed: bool = Field(default=True)
     final_programming_needed: bool = Field(default=True)
-    
+    slabsmith_time_minutes: Optional[int] = Field(default=None)
+
     # Drafter assignment
     drafter_id: Optional[int] = Field(default=None, foreign_key="users.id")
     drafter_assigned_by: Optional[int] = Field(default=None, foreign_key="users.id")

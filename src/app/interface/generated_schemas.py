@@ -20,7 +20,7 @@ class Templating(SQLModel, table=True):
     duration: Optional[int] = Field(default=None)
     notes: Optional[List[str]] = Field(default=None, sa_column=Column(JSONB))
     is_templating_schedule: bool = Field(default=False)
-    is_completed: bool = Field(default=False)
+    is_completed: Optional[bool] = Field(default=None)  
     status_id: int = Field()
     created_at: datetime = Field()
     updated_at: Optional[datetime] = Field(default=None)

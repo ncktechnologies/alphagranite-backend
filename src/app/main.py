@@ -38,6 +38,7 @@ from src.app.routers import stone_colors
 from src.app.routers import stone_thickness
 from src.app.routers import templating
 from src.app.routers import drafting  
+from src.app.routers import slabsmith
 from src.app.routers import slabsmith_sales_ct
 from src.app.routers import sales_ct
 from src.app.routers import cut_list
@@ -186,6 +187,7 @@ app.include_router(fab_notes.router, prefix="/api/v1", tags=["FAB Notes"])
 # Workflow routers (templating, drafting, etc.)
 app.include_router(templating.router, prefix="/api/v1", tags=["Templating"])
 app.include_router(drafting.router, prefix="/api/v1", tags=["Drafting"])
+app.include_router(slabsmith.router, prefix="/api/v1")
 app.include_router(slabsmith_sales_ct.router, prefix="/api/v1", tags=["SlabSmith & Sales CT"])
 app.include_router(sales_ct.router, prefix="/api/v1", tags=["SalesCT"])
 app.include_router(cut_list.router, prefix="/api/v1", tags=["Cut List"])

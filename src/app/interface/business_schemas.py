@@ -400,6 +400,7 @@ class TemplatingScheduleUpdate(BaseModel):
     duration: Optional[float] = None
     is_templating_schedule: Optional[bool] = None
     status_id: Optional[int] = None
+    is_completed: Optional[bool] = None
 
     class Config:
         from_attributes = True
@@ -1126,6 +1127,12 @@ class FinalProgrammingComplete(BaseModel):
     drafter_id: Optional[int] = Field(None, gt=0, description="Assigned programmer ID")
     wj_time_minutes: Optional[int] = Field(None, gt=0, description="Waterjet time in minutes")
 
+
+# SlabSmith Session Schemas
+class SlabSmithSessionUpdate(BaseModel):
+    """Schema for SlabSmith session actions (start, pause, resume, end)"""
+    action: str = Field(..., description="Action: 'start', 'pause', 'resume', or 'end'")
+    notes: Optional[str] = Field(None, description="Session notes")
 
 # Drafting Session Schemas
 class DraftingSessionAction(BaseModel):
