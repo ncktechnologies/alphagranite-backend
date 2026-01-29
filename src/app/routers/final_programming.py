@@ -376,14 +376,14 @@ async def get_session_status(
     
     session = programming_sessions[session_key]
     
-    # Calculate current duration
+    # Calculate current duration in seconds (but keep variable name for backward compatibility)
     current_time = datetime.now()
     if session["status"] == "active":
-        duration_minutes = (current_time - session["start_time"]).total_seconds() / 60
-        duration_minutes -= session["total_paused_minutes"]
+        duration_minutes = (current_time - session["start_time"]).total_seconds()
+        duration_minutes -= (session["total_paused_minutes"] * 60)
     else:  # paused
-        duration_minutes = (session["paused_at"] - session["start_time"]).total_seconds() / 60
-        duration_minutes -= session["total_paused_minutes"]
+        duration_minutes = (session["paused_at"] - session["start_time"]).total_seconds()
+        duration_minutes -= (session["total_paused_minutes"] * 60)
     
     return {
         "success": True,
