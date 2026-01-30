@@ -639,6 +639,22 @@ async def get_fab(
     draft_data = await get_draft_data(db, fab_id)
     fab_dict["draft_data"] = draft_data
     
+    # Fetch Sales CT data
+    sales_ct_data = await get_sales_ct_data(db, fab_id)
+    fab_dict["sales_ct_data"] = sales_ct_data
+    
+    # Fetch SlabSmith data
+    slabsmith_data = await get_slabsmith_data(db, fab_id)
+    fab_dict["slabsmith_data"] = slabsmith_data
+    
+    # Fetch latest revision
+    revisions = await _batch_load_latest_revisions(db, [fab_id])
+    fab_dict["latest_revision"] = revisions.get(fab_id)
+    
+    # Fetch drafting session
+    sessions = await _batch_load_drafting_sessions(db, [fab_id])
+    fab_dict["drafting_session"] = sessions.get(fab_id)
+    
     # Add stage completion status and stage-specific data
     stage_info = await get_stage_completion_data(db, fab_id, fab_dict.get("current_stage"))
     fab_dict["is_complete"] = stage_info["is_complete"]
