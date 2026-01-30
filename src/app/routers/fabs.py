@@ -2484,7 +2484,7 @@ async def get_sales_ct_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
 
 async def get_slabsmith_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
     """Get the latest slabsmith data for a FAB"""
-    from src.app.database.slabsmith import SlabSmith
+    from src.app.database.slab_smith import SlabSmith
     from src.app.database.file import File
     from sqlalchemy.orm import aliased
     
