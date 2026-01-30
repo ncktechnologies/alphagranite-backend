@@ -262,6 +262,7 @@ async def add_files_to_final_programming(
             file_path=str(file_path),
             file_type=file.content_type,
             file_size=str(len(contents)),
+            stage="final_programming",
             created_at=datetime.now(),
             updated_at=datetime.now()
         )
@@ -516,6 +517,7 @@ async def add_files_to_slabsmith(
             file_path=str(file_path),
             file_type=file.content_type,
             file_size=str(len(contents)),
+            stage="slabsmith",
             created_at=datetime.now(),
             updated_at=datetime.now()
         )
@@ -592,6 +594,7 @@ async def delete_file_from_slabsmith(
 async def add_files_to_drafting(
     drafting_id: int, 
     files: List[UploadFile] = FastAPIFile(...), 
+    stage: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db)
 ):
     """Upload files to drafting, save to disk and database"""
@@ -602,6 +605,9 @@ async def add_files_to_drafting(
     
     if not drafting:
         raise error_response("Drafting not found", 404)
+
+    if stage is not None and stage not in {"drafting", "revision"}:
+        raise error_response("Invalid stage. Must be 'drafting' or 'revision'", 400)
     
     uploaded_file_ids = []
     uploaded_files_info = []
@@ -622,10 +628,11 @@ async def add_files_to_drafting(
         
         # Create database record matching the actual files table schema
         file_record = File(
-            name=file.filename,                      # ← Changed from filename
+            name=file.filename,
             file_path=str(file_path),
-            file_type=file.content_type,             # ← Changed from mime_type
-            file_size=str(len(contents)),            # ← Convert to string
+            file_type=file.content_type,
+            file_size=str(len(contents)),
+            stage=stage,
             created_at=datetime.now(),
             updated_at=datetime.now()
         )
@@ -735,10 +742,10 @@ async def get_file_info(file_id: int, db: AsyncSession = Depends(get_db)):
     
     return success_response({
         "id": file_record.id,
-        "filename": file_record.name,              # ← Changed from filename
+        "filename": file_record.name,
         "file_url": file_url,
         "file_size": file_record.file_size,
-        "file_type": file_record.file_type,        # ← Changed from mime_type
+        "file_type": file_record.file_type,
         "created_at": file_record.created_at.isoformat() if file_record.created_at else None,
         "updated_at": file_record.updated_at.isoformat() if file_record.updated_at else None
     }, "File info retrieved successfully")
