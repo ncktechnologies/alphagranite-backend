@@ -15,7 +15,7 @@ from src.app.database.drafting import Drafting
 from src.app.database.file import File  # ← Add this import
 from src.app.interface.generated_schemas import (
     JobTechnicianWorkflow, FinalProgramming, CutList,
-    WorkStation, SalesCT, SlabSmith,
+     SalesCT, SlabSmith,
 )
 from src.app.service.drafting import DraftingService
 from src.app.service.templating import TemplatingService
