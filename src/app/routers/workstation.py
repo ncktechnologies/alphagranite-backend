@@ -4,7 +4,7 @@ from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends, HTTPException, status, Form
 from src.app.database import get_db
-from src.app.database.workstation import WorkStation
+from src.app.database.work_station import WorkStation
 from src.app.database.user import User
 from src.app.database.status import Status
 from src.app.interface.response_wrappers import SuccessResponse
