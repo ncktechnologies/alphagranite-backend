@@ -51,6 +51,7 @@ from src.app.routers import cost_of_stone
 from src.app.routers import install_scheduling
 from src.app.routers import install_completion  
 from src.app.routers import public_files
+from src.app.routers import shop_cut_plan
 
 # Import logging configuration
 from src.app.utils.logger import setup_logging
@@ -215,5 +216,6 @@ app.include_router(
     prefix="/api/v1", 
     tags=["public"]
 )
+app.include_router(shop_cut_plan.router, prefix="/api/v1")
 
 

@@ -1201,3 +1201,38 @@ class FabTypeResponse(BaseModel):
 
     class Config:
         from_attributes = True  # Enables SQLModel -> Pydantic conversion
+
+
+
+# Shop Cut Plan Schemas
+class ShopCutPlanStageCreate(BaseModel):
+    """Schema for a stage in shop cut plan creation"""
+    stage_name: str = Field(..., description="Stage name: cut, edging, etc.")
+    workstation_id: int = Field(..., description="Workstation ID")
+    operator_ids: List[int] = Field(..., description="List of operator user IDs")
+    estimated_hours: float = Field(..., gt=0, description="Estimated hours for this stage")
+    scheduled_start: datetime = Field(..., description="Scheduled start datetime")
+
+
+class ShopCutPlanCreate(BaseModel):
+    """Schema for creating shop cut plans"""
+    fab_id: int = Field(..., description="FAB ID")
+    total_estimated_hours: float = Field(..., gt=0, description="Total estimated hours")
+    stages: List[ShopCutPlanStageCreate] = Field(..., description="List of stages")
+
+
+class ShopCutPlanResponse(BaseModel):
+    """Schema for shop cut plan response"""
+    id: int
+    fab_id: int
+    workstation_id: int
+    operator_id: int
+    estimated_hours: float
+    scheduled_start_date: str
+    actual_start_date: Optional[str] = None
+    actual_end_date: Optional[str] = None
+    work_percentage: int
+    cut_type: str
+    notes: Optional[str] = None
+    created_at: str
+    updated_at: Optional[str] = None
