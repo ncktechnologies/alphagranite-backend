@@ -3,7 +3,7 @@ from typing import Optional
 from sqlmodel import SQLModel, Field
 
 
-class WorkStation(SQLModel, table=True):
+class WorkStation(SQLModel, table=True, extend_existing=True):
     __tablename__ = "work_stations"
 
     id: Optional[int] = Field(default=None, primary_key=True)
