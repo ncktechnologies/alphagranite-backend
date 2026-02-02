@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from src.app.database import get_db
@@ -47,12 +47,17 @@ async def create_shop_plans(
     # Create a shop cut plan for each stage
     for stage in plan_data.stages:
         for operator_id in stage.operator_ids:
+            # Remove timezone from scheduled_start if present
+            scheduled_start = stage.scheduled_start
+            if scheduled_start.tzinfo is not None:
+                scheduled_start = scheduled_start.replace(tzinfo=None)
+            
             plan = ShopCutPlan(
                 fab_id=plan_data.fab_id,
                 workstation_id=stage.workstation_id,
                 user_id=operator_id,
                 estimated_hours=stage.estimated_hours,
-                scheduled_start_date=stage.scheduled_start,
+                scheduled_start_date=scheduled_start,
                 cut_type=stage.stage_name.lower(),  # "cut", "edging", etc.
                 work_percentage=0,
                 created_by=current_user.id,
