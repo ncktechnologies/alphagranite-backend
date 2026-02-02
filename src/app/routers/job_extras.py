@@ -778,30 +778,30 @@ def submit_draft_for_review(
     )
     return success_response(result, "Draft submitted for review successfully")
 
-@router.post("/workstation", operation_id="create_workstation_job_extras")
-def create_workstation(
-    planning_section_id: int = Form(...),
-    workstation_name: str = Form(...),
-    status: str = Form(...),
-    assigned_operatives: str = Form(...),
-    machines: str = Form(...),
-    machine_statuses: str = Form(...),
-    db: Session = Depends(get_db),
-    created_by: int = 1
-):
-    existing = db.exec(select(WorkStation).where(WorkStation.workstation_name == workstation_name)).first()
-    if existing:
-        raise error_response("Workstation name must be unique", 400)
-    ws = WorkStation(
-        planning_section_id=planning_section_id,
-        workstation_name=workstation_name,
-        status=status,
-        assigned_operatives=assigned_operatives,
-        machines=machines,
-        machine_statuses=machine_statuses,
-        created_by=created_by
-    )
-    db.add(ws)
-    db.commit()
-    db.refresh(ws)
-    return success_response(ws, "Workstation created successfully")
+# @router.post("/workstation", operation_id="create_workstation_job_extras")
+# def create_workstation(
+#     planning_section_id: int = Form(...),
+#     workstation_name: str = Form(...),
+#     status: str = Form(...),
+#     assigned_operatives: str = Form(...),
+#     machines: str = Form(...),
+#     machine_statuses: str = Form(...),
+#     db: Session = Depends(get_db),
+#     created_by: int = 1
+# ):
+#     existing = db.exec(select(WorkStation).where(WorkStation.workstation_name == workstation_name)).first()
+#     if existing:
+#         raise error_response("Workstation name must be unique", 400)
+#     ws = WorkStation(
+#         planning_section_id=planning_section_id,
+#         workstation_name=workstation_name,
+#         status=status,
+#         assigned_operatives=assigned_operatives,
+#         machines=machines,
+#         machine_statuses=machine_statuses,
+#         created_by=created_by
+#     )
+#     db.add(ws)
+#     db.commit()
+#     db.refresh(ws)
+#     return success_response(ws, "Workstation created successfully")
