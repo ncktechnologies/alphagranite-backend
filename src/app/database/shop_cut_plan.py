@@ -8,7 +8,7 @@ class ShopCutPlan(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     fab_id: int = Field(foreign_key="fabs.id")
-    workstation_id: int = Field(foreign_key="workstations.id")
+    workstation_id: int = Field(foreign_key="work_stations.id")  # Changed from "workstations" to "work_stations"
     user_id: int = Field(foreign_key="users.id")
     estimated_hours: float = Field(gt=0, description="Estimated hours to complete")
     scheduled_start_date: datetime = Field(description="Scheduled start date")
