@@ -17,6 +17,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.utils.helpers import error_response, success_response
+from src.app.database.work_station import WorkStation
 
 router = APIRouter(
     prefix="/shop",
@@ -32,76 +33,132 @@ async def create_shop_plans(
 ):
     """Create shop cut plans with multiple stages for a FAB"""
     
-    # Verify FAB exists
-    result = await db.execute(select(Fab).where(Fab.id == plan_data.fab_id))
-    fab = result.scalar_one_or_none()
-    
-    if not fab:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"FAB with ID {plan_data.fab_id} not found"
-        )
-    
-    created_plans = []
-    
-    # Create a shop cut plan for each stage
-    for stage in plan_data.stages:
-        for operator_id in stage.operator_ids:
-            # Remove timezone from scheduled_start if present
-            scheduled_start = stage.scheduled_start
-            if scheduled_start.tzinfo is not None:
-                scheduled_start = scheduled_start.replace(tzinfo=None)
-            
-            plan = ShopCutPlan(
-                fab_id=plan_data.fab_id,
-                workstation_id=stage.workstation_id,
-                user_id=operator_id,
-                estimated_hours=stage.estimated_hours,
-                scheduled_start_date=scheduled_start,
-                cut_type=stage.stage_name.lower(),  # "cut", "edging", etc.
-                work_percentage=0,
-                created_by=current_user.id,
-                created_at=datetime.now()
+    try:
+        # Verify FAB exists
+        result = await db.execute(select(Fab).where(Fab.id == plan_data.fab_id))
+        fab = result.scalar_one_or_none()
+        
+        if not fab:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"FAB with ID {plan_data.fab_id} not found"
             )
-            db.add(plan)
-            created_plans.append(plan)
-    
-    # Add shop note
-    shop_note = ShopNotes(
-        fab_id=plan_data.fab_id,
-        note=f"Shop cut plan created with {len(plan_data.stages)} stage(s). Total estimated hours: {plan_data.total_estimated_hours}",
-        created_by=current_user.id,
-        created_at=datetime.now()
-    )
-    db.add(shop_note)
-    
-    await db.commit()
-    
-    # Refresh all plans to get IDs
-    for plan in created_plans:
-        await db.refresh(plan)
-    
-    return {
-        "success": True,
-        "message": f"Shop plans created successfully with {len(created_plans)} plan(s)",
-        "data": {
-            "fab_id": plan_data.fab_id,
-            "total_estimated_hours": plan_data.total_estimated_hours,
-            "plans_created": len(created_plans),
-            "plans": [
-                {
-                    "id": plan.id,
-                    "stage_name": plan.cut_type,
-                    "workstation_id": plan.workstation_id,
-                    "operator_id": plan.user_id,
-                    "estimated_hours": plan.estimated_hours,
-                    "scheduled_start_date": plan.scheduled_start_date.isoformat(),
-                    "work_percentage": plan.work_percentage
-                }
-                for plan in created_plans
-            ]
+        
+        # Validate that stages exist
+        if not plan_data.stages or len(plan_data.stages) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one stage is required"
+            )
+        
+        created_plans = []
+        
+        # Create a shop cut plan for each stage
+        for stage in plan_data.stages:
+            # Validate workstation exists
+            ws_result = await db.execute(
+                select(WorkStation).where(WorkStation.id == stage.workstation_id)
+            )
+            workstation = ws_result.scalar_one_or_none()
+            
+            if not workstation:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Workstation with ID {stage.workstation_id} not found"
+                )
+            
+            # Validate operators exist
+            if not stage.operator_ids or len(stage.operator_ids) == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"At least one operator is required for stage '{stage.stage_name}'"
+                )
+            
+            for operator_id in stage.operator_ids:
+                # Verify operator exists
+                user_result = await db.execute(
+                    select(User).where(User.id == operator_id)
+                )
+                user = user_result.scalar_one_or_none()
+                
+                if not user:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Operator with ID {operator_id} not found"
+                    )
+                
+                # Remove timezone from scheduled_start if present
+                scheduled_start = stage.scheduled_start
+                if scheduled_start.tzinfo is not None:
+                    scheduled_start = scheduled_start.replace(tzinfo=None)
+                
+                # Validate estimated hours
+                if stage.estimated_hours <= 0:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Estimated hours must be greater than 0"
+                    )
+                
+                plan = ShopCutPlan(
+                    fab_id=plan_data.fab_id,
+                    workstation_id=stage.workstation_id,
+                    user_id=operator_id,
+                    estimated_hours=stage.estimated_hours,
+                    scheduled_start_date=scheduled_start,
+                    cut_type=stage.stage_name.lower(),
+                    work_percentage=0,
+                    created_by=current_user.id,
+                    created_at=datetime.now()
+                )
+                db.add(plan)
+                created_plans.append(plan)
+        
+        # Add shop note
+        shop_note = ShopNotes(
+            fab_id=plan_data.fab_id,
+            note=f"Shop cut plan created with {len(plan_data.stages)} stage(s). Total estimated hours: {plan_data.total_estimated_hours}",
+            created_by=current_user.id,
+            created_at=datetime.now()
+        )
+        db.add(shop_note)
+        
+        await db.commit()
+        
+        # Refresh all plans to get IDs
+        for plan in created_plans:
+            await db.refresh(plan)
+        
+        return {
+            "success": True,
+            "message": f"Shop plans created successfully with {len(created_plans)} plan(s)",
+            "data": {
+                "fab_id": plan_data.fab_id,
+                "total_estimated_hours": plan_data.total_estimated_hours,
+                "plans_created": len(created_plans),
+                "plans": [
+                    {
+                        "id": plan.id,
+                        "stage_name": plan.cut_type,
+                        "workstation_id": plan.workstation_id,
+                        "operator_id": plan.user_id,
+                        "estimated_hours": plan.estimated_hours,
+                        "scheduled_start_date": plan.scheduled_start_date.isoformat(),
+                        "work_percentage": plan.work_percentage
+                    }
+                    for plan in created_plans
+                ]
+            }
         }
-    }
+    
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create shop plans: {str(e)}"
+        )
 
 
 @router.get("/plans", response_model=dict)
