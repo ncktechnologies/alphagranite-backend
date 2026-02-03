@@ -1654,7 +1654,7 @@ def _build_fab_list_query(
     draft_completed_end: Optional[date] = None,
     sct_completed_start: Optional[date] = None,
     sct_completed_end: Optional[date] = None,
-    date_filter: Optional[str] = None  # NEW parameter
+    date_filter: Optional[str] = None
 ) -> select:
     """Build the main FAB list query with all joins."""
     from sqlalchemy.orm import aliased
@@ -1715,6 +1715,18 @@ def _build_fab_list_query(
     if next_stage:
         query = query.where(Fab.next_stage == next_stage)
     
+
+    if search:
+        search_term = f"%{search}%"
+        query = query.where(
+            or_(
+                sa.cast(Fab.id, sa.String).ilike(search_term),
+                BusinessJob.name.ilike(search_term),
+                BusinessJob.job_number.ilike(search_term)
+            )
+        )
+
+
     # Apply stage-specific date filtering
     if current_stage:
         if current_stage == "templating":
@@ -1766,15 +1778,6 @@ def _build_fab_list_query(
         if sct_completed_end:
             query = query.where(Fab.sct_completed_date <= sct_completed_end)
     
-    if search:
-        search_term = f"%{search}%"
-        query = query.where(
-            or_(
-                sa.cast(Fab.id, sa.String).ilike(search_term),
-                BusinessJob.name.ilike(search_term),
-                BusinessJob.job_number.ilike(search_term)
-            )
-        )
     
     if templating_fab_ids is not None:
         query = query.where(Fab.id.in_(templating_fab_ids))
