@@ -105,7 +105,7 @@ async def create_shop_plans(
                     user_id=operator_id,
                     estimated_hours=stage.estimated_hours,
                     scheduled_start_date=scheduled_start,
-                    cut_type=stage.stage_name.lower(),
+                    cut_type=stage.cut_type.lower(),  # Changed from stage.stage_name
                     work_percentage=0,
                     created_by=current_user.id,
                     created_at=datetime.now()
@@ -267,51 +267,97 @@ async def get_shop_plan(
 @router.put("/plans/{plan_id}", response_model=dict)
 async def update_shop_plan(
     plan_id: int,
-    update_data: dict,
+    update_data: ShopCutPlanStageCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Update a shop cut plan"""
+    """Update a shop cut plan with stage details"""
     
-    result = await db.execute(select(ShopCutPlan).where(ShopCutPlan.id == plan_id))
-    plan = result.scalar_one_or_none()
-    
-    if not plan:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Shop plan with ID {plan_id} not found"
+    try:
+        # Get the plan
+        result = await db.execute(select(ShopCutPlan).where(ShopCutPlan.id == plan_id))
+        plan = result.scalar_one_or_none()
+        
+        if not plan:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Shop plan with ID {plan_id} not found"
+            )
+        
+        # Validate workstation exists
+        ws_result = await db.execute(
+            select(WorkStation).where(WorkStation.id == update_data.workstation_id)
         )
-    
-    # Update fields
-    if "estimated_hours" in update_data:
-        plan.estimated_hours = update_data["estimated_hours"]
-    if "actual_start_date" in update_data:
-        plan.actual_start_date = update_data["actual_start_date"]
-    if "actual_end_date" in update_data:
-        plan.actual_end_date = update_data["actual_end_date"]
-    if "work_percentage" in update_data:
-        plan.work_percentage = update_data["work_percentage"]
-    if "notes" in update_data:
-        plan.notes = update_data["notes"]
-    
-    plan.updated_at = datetime.now()
-    plan.updated_by = current_user.id
-    
-    await db.commit()
-    await db.refresh(plan)
-    
-    return {
-        "success": True,
-        "message": "Shop plan updated successfully",
-        "data": {
-            "id": plan.id,
-            "fab_id": plan.fab_id,
-            "work_percentage": plan.work_percentage,
-            "actual_start_date": plan.actual_start_date.isoformat() if plan.actual_start_date else None,
-            "actual_end_date": plan.actual_end_date.isoformat() if plan.actual_end_date else None,
-            "updated_at": plan.updated_at.isoformat()
+        workstation = ws_result.scalar_one_or_none()
+        
+        if not workstation:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Workstation with ID {update_data.workstation_id} not found"
+            )
+        
+        # Validate operator exists
+        user_result = await db.execute(
+            select(User).where(User.id == update_data.operator_ids[0])
+        )
+        user = user_result.scalar_one_or_none()
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Operator with ID {update_data.operator_ids[0]} not found"
+            )
+        
+        # Validate estimated hours
+        if update_data.estimated_hours <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Estimated hours must be greater than 0"
+            )
+        
+        # Remove timezone from scheduled_start if present
+        scheduled_start = update_data.scheduled_start
+        if scheduled_start.tzinfo is not None:
+            scheduled_start = scheduled_start.replace(tzinfo=None)
+        
+        # Update plan fields
+        plan.workstation_id = update_data.workstation_id
+        plan.user_id = update_data.operator_ids[0]
+        plan.estimated_hours = update_data.estimated_hours
+        plan.scheduled_start_date = scheduled_start
+        plan.cut_type = update_data.cut_type.lower()
+        plan.updated_at = datetime.now()
+        plan.updated_by = current_user.id
+        
+        await db.commit()
+        await db.refresh(plan)
+        
+        return {
+            "success": True,
+            "message": "Shop plan updated successfully",
+            "data": {
+                "id": plan.id,
+                "fab_id": plan.fab_id,
+                "cut_type": plan.cut_type,
+                "workstation_id": plan.workstation_id,
+                "operator_id": plan.user_id,
+                "estimated_hours": plan.estimated_hours,
+                "scheduled_start_date": plan.scheduled_start_date.isoformat(),
+                "work_percentage": plan.work_percentage,
+                "updated_at": plan.updated_at.isoformat(),
+                "updated_by": plan.updated_by
+            }
         }
-    }
+    
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update shop plan: {str(e)}"
+        )
 
 
 @router.delete("/plans/{plan_id}", response_model=dict)
@@ -322,25 +368,35 @@ async def delete_shop_plan(
 ):
     """Delete a shop cut plan"""
     
-    result = await db.execute(select(ShopCutPlan).where(ShopCutPlan.id == plan_id))
-    plan = result.scalar_one_or_none()
-    
-    if not plan:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Shop plan with ID {plan_id} not found"
-        )
-    
-    fab_id = plan.fab_id
-    await db.delete(plan)
-    
-    await db.commit()
-    
-    return {
-        "success": True,
-        "message": "Shop plan deleted successfully",
-        "data": {
-            "deleted_plan_id": plan_id,
-            "fab_id": fab_id
+    try:
+        result = await db.execute(select(ShopCutPlan).where(ShopCutPlan.id == plan_id))
+        plan = result.scalar_one_or_none()
+        
+        if not plan:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Shop plan with ID {plan_id} not found"
+            )
+        
+        fab_id = plan.fab_id
+        await db.delete(plan)
+        await db.commit()
+        
+        return {
+            "success": True,
+            "message": "Shop plan deleted successfully",
+            "data": {
+                "deleted_plan_id": plan_id,
+                "fab_id": fab_id
+            }
         }
-    }
+    
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete shop plan: {str(e)}"
+        )

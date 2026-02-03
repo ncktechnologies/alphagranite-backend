@@ -1204,10 +1204,9 @@ class FabTypeResponse(BaseModel):
 
 
 
-# Shop Cut Plan Schemas
 class ShopCutPlanStageCreate(BaseModel):
     """Schema for a stage in shop cut plan creation"""
-    stage_name: str = Field(..., description="Stage name: cut, edging, etc.")
+    cut_type: str = Field(..., description="Cut type: cut_plan, wj_plan, edging, cnc, etc.")
     workstation_id: int = Field(..., description="Workstation ID")
     operator_ids: List[int] = Field(..., description="List of operator user IDs")
     estimated_hours: float = Field(..., gt=0, description="Estimated hours for this stage")
@@ -1218,6 +1217,7 @@ class ShopCutPlanCreate(BaseModel):
     """Schema for creating shop cut plans"""
     fab_id: int = Field(..., description="FAB ID")
     total_estimated_hours: float = Field(..., gt=0, description="Total estimated hours")
+    notes: Optional[str] = Field(None, description="Additional notes")
     stages: List[ShopCutPlanStageCreate] = Field(..., description="List of stages")
 
 
@@ -1236,3 +1236,6 @@ class ShopCutPlanResponse(BaseModel):
     notes: Optional[str] = None
     created_at: str
     updated_at: Optional[str] = None
+
+    class Config:
+        from_attributes = True
