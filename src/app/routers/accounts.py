@@ -16,6 +16,7 @@ from src.app.utils.permissions import PermissionChecker
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import error_response, success_response
+from sqlalchemy.exc import IntegrityError
 
 
 router = APIRouter()
@@ -29,38 +30,48 @@ async def create_account(
 ):
     """Create a new account"""
     
+    # Normalize empty strings to None
+    normalized = account_data.model_dump()
+    for key in ["account_number", "description", "contact_person", "email", "phone", "address"]:
+        if isinstance(normalized.get(key), str) and normalized[key].strip() == "":
+            normalized[key] = None
+    
     # Check if account name already exists
-    name_check = await db.execute(select(Account).where(Account.name == account_data.name))
+    name_check = await db.execute(select(Account).where(Account.name == normalized["name"]))
     if name_check.scalar_one_or_none():
         raise error_response("Account name already exists", 400)
     
     # Check if account number already exists (if provided)
-    if account_data.account_number:
-        number_check = await db.execute(select(Account).where(Account.account_number == account_data.account_number))
+    if normalized.get("account_number"):
+        number_check = await db.execute(select(Account).where(Account.account_number == normalized["account_number"]))
         if number_check.scalar_one_or_none():
             raise error_response("Account number already exists", 400)
     
-    # Create account
-    account = Account(
-        name=account_data.name,
-        account_number=account_data.account_number,
-        description=account_data.description,
-        contact_person=account_data.contact_person,
-        email=account_data.email,
-        phone=account_data.phone,
-        address=account_data.address,
-        status_id=1,  # Active status
-        created_by=current_user.id,
-        created_at=datetime.now()
-    )
+    try:
+        account = Account(
+            name=normalized["name"],
+            account_number=normalized.get("account_number"),
+            description=normalized.get("description"),
+            contact_person=normalized.get("contact_person"),
+            email=normalized.get("email"),
+            phone=normalized.get("phone"),
+            address=normalized.get("address"),
+            status_id=1,
+            created_by=current_user.id,
+            created_at=datetime.now()
+        )
+        
+        db.add(account)
+        await db.commit()
+        await db.refresh(account)
     
-    db.add(account)
-    await db.commit()
-    await db.refresh(account)
+    except IntegrityError:
+        await db.rollback()
+        raise error_response("Missing required fields or invalid values", 422)
     
     # Add total_jobs count (new account has 0 jobs)
     account_dict = account.__dict__.copy()
-    account_dict['total_jobs'] = 0
+    account_dict["total_jobs"] = 0
     
     return success_response(account_dict, "Account created successfully")
 
