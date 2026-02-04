@@ -251,6 +251,7 @@ async def get_cut_list_details(
             "confirmed_date": fab.confirmed_date.isoformat() if fab.confirmed_date else None,
             "slab_smith_used": fab.slab_smith_used,
             "fp_not_needed": fab.fp_not_needed,
+            "revision_complete": not fab.revised,  # NEW: Add revision_complete field
             "wj_linft": fab.wj_linft,
             "edging_linft": fab.edging_linft,
             "cnc_linft": fab.cnc_linft,
