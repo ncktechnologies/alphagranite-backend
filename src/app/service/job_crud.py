@@ -41,12 +41,20 @@ async def create_job(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     
+    # Check if job name already exists (NEW)
+    name_check = await db.execute(
+        select(BusinessJob).where(BusinessJob.name == job_data.name)
+    )
+    if name_check.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail=f"Job name '{job_data.name}' already exists")
+    
     # Check if job number already exists
     job_check = await db.execute(
         select(BusinessJob).where(BusinessJob.job_number == job_data.job_number)
     )
     if job_check.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Job number already exists")
+        raise HTTPException(status_code=409, detail="Job number already exists")
+    
     
     # Create job - use model_dump and only set fields that exist in JobCreate
     job_dict = job_data.model_dump(exclude_unset=True)
@@ -307,13 +315,21 @@ async def update_job(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
+    # Check job name uniqueness if being updated (NEW)
+    if job_data.name and job_data.name != job.name:
+        name_check = await db.execute(
+            select(BusinessJob).where(BusinessJob.name == job_data.name)
+        )
+        if name_check.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail=f"Job name '{job_data.name}' already exists")
+    
     # Check job number uniqueness if being updated
     if job_data.job_number and job_data.job_number != job.job_number:
         job_check = await db.execute(
             select(BusinessJob).where(BusinessJob.job_number == job_data.job_number)
         )
         if job_check.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="Job number already exists")
+            raise HTTPException(status_code=409, detail="Job number already exists")
     
     # Update fields
     update_data = job_data.model_dump(exclude_unset=True)

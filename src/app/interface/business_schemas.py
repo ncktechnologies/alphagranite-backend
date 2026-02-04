@@ -426,6 +426,7 @@ class TemplatingResponse(BaseModel):
     duration: Optional[float] = None
     notes: Optional[List[str]] = None
     is_templating_schedule: Optional[bool] = None
+    rescheduled: bool = False  # NEW
     is_completed: Optional[bool] = None
     status_id: Optional[int] = None
     status_name: Optional[str] = None
@@ -1093,11 +1094,12 @@ class CutListScheduleUpdate(BaseModel):
 
 
 class CutListUpdate(BaseModel):
-    """Schema for updating cut list information"""
-    slab_smith_used: Optional[bool] = Field(None, description="Mark if slab smith was used")
-    fp_not_needed: Optional[bool] = Field(None, description="Mark if final programming not needed")
+    """Schema for updating cut list"""
+    slab_smith_used: Optional[bool] = Field(None, description="Whether slab smith was used")
+    fp_not_needed: Optional[bool] = Field(None, description="Whether final programming is not needed")
     shop_date_schedule: Optional[datetime] = Field(None, description="Scheduled shop date")
-    notes: Optional[str] = Field(None, description="Cut list notes")
+    revision_complete: Optional[bool] = Field(None, description="Whether revision is complete")
+    notes: Optional[str] = Field(None, description="Additional notes")
 
 
 # Final Programming Schemas

@@ -111,53 +111,70 @@ async def update_cut_list(
     """
     Production Coordinator: Update cut list information
     """
-    # Get FAB
-    result = await db.execute(select(Fab).where(Fab.id == fab_id))
-    fab = result.scalar_one_or_none()
-    
-    if not fab:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"FAB with ID {fab_id} not found"
-        )
-    
-    # Update fields if provided
-    if update_data.slab_smith_used is not None:
-        fab.slab_smith_used = update_data.slab_smith_used
-    
-    if update_data.fp_not_needed is not None:
-        fab.fp_not_needed = update_data.fp_not_needed
-    
-    if update_data.shop_date_schedule:
-        fab.shop_date_schedule = update_data.shop_date_schedule
-    
-    fab.updated_at = datetime.now()
-    fab.updated_by = current_user.id
-    
-    # Add notes if provided
-    if update_data.notes:
-        fab_note = FabNotes(
-            fab_id=fab_id,
-            note=update_data.notes,
-            stage="cut_list",
-            created_by=current_user.id,
-            created_at=datetime.now()
-        )
-        db.add(fab_note)
-    
-    await db.commit()
-    await db.refresh(fab)
-    
-    return {
-        "success": True,
-        "message": "Cut list updated successfully",
-        "data": {
-            "fab_id": fab.id,
-            "slab_smith_used": fab.slab_smith_used,
-            "fp_not_needed": fab.fp_not_needed,
-            "shop_date_schedule": fab.shop_date_schedule.isoformat() if fab.shop_date_schedule else None
+    try:
+        # Get FAB
+        result = await db.execute(select(Fab).where(Fab.id == fab_id))
+        fab = result.scalar_one_or_none()
+        
+        if not fab:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"FAB with ID {fab_id} not found"
+            )
+        
+        # Update fields if provided
+        if update_data.slab_smith_used is not None:
+            fab.slab_smith_used = update_data.slab_smith_used
+        
+        if update_data.fp_not_needed is not None:
+            fab.fp_not_needed = update_data.fp_not_needed
+        
+        if update_data.shop_date_schedule:
+            fab.shop_date_schedule = update_data.shop_date_schedule
+        
+        # Handle revision_complete
+        if update_data.revision_complete is not None:
+            fab.revised = not update_data.revision_complete  # If revision complete, mark revised as False
+        
+        fab.updated_at = datetime.now()
+        fab.updated_by = current_user.id
+        
+        # Add notes if provided
+        if update_data.notes:
+            fab_note = FabNotes(
+                fab_id=fab_id,
+                note=update_data.notes,
+                stage="cut_list",
+                created_by=current_user.id,
+                created_at=datetime.now()
+            )
+            db.add(fab_note)
+        
+        await db.commit()
+        await db.refresh(fab)
+        
+        return {
+            "success": True,
+            "message": "Cut list updated successfully",
+            "data": {
+                "fab_id": fab.id,
+                "slab_smith_used": fab.slab_smith_used,
+                "fp_not_needed": fab.fp_not_needed,
+                "shop_date_schedule": fab.shop_date_schedule.isoformat() if fab.shop_date_schedule else None,
+                "revision_complete": not fab.revised,
+                "updated_at": fab.updated_at.isoformat()
+            }
         }
-    }
+    
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update cut list: {str(e)}"
+        )
 
 
 @router.get("/{fab_id}", response_model=dict)

@@ -71,8 +71,41 @@ async def create_job(
     current_user: User = Depends(PermissionChecker("jobs", "create"))
 ):
     """Create a new job with job name, job number, and account_id"""
-    job = await job_crud.create_job(db, job_data, current_user.id)
-    return job
+    
+    try:
+        # Check if job name already exists
+        name_check = await db.execute(
+            select(BusinessJob).where(BusinessJob.name == job_data.name)
+        )
+        if name_check.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Job name '{job_data.name}' already exists"
+            )
+        
+        # Check if job number already exists (if provided)
+        if job_data.job_number:
+            number_check = await db.execute(
+                select(BusinessJob).where(BusinessJob.job_number == job_data.job_number)
+            )
+            if number_check.scalar_one_or_none():
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Job number '{job_data.job_number}' already exists"
+                )
+        
+        job = await job_crud.create_job(db, job_data, current_user.id)
+        return job
+    
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create job: {str(e)}"
+        )
 
 
 @router.get("/jobs", response_model=List[JobResponse])
