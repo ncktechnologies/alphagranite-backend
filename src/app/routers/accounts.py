@@ -269,6 +269,7 @@ async def get_account_jobs(
             "name": job.name,
             "job_number": job.job_number,
             "account_id": job.account_id,
+            "sales_person_id": job.sales_person_id,  # NEW
             "account_name": row[1] if job.account_id else None,
             "account_number": row[2] if job.account_id else None,
             "account_contact_person": row[3] if job.account_id else None,
