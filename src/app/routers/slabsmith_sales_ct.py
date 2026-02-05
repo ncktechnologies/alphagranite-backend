@@ -458,3 +458,24 @@ async def get_all_sales_ct(
         [serialize_datetime_fields(sct) for sct in sales_cts],
         "Sales CT entries fetched successfully"
     )
+
+@router.get("/stages/slabsmith/pending", response_model=SuccessResponse[List[int]])
+async def get_pending_slabsmith_fab_ids(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get FAB IDs where:
+    - current_stage is sales_ct (SCT)
+    - slabsmith_ag_needed is true
+    - slabsmith_completed_date is null
+    """
+    result = await db.execute(
+        select(Fab.id)
+        .where(Fab.current_stage == "sales_ct")
+        .where(Fab.slabsmith_ag_needed.is_(True))
+        .where(Fab.slabsmith_completed_date.is_(None))
+        .order_by(Fab.id.asc())
+    )
+    fab_ids = [row[0] for row in result.all()]
+    return success_response(fab_ids, "Pending Slabsmith FABs fetched successfully")
