@@ -75,10 +75,8 @@ async def manage_drafting_session(
     active_session = active_session_result.scalar_one_or_none()
     
     if action == "start":
-        # Allow starting a new session if:
-        # 1. No active session exists, OR
-        # 2. This is a revision session (is_revision = True)
-        if active_session and not session_data.is_revision:
+        is_revision = getattr(session_data, "is_revision", False)
+        if active_session and not is_revision:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="An active session already exists for this fab. Complete it first or mark as revision."

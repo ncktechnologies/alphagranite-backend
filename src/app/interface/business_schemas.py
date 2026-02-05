@@ -1147,6 +1147,7 @@ class DraftingSessionAction(BaseModel):
     sqft_drafted: Optional[str] = None
     work_percentage_done: Optional[float] = None
     note: Optional[str] = None
+    is_revision: Optional[bool] = False
     
     @field_validator('timestamp', 'session_start_time', 'session_end_time', mode='before')
     @classmethod
