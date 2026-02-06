@@ -481,7 +481,7 @@ async def get_pending_slabsmith_fab_ids(
         .select_from(Fab)
         .join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
         .where(Fab.current_stage == "sales_ct")
-        .where(Fab.slabsmith_ag_needed.is_(True))
+        .where(Fab.slab_smith_ag_needed.is_(True))
         .where(Fab.slabsmith_completed_date.is_(None))
     )
 
