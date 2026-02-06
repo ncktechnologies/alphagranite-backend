@@ -1212,6 +1212,7 @@ class FabTypeResponse(BaseModel):
 class ShopCutPlanStageCreate(BaseModel):
     """Schema for a stage in shop cut plan creation"""
     cut_type: str = Field(..., description="Cut type: saw, waterjet.")
+    stage_name: str = Field(..., description="Stage name, e.g., cut_plan, wj_plan, edging, cnc")
     workstation_id: int = Field(..., description="Workstation ID")
     operator_ids: List[int] = Field(..., description="List of operator user IDs")
     estimated_hours: float = Field(..., gt=0, description="Estimated hours for this stage")
@@ -1238,6 +1239,7 @@ class ShopCutPlanResponse(BaseModel):
     actual_end_date: Optional[str] = None
     work_percentage: int
     cut_type: str
+    stage_name: str
     notes: Optional[str] = None
     created_at: str
     updated_at: Optional[str] = None

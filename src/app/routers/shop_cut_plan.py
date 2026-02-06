@@ -105,7 +105,8 @@ async def create_shop_plans(
                     user_id=operator_id,
                     estimated_hours=stage.estimated_hours,
                     scheduled_start_date=scheduled_start,
-                    cut_type=stage.cut_type.lower(),  # Changed from stage.stage_name
+                    cut_type=stage.cut_type.lower(),
+                    stage_name=stage.stage_name,
                     work_percentage=0,
                     created_by=current_user.id,
                     created_at=datetime.now()
@@ -138,7 +139,8 @@ async def create_shop_plans(
                 "plans": [
                     {
                         "id": plan.id,
-                        "stage_name": plan.cut_type,
+                        "cut_type": plan.cut_type,
+                        "stage_name": plan.stage_name,
                         "workstation_id": plan.workstation_id,
                         "operator_id": plan.user_id,
                         "estimated_hours": plan.estimated_hours,
@@ -167,6 +169,7 @@ async def get_all_shop_plans(
     workstation_id: Optional[int] = None,
     operator_id: Optional[int] = None,
     cut_type: Optional[str] = None,
+    stage_name: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
@@ -184,6 +187,8 @@ async def get_all_shop_plans(
         query = query.where(ShopCutPlan.user_id == operator_id)
     if cut_type:
         query = query.where(ShopCutPlan.cut_type == cut_type.lower())
+    if stage_name:
+        query = query.where(ShopCutPlan.stage_name == stage_name)
     
     # Get total count
     count_result = await db.execute(select(func.count(ShopCutPlan.id)).select_from(ShopCutPlan))
@@ -214,6 +219,7 @@ async def get_all_shop_plans(
                     "actual_end_date": plan.actual_end_date.isoformat() if plan.actual_end_date else None,
                     "work_percentage": plan.work_percentage,
                     "cut_type": plan.cut_type,
+                    "stage_name": plan.stage_name,
                     "notes": plan.notes,
                     "created_at": plan.created_at.isoformat(),
                     "updated_at": plan.updated_at.isoformat() if plan.updated_at else None
@@ -255,6 +261,7 @@ async def get_shop_plan(
             "actual_end_date": plan.actual_end_date.isoformat() if plan.actual_end_date else None,
             "work_percentage": plan.work_percentage,
             "cut_type": plan.cut_type,
+            "stage_name": plan.stage_name,
             "notes": plan.notes,
             "created_at": plan.created_at.isoformat(),
             "created_by": plan.created_by,
@@ -326,6 +333,7 @@ async def update_shop_plan(
         plan.estimated_hours = update_data.estimated_hours
         plan.scheduled_start_date = scheduled_start
         plan.cut_type = update_data.cut_type.lower()
+        plan.stage_name = update_data.stage_name
         plan.updated_at = datetime.now()
         plan.updated_by = current_user.id
         
@@ -339,6 +347,7 @@ async def update_shop_plan(
                 "id": plan.id,
                 "fab_id": plan.fab_id,
                 "cut_type": plan.cut_type,
+                "stage_name": plan.stage_name,
                 "workstation_id": plan.workstation_id,
                 "operator_id": plan.user_id,
                 "estimated_hours": plan.estimated_hours,
