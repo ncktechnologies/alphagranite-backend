@@ -21,6 +21,8 @@ from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness
 from src.app.database.templating import Templating
 from src.app.database.sales_ct import SalesCT
+from src.app.database.status import Status
+
 from src.app.interface.business_schemas import (
     FabCreate, FabUpdate, FabResponse, FabStageUpdate
 )
