@@ -144,7 +144,7 @@ async def schedule_templating(
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
         is_completed=templating.is_completed,
-        rescheduled=templating.rescheduled,  # NEW: Include rescheduled flag
+        rescheduled=templating.rescheduled,  # NEW
         status_id=templating.status_id,
         status_name=status.name if status else None,
         created_at=templating.created_at,
@@ -326,6 +326,7 @@ async def complete_templating(
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
         is_completed=templating.is_completed,
+        rescheduled=templating.rescheduled,  # NEW
         status_id=templating.status_id,
         status_name=status.name if status else None,
         current_stage=fab.current_stage,
@@ -413,6 +414,7 @@ async def get_templating(
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
         is_completed=templating.is_completed,
+        rescheduled=templating.rescheduled,  # NEW
         status_id=templating.status_id,
         status_name=status.name if status else None,
         created_at=templating.created_at,
@@ -455,6 +457,7 @@ async def get_templating_by_fab(
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
         is_completed=templating.is_completed,
+        rescheduled=templating.rescheduled,  # NEW
         status_id=templating.status_id,
         status_name=status.name if status else None,
         created_at=templating.created_at,

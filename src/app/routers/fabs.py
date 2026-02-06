@@ -109,17 +109,28 @@ async def get_stage_completion_data(db: AsyncSession, fab_id: int, current_stage
         templating = result.scalar_one_or_none()
         
         if templating:
+            technician = await db.get(User, templating.technician_id) if templating.technician_id else None
+            status = await db.get(Status, templating.status_id) if templating.status_id else None
+
             stage_info["is_complete"] = templating.is_completed
             stage_info["stage_data"] = {
                 "templating_id": templating.id,
                 "technician_id": templating.technician_id,
+                "technician_name": f"{technician.first_name} {technician.last_name}" if technician else None,
                 "schedule_start_date": templating.schedule_start_date.isoformat() if templating.schedule_start_date else None,
                 "schedule_due_date": templating.schedule_due_date.isoformat() if templating.schedule_due_date else None,
                 "actual_start_date": templating.actual_start_date.isoformat() if templating.actual_start_date else None,
                 "duration": templating.duration,
                 "total_sqft": templating.total_sqft,
+                "notes": templating.notes,
+                "is_templating_schedule": templating.is_templating_schedule,
                 "is_completed": templating.is_completed,
-                "notes": templating.notes
+                "rescheduled": templating.rescheduled,
+                "status_id": templating.status_id,
+                "status_name": status.name if status else None,
+                "created_at": templating.created_at.isoformat() if templating.created_at else None,
+                "updated_at": templating.updated_at.isoformat() if templating.updated_at else None,
+                "updated_by": templating.updated_by
             }
     
     # Add more stage completion checks as needed for other stages
@@ -2232,32 +2243,49 @@ async def _batch_load_sales_ct_data(db: AsyncSession, fab_ids: List[int]) -> dic
 
 async def _batch_load_stage_data(db: AsyncSession, fab_ids: List[int]) -> dict:
     """Load templating stage data for templating stage FABs."""
-    query = select(Templating).where(
+    query = select(
+        Templating,
+        User.first_name.label("technician_first_name"),
+        User.last_name.label("technician_last_name"),
+        Status.name.label("status_name")
+    ).where(
         Templating.fab_id.in_(fab_ids),
         Templating.is_templating_schedule == True
-    ).order_by(Templating.fab_id, Templating.id.desc())
+    ).outerjoin(User, Templating.technician_id == User.id)\
+     .outerjoin(Status, Templating.status_id == Status.id)\
+     .order_by(Templating.fab_id, Templating.id.desc())
     
     result = await db.execute(query)
-    rows = result.scalars().all()
+    rows = result.all()
     
     stage_data_by_fab = {}
-    for templating in rows:
+    for row in rows:
+        templating = row[0]
+        technician_first, technician_last = row[1], row[2]
+        status_name = row[3]
         if templating.fab_id not in stage_data_by_fab:
             stage_data_by_fab[templating.fab_id] = {
                 "is_complete": templating.is_completed,
                 "stage_data": {
                     "templating_id": templating.id,
                     "technician_id": templating.technician_id,
+                    "technician_name": f"{technician_first} {technician_last}" if technician_first else None,
                     "schedule_start_date": templating.schedule_start_date.isoformat() if templating.schedule_start_date else None,
                     "schedule_due_date": templating.schedule_due_date.isoformat() if templating.schedule_due_date else None,
                     "actual_start_date": templating.actual_start_date.isoformat() if templating.actual_start_date else None,
                     "duration": templating.duration,
                     "total_sqft": templating.total_sqft,
+                    "notes": templating.notes,
+                    "is_templating_schedule": templating.is_templating_schedule,
                     "is_completed": templating.is_completed,
-                    "notes": templating.notes
+                    "rescheduled": templating.rescheduled,
+                    "status_id": templating.status_id,
+                    "status_name": status_name,
+                    "created_at": templating.created_at.isoformat() if templating.created_at else None,
+                    "updated_at": templating.updated_at.isoformat() if templating.updated_at else None,
+                    "updated_by": templating.updated_by
                 }
             }
-    
     return stage_data_by_fab
 
 
