@@ -4,12 +4,16 @@ from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func, or_, sa
+
 
 from src.app.database import get_db
 from src.app.database.user import User
 from src.app.database.fab import Fab
 from src.app.database.slab_smith import SlabSmith
 from src.app.database.sales_ct import SalesCT
+from src.app.database.business_job import BusinessJob
+
 from src.app.interface.business_schemas import (
     SlabSmithCreate,
     SlabSmithUpdate,
@@ -461,6 +465,7 @@ async def get_all_sales_ct(
 
 @router.get("/stages/slabsmith/pending", response_model=SuccessResponse[List[int]])
 async def get_pending_slabsmith_fab_ids(
+    search: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -469,13 +474,28 @@ async def get_pending_slabsmith_fab_ids(
     - current_stage is sales_ct (SCT)
     - slabsmith_ag_needed is true
     - slabsmith_completed_date is null
+    Optional search by FAB ID or Job Number.
     """
-    result = await db.execute(
+    query = (
         select(Fab.id)
+        .select_from(Fab)
+        .join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
         .where(Fab.current_stage == "sales_ct")
         .where(Fab.slabsmith_ag_needed.is_(True))
         .where(Fab.slabsmith_completed_date.is_(None))
-        .order_by(Fab.id.asc())
     )
+
+    if search:
+        search_term = f"%{search}%"
+        query = query.where(
+            or_(
+                sa.cast(Fab.id, sa.String).ilike(search_term),
+                BusinessJob.job_number.ilike(search_term)
+            )
+        )
+
+    query = query.order_by(Fab.id.asc())
+
+    result = await db.execute(query)
     fab_ids = [row[0] for row in result.all()]
     return success_response(fab_ids, "Pending Slabsmith FABs fetched successfully")
