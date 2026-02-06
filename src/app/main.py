@@ -147,6 +147,69 @@ def custom_openapi():
         for operation in path_item.values():
             if isinstance(operation, dict):
                 operation.setdefault("security", [{"BearerAuth": []}])
+
+    # --- Postman vendor extensions (reference only) ---
+    openapi_schema["x-postman-variables"] = [
+        {"key": "baseUrl", "value": "https://api.ag.easybusiness.ng"},
+        {"key": "bearerToken", "value": ""},
+        {"key": "currentTimestamp", "value": ""},
+        {"key": "timestamp", "value": ""},
+        {"key": "username", "value": ""},
+        {"key": "password", "value": ""}
+    ]
+
+    openapi_schema["x-postman-prerequest"] = r"""
+pm.sendRequest({
+    url: '{{baseUrl}}/auth/login',
+    method: 'POST',
+    header: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+    },
+    body: {
+        mode: 'raw',
+        raw: JSON.stringify({
+            username: '{{username}}',
+            password: '{{password}}'
+        })
+    }
+}, function (err, res) {
+    if (err) {
+        console.log("Request Error:", err);
+        return;
+    }
+
+    console.log("Full Response:", res);
+
+    try {
+        const jsonResponse = res.json();
+        console.log("Parsed Response:", jsonResponse);
+
+        if (jsonResponse.success === true && jsonResponse.data && jsonResponse.data.access_token) {
+            const token = jsonResponse.data.access_token;
+            pm.environment.set('bearerToken', token);
+            console.log("Auth Token Set:", token);
+        } else {
+            console.log("Unexpected Response Structure:", jsonResponse);
+        }
+
+    } catch (parseError) {
+        console.log("JSON Parse Error:", parseError);
+        console.log("Raw Response Body:", res.text());
+    }
+});
+
+
+// Generate current ISO timestamp
+const now = new Date().toISOString();
+pm.collectionVariables.set("currentTimestamp", now);
+
+// Generate timestamp without timezone (for your API)
+const nowNoTz = new Date().toISOString().slice(0, -1);
+pm.collectionVariables.set("timestamp", nowNoTz);
+"""
+    # --- end vendor extensions ---
+
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
