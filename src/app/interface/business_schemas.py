@@ -287,7 +287,9 @@ class FabUpdate(BaseModel):
     cost_of_stone_id: Optional[int] = Field(None, description="Cost of stone record ID")
     cost_of_stone: Optional[Decimal] = Field(None, description="Cost of stone amount")
 
-
+class FabStageUpdate(BaseModel):
+    current_stage: str
+    
 class FabResponse(BaseModel):
     id: int
     job_id: int

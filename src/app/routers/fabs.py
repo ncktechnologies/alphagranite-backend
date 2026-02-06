@@ -22,7 +22,7 @@ from src.app.database.stone_thickness import StoneThickness
 from src.app.database.templating import Templating
 from src.app.database.sales_ct import SalesCT
 from src.app.interface.business_schemas import (
-    FabCreate, FabUpdate, FabResponse,
+    FabCreate, FabUpdate, FabResponse, FabStageUpdate
 )
 from src.app.interface.response_wrappers import SuccessResponse, error_response, success_response
 from src.app.middleware.jwt_auth import get_current_user
@@ -1545,6 +1545,31 @@ async def toggle_fab_hold(
         {"fab_id": fab_id, "on_hold": on_hold, "status_id": fab.status_id},
         f"FAB {fab_id} {'placed on hold' if on_hold else 'released from hold'}"
     )
+
+
+
+@router.patch("/fabs/{fab_id}/stage", response_model=SuccessResponse[FabResponse])
+async def update_fab_stage(
+    fab_id: int,
+    stage_data: FabStageUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Update fab current_stage (admin-only handled in view)"""
+    result = await db.execute(select(Fab).where(Fab.id == fab_id))
+    fab = result.scalar_one_or_none()
+    if not fab:
+        return error_response("Fab not found", 404)
+    
+    fab.current_stage = stage_data.current_stage
+    fab.next_stage = get_next_stage(stage_data.current_stage)
+    fab.updated_at = datetime.now()
+    fab.updated_by = current_user.id
+    
+    await db.commit()
+    await db.refresh(fab)
+    
+    return await get_fab(fab_id, db, current_user)
 # ============ HELPER FUNCTIONS FOR FAB QUERIES ============
 
 async def _apply_templating_filters(

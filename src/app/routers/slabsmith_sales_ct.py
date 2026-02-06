@@ -4,8 +4,8 @@ from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import func, or_, sa
-
+from sqlalchemy import func, or_
+import sqlalchemy as sa
 
 from src.app.database import get_db
 from src.app.database.user import User
