@@ -23,6 +23,7 @@ from src.app.interface.business_schemas import (
     SalesCTRevisionCreate,
     SalesCTRevisionUpdate,
     SalesCTResponse,
+    FabResponse, 
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
@@ -463,21 +464,21 @@ async def get_all_sales_ct(
         "Sales CT entries fetched successfully"
     )
 
-@router.get("/stages/slabsmith/pending", response_model=SuccessResponse[List[int]])
+@router.get("/stages/slabsmith/pending", response_model=SuccessResponse[List[FabResponse]])
 async def get_pending_slabsmith_fab_ids(
     search: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Get FAB IDs where:
+    Get FABs where:
     - current_stage is sales_ct (SCT)
-    - slabsmith_ag_needed is true
+    - slab_smith_ag_needed is true
     - slabsmith_completed_date is null
     Optional search by FAB ID or Job Number.
     """
     query = (
-        select(Fab.id)
+        select(Fab, BusinessJob.job_number, BusinessJob.name)
         .select_from(Fab)
         .join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
         .where(Fab.current_stage == "sales_ct")
@@ -497,5 +498,8 @@ async def get_pending_slabsmith_fab_ids(
     query = query.order_by(Fab.id.asc())
 
     result = await db.execute(query)
-    fab_ids = [row[0] for row in result.all()]
-    return success_response(fab_ids, "Pending Slabsmith FABs fetched successfully")
+    rows = result.all()
+
+    data = [FabResponse.model_validate(row[0]) for row in rows]
+
+    return success_response(data, "Pending Slabsmith FABs fetched successfully")
