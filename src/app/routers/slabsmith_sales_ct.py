@@ -500,6 +500,11 @@ async def get_pending_slabsmith_fab_ids(
     result = await db.execute(query)
     rows = result.all()
 
-    data = [FabResponse.model_validate(row[0]) for row in rows]
+    data: List[FabResponse] = []
+    for fab, _, _ in rows:
+        payload = serialize_datetime_fields(fab)
+        if isinstance(payload.get("notes"), str):
+            payload["notes"] = [payload["notes"]] if payload["notes"] else []
+        data.append(FabResponse.model_validate(payload))
 
     return success_response(data, "Pending Slabsmith FABs fetched successfully")
