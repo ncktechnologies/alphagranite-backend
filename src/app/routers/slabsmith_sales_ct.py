@@ -464,9 +464,11 @@ async def get_all_sales_ct(
         "Sales CT entries fetched successfully"
     )
 
-@router.get("/stages/slabsmith/pending", response_model=SuccessResponse[List[FabResponse]])
+@router.get("/stages/slabsmith/pending", response_model=SuccessResponse[dict])
 async def get_pending_slabsmith_fab_ids(
     search: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 100,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -477,7 +479,7 @@ async def get_pending_slabsmith_fab_ids(
     - slabsmith_completed_date is null
     Optional search by FAB ID or Job Number.
     """
-    query = (
+    base_query = (
         select(Fab, BusinessJob.job_number, BusinessJob.name)
         .select_from(Fab)
         .join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
@@ -488,14 +490,31 @@ async def get_pending_slabsmith_fab_ids(
 
     if search:
         search_term = f"%{search}%"
-        query = query.where(
+        base_query = base_query.where(
             or_(
                 sa.cast(Fab.id, sa.String).ilike(search_term),
                 BusinessJob.job_number.ilike(search_term)
             )
         )
 
-    query = query.order_by(Fab.id.asc())
+    count_query = select(func.count(Fab.id)).select_from(Fab).join(
+        BusinessJob, Fab.job_id == BusinessJob.id, isouter=True
+    )
+    count_query = count_query.where(Fab.current_stage == "sales_ct")
+    count_query = count_query.where(Fab.slab_smith_ag_needed.is_(True))
+    count_query = count_query.where(Fab.slabsmith_completed_date.is_(None))
+    if search:
+        count_query = count_query.where(
+            or_(
+                sa.cast(Fab.id, sa.String).ilike(search_term),
+                BusinessJob.job_number.ilike(search_term)
+            )
+        )
+
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
+
+    query = base_query.order_by(Fab.id.asc()).offset(skip).limit(limit)
 
     result = await db.execute(query)
     rows = result.all()
@@ -507,4 +526,13 @@ async def get_pending_slabsmith_fab_ids(
             payload["notes"] = [payload["notes"]] if payload["notes"] else []
         data.append(FabResponse.model_validate(payload))
 
-    return success_response(data, "Pending Slabsmith FABs fetched successfully")
+    page = (skip // limit) + 1 if limit > 0 else 1
+    return success_response(
+        {
+            "total": total,
+            "page": page,
+            "per_page": limit,
+            "data": data
+        },
+        "Pending Slabsmith FABs fetched successfully"
+    )
