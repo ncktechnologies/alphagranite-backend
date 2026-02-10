@@ -69,14 +69,9 @@ async def update_sct_review(
     
     # If SCT completed, check if SlabSmith is needed to determine next stage
     if review_data.sct_completed:
-        fab.sct_completed_date = datetime.now()  # NEW - Set completion date
-        
-        if fab.slab_smith_ag_needed:  # ← Check if SlabSmith is needed
-            fab.current_stage = "slab_smith_request"
-            fab.next_stage = "cut_list"
-        else:
-            fab.current_stage = "cut_list"
-            fab.next_stage = "final_programming"
+        fab.sct_completed_date = datetime.now()
+        fab.current_stage = "cut_list"
+        fab.next_stage = "final_programming"
     
     await db.commit()
     await db.refresh(fab)
@@ -87,7 +82,7 @@ async def update_sct_review(
         "data": {
             "fab_id": fab.id,
             "sct_completed": fab.sct_completed,
-            "sct_completed_date": fab.sct_completed_date.isoformat() if fab.sct_completed_date else None,  # NEW
+            "sct_completed_date": fab.sct_completed_date.isoformat() if fab.sct_completed_date else None,
             "revenue": fab.revenue,
             "slab_smith_used": fab.slab_smith_used,
             "slab_smith_ag_needed": fab.slab_smith_ag_needed,
@@ -122,7 +117,7 @@ async def send_to_drafting(
     fab.sct_completed = False
     fab.current_stage = "revision"
     fab.next_stage = "sales_ct"  # After drafting, comes back to sales_ct
-    fab.revision_completed_date = datetime.now()  # NEW
+    fab.revision_completed_date = datetime.now()
     fab.updated_at = datetime.now()
     fab.updated_by = current_user.id
     
@@ -216,7 +211,7 @@ async def approve_and_send_to_slabsmith(
         "data": {
             "fab_id": fab.id,
             "sct_completed": fab.sct_completed,
-            "sct_completed_date": fab.sct_completed_date.isoformat() if fab.sct_completed_date else None,  # NEW
+            "sct_completed_date": fab.sct_completed_date.isoformat() if fab.sct_completed_date else None,
             "revenue": fab.revenue,
             "slab_smith_used": fab.slab_smith_used,
             "slab_smith_ag_needed": fab.slab_smith_ag_needed,
