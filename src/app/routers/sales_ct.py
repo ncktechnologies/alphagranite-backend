@@ -53,6 +53,14 @@ async def update_sct_review(
     if review_data.slab_smith_used is not None:
         fab.slab_smith_used = review_data.slab_smith_used
     
+    # Update slab_smith_approved if provided
+    if review_data.slab_smith_approved is not None:
+        fab.slab_smith_approved = review_data.slab_smith_approved
+
+    # Update block_drawing_approved if provided
+    if review_data.block_drawing_approved is not None:
+        fab.block_drawing_approved = review_data.block_drawing_approved
+    
     fab.updated_at = datetime.now()
     fab.updated_by = current_user.id
     
@@ -86,6 +94,8 @@ async def update_sct_review(
             "revenue": fab.revenue,
             "slab_smith_used": fab.slab_smith_used,
             "slab_smith_ag_needed": fab.slab_smith_ag_needed,
+            "slab_smith_approved": fab.slab_smith_approved,
+            "block_drawing_approved": fab.block_drawing_approved,
             "current_stage": fab.current_stage,
             "next_stage": fab.next_stage
         }
@@ -215,6 +225,8 @@ async def approve_and_send_to_slabsmith(
             "revenue": fab.revenue,
             "slab_smith_used": fab.slab_smith_used,
             "slab_smith_ag_needed": fab.slab_smith_ag_needed,
+            "slab_smith_approved": fab.slab_smith_approved,
+            "block_drawing_approved": fab.block_drawing_approved,
             "current_stage": fab.current_stage,
             "next_stage": fab.next_stage
         }

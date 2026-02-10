@@ -1045,6 +1045,8 @@ class SalesCTReviewUpdate(BaseModel):
     sct_completed: bool
     revenue: Optional[Decimal] = None
     slab_smith_used: Optional[bool] = None  # ← Add this
+    slab_smith_approved: Optional[bool] = None
+    block_drawing_approved: Optional[bool] = None
     notes: Optional[str] = None
     
     class Config:

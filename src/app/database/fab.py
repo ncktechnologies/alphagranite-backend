@@ -84,3 +84,5 @@ class Fab(SQLModel, table=True):
     draft_completed_date: Optional[datetime] = Field(default=None, description="When drafting was completed")
     revision_completed_date: Optional[datetime] = Field(default=None, description="When revision was completed")
     sct_completed_date: Optional[datetime] = Field(default=None, description="When sales CT was completed (legacy)")
+    slab_smith_approved: Optional[bool] = Field(default=None, description="SlabSmith approval status")
+    block_drawing_approved: Optional[bool] = Field(default=None, description="Block drawing approval status")
