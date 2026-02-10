@@ -71,8 +71,9 @@ async def manage_drafting_session(
         .where(DraftingSession.fab_id == fab_id)
         .where(DraftingSession.status.in_(["drafting", "paused", "on_hold"]))
         .order_by(DraftingSession.created_at.desc())
+        .limit(1)
     )
-    active_session = active_session_result.scalar_one_or_none()
+    active_session = active_session_result.scalars().first()
     
     if action == "start":
         is_revision = getattr(session_data, "is_revision", False)
