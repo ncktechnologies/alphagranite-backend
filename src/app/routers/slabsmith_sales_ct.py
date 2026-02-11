@@ -480,7 +480,7 @@ async def get_pending_slabsmith_fab_ids(
     Optional search by FAB ID or Job Number.
     """
     filters = [
-        Fab.current_stage == "sales_ct",
+        (Fab.current_stage == "sales_ct") | (Fab.current_stage == "revision"),
         Fab.slab_smith_ag_needed.is_(True),
         Fab.slabsmith_completed_date.is_(None),
     ]
