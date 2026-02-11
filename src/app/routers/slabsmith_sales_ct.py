@@ -479,13 +479,17 @@ async def get_pending_slabsmith_fab_ids(
     - slabsmith_completed_date is null
     Optional search by FAB ID or Job Number.
     """
+    filters = [
+        Fab.current_stage == "sales_ct",
+        Fab.slab_smith_ag_needed.is_(True),
+        Fab.slabsmith_completed_date.is_(None),
+    ]
+
     base_query = (
         select(Fab, BusinessJob.job_number, BusinessJob.name)
         .select_from(Fab)
         .join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
-        .where(Fab.current_stage == "sales_ct")
-        .where(Fab.slab_smith_ag_needed.is_(True))
-        .where(Fab.slabsmith_completed_date.is_(None))
+        .where(*filters)
     )
 
     if search:
@@ -497,12 +501,12 @@ async def get_pending_slabsmith_fab_ids(
             )
         )
 
-    count_query = select(func.count(Fab.id)).select_from(Fab).join(
-        BusinessJob, Fab.job_id == BusinessJob.id, isouter=True
+    count_query = (
+        select(func.count(Fab.id))
+        .select_from(Fab)
+        .join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
+        .where(*filters)
     )
-    count_query = count_query.where(Fab.current_stage == "sales_ct")
-    count_query = count_query.where(Fab.slab_smith_ag_needed.is_(True))
-    count_query = count_query.where(Fab.slabsmith_completed_date.is_(None))
     if search:
         count_query = count_query.where(
             or_(
