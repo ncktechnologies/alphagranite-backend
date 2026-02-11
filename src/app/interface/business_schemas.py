@@ -12,7 +12,12 @@ class JobCreate(BaseModel):
     project_value: Optional[float] = Field(None, ge=0, description="Project value/amount")
     sales_person_id: Optional[int] = Field(None, gt=0, description="Sales person ID")
     need_to_invoice: bool = False
+    priority: Optional[str] = Field(None, description="Job priority (e.g., 'Low', 'Medium', 'High')")
+    invoice_note: Optional[str] = Field(None, description="Note regarding invoicing")
     sq_ft: Optional[float] = Field(None, description="Square footage")
+    description: Optional[str] = Field(None, description="Job description")
+    due_date: Optional[datetime] = Field(None, description="Job due date")
+
 
 
 class JobUpdate(BaseModel):
@@ -23,8 +28,12 @@ class JobUpdate(BaseModel):
     status_id: Optional[int] = None
     sales_person_id: Optional[int] = None
     need_to_invoice: Optional[bool] = None
+    priority: Optional[str] = Field(None, description="Job priority (e.g., 'Low', 'Medium', 'High')")
+    invoice_note: Optional[str] = Field(None, description="Note regarding invoicing")
     sq_ft: Optional[float] = None
-
+    description: Optional[str] = Field(None, description="Job description")
+    due_date: Optional[datetime] = Field(None, description="Job due date")
+    
 class JobNoteResponse(BaseModel):
     id: int
     note: str
