@@ -13,10 +13,12 @@ def create_shop_planning_section(
     planning_section_id: int = Form(...),
     workstation_ids: str = Form(...),  # comma-separated, ordered
     total_sqft: float = Form(...),
-    machine_ids: str = Form(...),  # comma-separated, ordered to match workstations
+    machine_ids: Optional[str] = Form(None),  # comma-separated, ordered to match workstations
     operator_ids: str = Form(...),  # comma-separated, ordered to match workstations, can be multiple per ws
     note: Optional[str] = Form(None),
     scheduled_hours: str = Form(...),  # comma-separated, ordered to match workstations
+    fab_id: Optional[int] = Form(None),
+    scheduled_start_date: Optional[datetime] = Form(None),
     files: Optional[List[UploadFile]] = None,
     db: Session = Depends(get_db),
     created_by: int = 1
@@ -33,12 +35,15 @@ def create_shop_planning_section(
         note=note,
         scheduled_hours=scheduled_hours,
         file_ids=','.join(file_ids),
+        fab_id=fab_id,
+        scheduled_start_date=scheduled_start_date,
         created_by=created_by
     )
     db.add(section)
     db.commit()
     db.refresh(section)
     return success_response(section, "Shop planning section created successfully")
+
 
 @router.put("/shop-planning-section/{section_id}")
 def update_shop_planning_section(
@@ -96,6 +101,7 @@ def list_shop_planning_sections(
     planning_section_id: Optional[int] = None,
     workstation_id: Optional[int] = None,
     operator_id: Optional[int] = None,
+    fab_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
     query = select(ShopPlanningSection)
@@ -105,5 +111,7 @@ def list_shop_planning_sections(
         query = query.where(ShopPlanningSection.workstation_ids.contains(str(workstation_id)))
     if operator_id:
         query = query.where(ShopPlanningSection.operator_ids.contains(str(operator_id)))
+    if fab_id:
+        query = query.where(ShopPlanningSection.fab_id == fab_id)
     sections = db.exec(query).all()
     return success_response(sections, "Shop planning section list retrieved successfully")
