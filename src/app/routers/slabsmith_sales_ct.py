@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -467,6 +467,8 @@ async def get_all_sales_ct(
 @router.get("/stages/slabsmith/pending", response_model=SuccessResponse[dict])
 async def get_pending_slabsmith_fab_ids(
     search: Optional[str] = None,
+    date_filter: Optional[str] = None,
+    fab_type: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
@@ -485,10 +487,78 @@ async def get_pending_slabsmith_fab_ids(
         Fab.slabsmith_completed_date.is_(None),
     ]
 
+    # Date filter on Fab.draft_completed_date
+    if date_filter:
+        today = datetime.now().date()
+        start_this_week = today - timedelta(days=today.weekday())
+
+        def month_start(d):
+            return d.replace(day=1)
+
+        def add_months(d, months):
+            year = d.year + ((d.month - 1 + months) // 12)
+            month = ((d.month - 1 + months) % 12) + 1
+            return d.replace(year=year, month=month, day=1)
+
+        start = end = None
+
+        if date_filter == "today":
+            start = today
+            end = today + timedelta(days=1)
+        elif date_filter == "this_week":
+            start = start_this_week
+            end = start_this_week + timedelta(days=7)
+        elif date_filter == "last_week":
+            start = start_this_week - timedelta(days=7)
+            end = start_this_week
+        elif date_filter == "next_week":
+            start = start_this_week + timedelta(days=7)
+            end = start + timedelta(days=7)
+        elif date_filter == "this_month":
+            start = month_start(today)
+            end = add_months(start, 1)
+        elif date_filter == "last_month":
+            end = month_start(today)
+            start = add_months(end, -1)
+        elif date_filter == "next_month":
+            start = add_months(month_start(today), 1)
+            end = add_months(start, 1)
+        elif date_filter == "next":
+            start = today + timedelta(days=1)
+
+        if start:
+            start_dt = datetime.combine(start, datetime.min.time())
+            if end:
+                end_dt = datetime.combine(end, datetime.min.time())
+                filters.append(Fab.draft_completed_date >= start_dt)
+                filters.append(Fab.draft_completed_date < end_dt)
+            else:
+                filters.append(Fab.draft_completed_date >= start_dt)
+
+    # FAB Type filter
+    if fab_type:
+        filters.append(Fab.fab_type == fab_type)
+
+    latest_slabsmith_id = (
+        select(func.max(SlabSmith.id))
+        .where(SlabSmith.fab_id == Fab.id)
+        .correlate(Fab)
+        .scalar_subquery()
+    )
+
     base_query = (
-        select(Fab, BusinessJob.job_number, BusinessJob.name)
+        select(
+            Fab,
+            BusinessJob.job_number,
+            BusinessJob.name,
+            SlabSmith.drafter_id.label("drafter_id"),
+            User.first_name.label("drafter_first_name"),
+            User.last_name.label("drafter_last_name"),
+        )
         .select_from(Fab)
         .join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
+        .join(SlabSmith, SlabSmith.id == latest_slabsmith_id, isouter=True)
+        .join(User, User.id == SlabSmith.drafter_id, isouter=True)
         .where(*filters)
     )
 
@@ -524,10 +594,17 @@ async def get_pending_slabsmith_fab_ids(
     rows = result.all()
 
     data: List[FabResponse] = []
-    for fab, _, _ in rows:
+    for fab, _, _, drafter_id, drafter_first_name, drafter_last_name in rows:
         payload = serialize_datetime_fields(fab)
         if isinstance(payload.get("notes"), str):
             payload["notes"] = [payload["notes"]] if payload["notes"] else []
+
+        payload["drafter_id"] = drafter_id
+        if drafter_first_name or drafter_last_name:
+            payload["drafter_name"] = f"{drafter_first_name or ''} {drafter_last_name or ''}".strip()
+        else:
+            payload["drafter_name"] = None
+
         data.append(FabResponse.model_validate(payload))
 
     page = (skip // limit) + 1 if limit > 0 else 1
