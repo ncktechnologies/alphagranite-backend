@@ -1429,7 +1429,25 @@ async def get_all_stages(
     result = await db.execute(stage_counts_query)
     stage_counts_dict = {row[0]: row[1] for row in result.all()}
     
-   
+    # NEW: slab_smith_request count should mirror /stages/slabsmith/pending
+    slabsmith_pending_filters = [
+        or_(Fab.current_stage == "sales_ct", Fab.current_stage == "revision"),
+        Fab.slab_smith_ag_needed.is_(True),
+        Fab.slabsmith_completed_date.is_(None),
+    ]
+    slabsmith_count_result = await db.execute(
+        select(func.count(Fab.id)).where(*slabsmith_pending_filters)
+    )
+    slabsmith_pending_count = slabsmith_count_result.scalar() or 0
+    
+    slabsmith_ids_result = await db.execute(
+        select(Fab.id)
+        .where(*slabsmith_pending_filters)
+        .order_by(Fab.id.desc())
+        .limit(10)
+    )
+    slabsmith_last_10_ids = [row[0] for row in slabsmith_ids_result.all()]
+    
     # Build response with all defined stages
     stages_data = []
     for idx, stage_name in enumerate(FAB_STAGES):
@@ -1460,6 +1478,17 @@ async def get_all_stages(
                     )
                 )
             ).order_by(Fab.id.desc()).limit(10)
+        elif stage_name == "slab_smith_request":
+            fab_count = slabsmith_pending_count
+            fab_ids = slabsmith_last_10_ids
+            stages_data.append({
+                "stage_name": stage_name,
+                "stage_order": idx + 1,
+                "fab_count": fab_count,
+                "last_10_fab_ids": fab_ids,
+                "next_stage": get_next_stage(stage_name)
+            })
+            continue
         else:
             # Normal query for other stages
             fab_ids_query = select(Fab.id).where(Fab.current_stage == stage_name).order_by(Fab.id.desc()).limit(10)
