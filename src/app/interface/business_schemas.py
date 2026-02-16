@@ -407,7 +407,8 @@ class TemplatingScheduleUpdate(BaseModel):
     schedule_due_date: Optional[date] = None
     total_sqft: Optional[float] = None  # Make sure this field exists
     notes: Optional[List[str]] = None
-    actual_start_date: Optional[date] = None
+    actual_start_date: Optional[datetime] = None
+    actual_end_date: Optional[datetime] = None
     duration: Optional[float] = None
     is_templating_schedule: Optional[bool] = None
     status_id: Optional[int] = None
@@ -420,6 +421,7 @@ class TemplatingScheduleUpdate(BaseModel):
 class TemplatingCompleteRequest(BaseModel):
     actual_sqft: Optional[str] = Field(None, description="Actual square footage measured")
     actual_start_date: Optional[datetime] = Field(None, description="Actual start date of work")
+    actual_end_date: Optional[datetime] = Field(None, description="Actual end date of work")
     duration: Optional[int] = Field(None, description="Duration in hours")
     notes: Optional[List[str]] = Field(None, description="Notes to append to existing notes")
 
@@ -433,7 +435,8 @@ class TemplatingResponse(BaseModel):
     schedule_start_date: Optional[date] = None
     schedule_due_date: Optional[date] = None
     total_sqft: Optional[str] = None  # Changed from float to str to match database
-    actual_start_date: Optional[date] = None
+    actual_start_date: Optional[datetime] = None
+    actual_end_date: Optional[datetime] = None
     duration: Optional[float] = None
     notes: Optional[List[str]] = None
     is_templating_schedule: Optional[bool] = None
