@@ -223,8 +223,8 @@ app.add_middleware(
     allow_credentials=cors_credentials,
     allow_methods=cors_methods,
     allow_headers=cors_headers,
+    expose_headers=["Content-Disposition"],
 )
-
 
 # Existing routers
 app.include_router(auth_router)
