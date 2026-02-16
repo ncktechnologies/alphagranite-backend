@@ -28,6 +28,12 @@ from src.app.interface.business_schemas import (
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import error_response, success_response
+from src.app.database.templating import Templating
+from src.app.routers.fabs import (
+    _build_fab_list_query,
+    _convert_fab_row_to_dict,
+    _batch_load_fab_related_data
+)
 
 router = APIRouter()
 
@@ -489,6 +495,14 @@ async def get_pending_slabsmith_fab_ids(
 
     # Date filter on Fab.draft_completed_date
     if date_filter:
+        valid_filters = {
+            "today", "this_week", "last_week",
+            "this_month", "last_month",
+            "next_week", "next_month", "next"
+        }
+        if date_filter not in valid_filters:
+            raise error_response("Invalid date_filter", 400)
+
         today = datetime.now().date()
         start_this_week = today - timedelta(days=today.weekday())
 
@@ -526,9 +540,9 @@ async def get_pending_slabsmith_fab_ids(
         elif date_filter == "next":
             start = today + timedelta(days=1)
 
-        if start:
+        if start is not None:
             start_dt = datetime.combine(start, datetime.min.time())
-            if end:
+            if end is not None:
                 end_dt = datetime.combine(end, datetime.min.time())
                 filters.append(Fab.draft_completed_date >= start_dt)
                 filters.append(Fab.draft_completed_date < end_dt)
@@ -537,39 +551,39 @@ async def get_pending_slabsmith_fab_ids(
 
     # FAB Type filter
     if fab_type:
-        filters.append(Fab.fab_type == fab_type)
+        filters.append(Fab.fab_type.ilike(f"%{fab_type}%"))
 
-    latest_slabsmith_id = (
-        select(func.max(SlabSmith.id))
-        .where(SlabSmith.fab_id == Fab.id)
-        .correlate(Fab)
-        .scalar_subquery()
+    # Build latest templating subquery (for consistent FAB payload)
+    latest_templating = (
+        select(Templating)
+        .where(Templating.fab_id == Fab.id)
+        .order_by(Templating.id.desc())
+        .limit(1)
+        .lateral("latest_templating")
     )
 
-    base_query = (
-        select(
-            Fab,
-            BusinessJob.job_number,
-            BusinessJob.name,
-            SlabSmith.drafter_id.label("drafter_id"),
-            User.first_name.label("drafter_first_name"),
-            User.last_name.label("drafter_last_name"),
-        )
-        .select_from(Fab)
-        .join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
-        .join(SlabSmith, SlabSmith.id == latest_slabsmith_id, isouter=True)
-        .join(User, User.id == SlabSmith.drafter_id, isouter=True)
-        .where(*filters)
-    )
-
-    if search:
-        search_term = f"%{search}%"
-        base_query = base_query.where(
-            or_(
-                sa.cast(Fab.id, sa.String).ilike(search_term),
-                BusinessJob.job_number.ilike(search_term)
-            )
-        )
+    base_query = _build_fab_list_query(
+        job_id=None,
+        fab_type=fab_type,
+        sales_person_id=None,
+        status_id=None,
+        current_stage=None,
+        next_stage=None,
+        search=search,
+        templating_fab_ids=None,
+        latest_templating=latest_templating,
+        shop_date_start=None,
+        shop_date_end=None,
+        template_completed_start=None,
+        template_completed_end=None,
+        predraft_completed_start=None,
+        predraft_completed_end=None,
+        draft_completed_start=None,
+        draft_completed_end=None,
+        sct_completed_start=None,
+        sct_completed_end=None,
+        date_filter=None
+    ).where(*filters)
 
     count_query = (
         select(func.count(Fab.id))
@@ -578,9 +592,11 @@ async def get_pending_slabsmith_fab_ids(
         .where(*filters)
     )
     if search:
+        search_term = f"%{search}%"
         count_query = count_query.where(
             or_(
                 sa.cast(Fab.id, sa.String).ilike(search_term),
+                BusinessJob.name.ilike(search_term),
                 BusinessJob.job_number.ilike(search_term)
             )
         )
@@ -588,24 +604,13 @@ async def get_pending_slabsmith_fab_ids(
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
 
-    query = base_query.order_by(Fab.id.asc()).offset(skip).limit(limit)
+    query = base_query.order_by(sa.asc(Fab.draft_completed_date).nulls_last()).offset(skip).limit(limit)
 
     result = await db.execute(query)
     rows = result.all()
 
-    data: List[FabResponse] = []
-    for fab, _, _, drafter_id, drafter_first_name, drafter_last_name in rows:
-        payload = serialize_datetime_fields(fab)
-        if isinstance(payload.get("notes"), str):
-            payload["notes"] = [payload["notes"]] if payload["notes"] else []
-
-        payload["drafter_id"] = drafter_id
-        if drafter_first_name or drafter_last_name:
-            payload["drafter_name"] = f"{drafter_first_name or ''} {drafter_last_name or ''}".strip()
-        else:
-            payload["drafter_name"] = None
-
-        data.append(FabResponse.model_validate(payload))
+    fabs = [_convert_fab_row_to_dict(row) for row in rows]
+    await _batch_load_fab_related_data(db, fabs)
 
     page = (skip // limit) + 1 if limit > 0 else 1
     return success_response(
@@ -613,7 +618,7 @@ async def get_pending_slabsmith_fab_ids(
             "total": total,
             "page": page,
             "per_page": limit,
-            "data": data
+            "data": fabs
         },
         "Pending Slabsmith FABs fetched successfully"
     )
