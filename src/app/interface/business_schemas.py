@@ -350,6 +350,7 @@ class FabResponse(BaseModel):
     # Cut List tracking
     shop_date_schedule: Optional[datetime] = None
     final_programming_complete: Optional[bool] = False
+    final_programming_completed_date: Optional[datetime] = None
     slab_smith_used: Optional[bool] = False
     fp_not_needed: Optional[bool] = False
     # Final Programming tracking
@@ -1141,6 +1142,7 @@ class FinalProgrammingScheduleShopDate(BaseModel):
 class FinalProgrammingComplete(BaseModel):
     """Schema for completing final programming"""
     final_programming_complete: bool = Field(..., description="Mark final programming as complete")
+    final_programming_completed_date: Optional[datetime] = Field(None, description="Date when final programming was completed")
     notes: Optional[str] = Field(None, description="Final programming notes")
     drafter_id: Optional[int] = Field(None, gt=0, description="Assigned programmer ID")
     wj_time_minutes: Optional[int] = Field(None, gt=0, description="Waterjet time in minutes")

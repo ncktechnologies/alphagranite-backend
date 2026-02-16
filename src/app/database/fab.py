@@ -57,6 +57,7 @@ class Fab(SQLModel, table=True):
     # Cut List tracking
     shop_date_schedule: Optional[datetime] = None
     final_programming_complete: bool = Field(default=False)
+    final_programming_completed_date: Optional[datetime] = Field(default=None, description="When final programming was completed")
     slab_smith_used: bool = Field(default=False)
     fp_not_needed: bool = Field(default=False)
     

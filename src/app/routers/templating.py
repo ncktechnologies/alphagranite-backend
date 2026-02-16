@@ -234,6 +234,7 @@ async def update_templating(
         schedule_due_date=templating.schedule_due_date.date() if templating.schedule_due_date else None,
         total_sqft=templating.total_sqft,  # Already a string from database
         actual_start_date=templating.actual_start_date,
+        actual_end_date=templating.actual_end_date,
         duration=templating.duration,
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
