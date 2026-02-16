@@ -1,4 +1,4 @@
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from typing import Optional, List
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,7 +27,20 @@ from src.app.database.fab_notes import FabNotes
 router = APIRouter()
 
 def _to_date(dt: Optional[datetime]) -> Optional[date]:
-    return dt.date() if isinstance(dt, datetime) else None
+    if isinstance(dt, datetime):
+        return dt.date()
+    if isinstance(dt, date):
+        return dt
+    return None
+
+def _to_naive_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """Convert aware datetime (e.g. 2026-02-16T10:00:00Z) to naive UTC for DB writes."""
+    if not isinstance(dt, datetime):
+        return dt
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
 
 # helper to keep Fab.total_sqft in sync with Templating
 async def _sync_fab_total_sqft(db: AsyncSession, fab_id: int, total_sqft, user_id: int):
@@ -78,7 +91,7 @@ async def schedule_templating(
 
     # Strip timezone info from datetime fields
     schedule_start = _to_date(templating_data.schedule_start_date)
-    schedule_due = templating_data.schedule_due_date.replace(tzinfo=None) if templating_data.schedule_due_date else None
+    schedule_due = _to_naive_utc(templating_data.schedule_due_date) if templating_data.schedule_due_date else None
 
     # If templating exists but was unscheduled, update it instead of creating new
     if existing_templating:
@@ -202,37 +215,41 @@ async def update_templating(
     if not templating:
         raise error_response("Templating not found", 404)
     
-    # Update fields - explicitly handle all fields including total_sqft and is_completed
     for field, value in update_data.model_dump(exclude_unset=True).items():
-        if hasattr(templating, field):  # Only set if field exists on model
-            # Convert total_sqft to string if it's a float/int (database expects VARCHAR)
+        if hasattr(templating, field):
+            # Normalize timezone-aware datetime values (supports ISO 8601 with "Z")
+            if isinstance(value, datetime):
+                value = _to_naive_utc(value)
+
+            # Keep date-only fields as date
+            if field == "schedule_start_date":
+                value = _to_date(value)
+
+            # DB expects VARCHAR
             if field == "total_sqft" and value is not None:
-                setattr(templating, field, str(value))
-            else:
-                setattr(templating, field, value)
-    
+                value = str(value)
+
+            setattr(templating, field, value)
+
     templating.updated_at = utc_now()
     templating.updated_by = current_user.id
 
-    # Sync Fab.total_sqft so GET /fabs/{id} reflects the change
     await _sync_fab_total_sqft(db, templating.fab_id, update_data.total_sqft, current_user.id)
 
     await db.commit()
     await db.refresh(templating)
-    
-    # Fetch technician and status details for enriched response
+
     technician = await db.get(User, templating.technician_id) if templating.technician_id else None
     status = await db.get(Status, templating.status_id)
-    
-    # Build enriched response - keep total_sqft as string (no conversion needed)
+
     response_data = TemplatingResponse(
         id=templating.id,
         fab_id=templating.fab_id,
         technician_id=templating.technician_id,
         technician_name=f"{technician.first_name} {technician.last_name}" if technician else None,
-        schedule_start_date=templating.schedule_start_date.date() if templating.schedule_start_date else None,
-        schedule_due_date=templating.schedule_due_date.date() if templating.schedule_due_date else None,
-        total_sqft=templating.total_sqft,  # Already a string from database
+        schedule_start_date=_to_date(templating.schedule_start_date),
+        schedule_due_date=_to_date(templating.schedule_due_date),
+        total_sqft=templating.total_sqft,
         actual_start_date=templating.actual_start_date,
         actual_end_date=templating.actual_end_date,
         duration=templating.duration,
@@ -245,7 +262,7 @@ async def update_templating(
         updated_at=templating.updated_at,
         updated_by=templating.updated_by
     )
-    
+
     return success_response(response_data, "Templating updated successfully")
 
 
@@ -278,7 +295,7 @@ async def complete_templating(
     if request_data.actual_sqft:
         templating.total_sqft = request_data.actual_sqft
     if request_data.actual_start_date:
-        templating.actual_start_date = request_data.actual_start_date
+        templating.actual_start_date = _to_naive_utc(request_data.actual_start_date)
     if request_data.duration is not None:
         templating.duration = request_data.duration
     if request_data.notes:
@@ -319,8 +336,8 @@ async def complete_templating(
         fab_id=templating.fab_id,
         technician_id=templating.technician_id,
         technician_name=f"{technician.first_name} {technician.last_name}" if technician else None,
-        schedule_start_date=templating.schedule_start_date.date() if templating.schedule_start_date else None,
-        schedule_due_date=templating.schedule_due_date.date() if templating.schedule_due_date else None,
+        schedule_start_date=_to_date(templating.schedule_start_date),
+        schedule_due_date=_to_date(templating.schedule_due_date),
         total_sqft=templating.total_sqft,
         actual_start_date=templating.actual_start_date,
         duration=templating.duration,
@@ -576,7 +593,7 @@ async def update_templating_work(
     # Update templating fields
     templating.is_completed = work_data.is_completed
     if work_data.actual_start_date is not None:
-        templating.actual_start_date = work_data.actual_start_date
+        templating.actual_start_date = _to_naive_utc(work_data.actual_start_date)
     if work_data.duration is not None:
         templating.duration = work_data.duration
     if work_data.total_sqft is not None:

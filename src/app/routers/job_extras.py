@@ -605,8 +605,11 @@ async def add_files_to_drafting(
     if not drafting:
         raise HTTPException(status_code=404, detail="Drafting not found")
 
-    if stage is not None and stage not in {"drafting", "revision"}:
-        raise HTTPException(status_code=400, detail="Invalid stage. Must be 'drafting' or 'revision'")
+    if stage is not None and stage not in {"drafting", "revision", "final_programming"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid stage. Must be 'drafting', 'revision', or 'final_programming'"
+        )
     
     uploaded_file_ids = []
     uploaded_files_info = []
