@@ -2030,6 +2030,7 @@ def _convert_fab_row_to_dict(row: tuple) -> dict:
     fab_dict["next_stage"] = get_next_stage(fab_dict.get("current_stage"))
     
     fab_dict["final_programming_complete"] = fab.final_programming_complete
+    fab_dict["final_programming_completed_date"] = fab.final_programming_completed_date
     
     return fab_dict
 

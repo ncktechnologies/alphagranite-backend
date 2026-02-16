@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Optional, List
 from sqlmodel import SQLModel, Field, Column
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import DateTime
 
 
 class Fab(SQLModel, table=True):

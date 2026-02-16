@@ -304,6 +304,13 @@ async def complete_final_programming(
     
     # Mark as complete
     fab.final_programming_complete = completion_data.final_programming_complete
+
+    # Save actual completion date when marked complete; clear when un-completed
+    if completion_data.final_programming_complete:
+        fab.final_programming_completed_date = datetime.now()
+    else:
+        fab.final_programming_completed_date = None
+
     fab.updated_at = datetime.now()
     fab.updated_by = current_user.id
     
@@ -347,8 +354,12 @@ async def complete_final_programming(
         "data": {
             "fab_id": fab.id,
             "final_programming_complete": fab.final_programming_complete,
+            "final_programming_completed_date": (
+                fab.final_programming_completed_date.isoformat()
+                if fab.final_programming_completed_date else None
+            ),
             "wj_time_minutes": fab.wj_time_minutes,
-            "current_stage": fab.current_stage,  # Remains "cut_list"
+            "current_stage": fab.current_stage,
             "next_stage": fab.next_stage
         }
     }
