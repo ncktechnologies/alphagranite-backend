@@ -599,7 +599,6 @@ async def add_files_to_drafting(
 ):
     """Upload files to drafting, save to disk and database"""
     
-    # Check if drafting exists
     result = await db.execute(async_select(Drafting).where(Drafting.id == drafting_id))
     drafting = result.scalar_one_or_none()
     
@@ -613,20 +612,16 @@ async def add_files_to_drafting(
     uploaded_files_info = []
     
     for file in files:
-        # Generate unique filename
         file_extension = Path(file.filename).suffix
         unique_filename = f"{uuid.uuid4()}{file_extension}"
         file_path = UPLOAD_DIR / unique_filename
         
-        # Save file to disk
         contents = await file.read()
         with open(file_path, "wb") as f:
             f.write(contents)
         
-        # Create full URL for the file
         file_url = f"{BASE_URL}/api/v1/files/download/{unique_filename}"
         
-        # Create database record matching the actual files table schema
         file_record = File(
             name=file.filename,
             file_path=str(file_path),
@@ -638,19 +633,19 @@ async def add_files_to_drafting(
         )
         
         db.add(file_record)
-        await db.flush()  # Get the ID without committing
+        await db.flush()
         
         uploaded_file_ids.append(file_record.id)
         uploaded_files_info.append({
             "id": file_record.id,
-            "filename": file.filename,
+            "name": file.filename,
             "file_url": file_url,
-            "size": len(contents),
-            "mime_type": file.content_type,
-            "uploaded_at": datetime.now().isoformat()
+            "file_type": file.content_type,
+            "file_size": str(len(contents)),
+            "stage": stage,
+            "created_at": datetime.now().isoformat()
         })
     
-    # Update drafting.file_ids with new IDs
     existing_file_ids = drafting.file_ids.split(",") if drafting.file_ids else []
     existing_file_ids.extend([str(fid) for fid in uploaded_file_ids])
     drafting.file_ids = ",".join(existing_file_ids)
@@ -661,7 +656,8 @@ async def add_files_to_drafting(
     return success_response({
         "file_ids": uploaded_file_ids,
         "files": uploaded_files_info,
-        "total_files": len(existing_file_ids)
+        "total_files": len(existing_file_ids),
+        "stage": stage
     }, "Files uploaded successfully")
 
 

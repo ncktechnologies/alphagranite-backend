@@ -2029,6 +2029,8 @@ def _convert_fab_row_to_dict(row: tuple) -> dict:
     fab_dict["drafter_assigned_by_name"] = f"{drafter_assigned_by_first_name} {drafter_assigned_by_last_name}" if drafter_assigned_by_first_name else None
     fab_dict["next_stage"] = get_next_stage(fab_dict.get("current_stage"))
     
+    fab_dict["final_programming_complete"] = fab.final_programming_complete
+    
     return fab_dict
 
 
@@ -2176,9 +2178,9 @@ async def _batch_load_drafting_data(db: AsyncSession, fab_ids: List[int]) -> dic
                 "file_url": file_url,
                 "file_type": file.file_type,
                 "file_size": file.file_size,
+                "stage": file.stage,
                 "created_at": file.created_at.isoformat() if file.created_at else None
             }
-    
     # Group by FAB (get latest only)
     drafting_by_fab = {}
     for row in rows:
@@ -2468,6 +2470,7 @@ async def get_draft_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
                     "file_url": file_url,
                     "file_type": file.file_type,
                     "file_size": file.file_size,
+                    "stage": file.stage,
                     "created_at": file.created_at.isoformat() if file.created_at else None
                 })
     
