@@ -217,19 +217,20 @@ async def update_templating(
     
     for field, value in update_data.model_dump(exclude_unset=True).items():
         if hasattr(templating, field):
-            # Normalize timezone-aware datetime values (supports ISO 8601 with "Z")
             if isinstance(value, datetime):
                 value = _to_naive_utc(value)
 
-            # Keep date-only fields as date
             if field == "schedule_start_date":
                 value = _to_date(value)
 
-            # DB expects VARCHAR
             if field == "total_sqft" and value is not None:
                 value = str(value)
 
             setattr(templating, field, value)
+
+    # Optional auto-fill on completion
+    if getattr(templating, "is_completed", False) and not templating.actual_end_date:
+        templating.actual_end_date = utc_now()
 
     templating.updated_at = utc_now()
     templating.updated_by = current_user.id
@@ -256,8 +257,11 @@ async def update_templating(
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
         is_completed=templating.is_completed,
+        rescheduled=templating.rescheduled,  # NEW
         status_id=templating.status_id,
         status_name=status.name if status else None,
+        current_stage=fab.current_stage,
+        next_stage=fab.next_stage,
         created_at=templating.created_at,
         updated_at=templating.updated_at,
         updated_by=templating.updated_by
@@ -340,6 +344,7 @@ async def complete_templating(
         schedule_due_date=_to_date(templating.schedule_due_date),
         total_sqft=templating.total_sqft,
         actual_start_date=templating.actual_start_date,
+        actual_end_date=templating.actual_end_date,
         duration=templating.duration,
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
@@ -428,6 +433,7 @@ async def get_templating(
         schedule_due_date=_to_date(templating.schedule_due_date),
         total_sqft=templating.total_sqft,
         actual_start_date=_to_date(templating.actual_start_date),
+        actual_end_date=_to_date(templating.actual_end_date),
         duration=templating.duration,
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
@@ -435,6 +441,8 @@ async def get_templating(
         rescheduled=templating.rescheduled,  # NEW
         status_id=templating.status_id,
         status_name=status.name if status else None,
+        current_stage=fab.current_stage,
+        next_stage=fab.next_stage,
         created_at=templating.created_at,
         updated_at=templating.updated_at,
         updated_by=templating.updated_by
@@ -471,6 +479,7 @@ async def get_templating_by_fab(
         schedule_due_date=_to_date(templating.schedule_due_date),
         total_sqft=templating.total_sqft,
         actual_start_date=_to_date(templating.actual_start_date),
+        actual_end_date=_to_date(templating.actual_end_date),
         duration=templating.duration,
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
@@ -478,6 +487,8 @@ async def get_templating_by_fab(
         rescheduled=templating.rescheduled,  # NEW
         status_id=templating.status_id,
         status_name=status.name if status else None,
+        current_stage=fab.current_stage,
+        next_stage=fab.next_stage,
         created_at=templating.created_at,
         updated_at=templating.updated_at,
         updated_by=templating.updated_by
