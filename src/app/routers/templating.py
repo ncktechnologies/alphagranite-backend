@@ -487,8 +487,6 @@ async def get_templating_by_fab(
         rescheduled=templating.rescheduled,  # NEW
         status_id=templating.status_id,
         status_name=status.name if status else None,
-        current_stage=fab.current_stage,
-        next_stage=fab.next_stage,
         created_at=templating.created_at,
         updated_at=templating.updated_at,
         updated_by=templating.updated_by
