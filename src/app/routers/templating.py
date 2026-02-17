@@ -208,14 +208,15 @@ async def update_templating(
     current_user: User = Depends(get_current_user)
 ):
     """Update templating schedule details"""
-    
+
     result = await db.execute(select(Templating).where(Templating.id == templating_id))
     templating = result.scalar_one_or_none()
-    
+
     if not templating:
         raise error_response("Templating not found", 404)
-    
-    for field, value in update_data.model_dump(exclude_unset=True).items():
+
+    # IMPORTANT: ignore keys explicitly sent as null
+    for field, value in update_data.model_dump(exclude_unset=True, exclude_none=True).items():
         if hasattr(templating, field):
             if isinstance(value, datetime):
                 value = _to_naive_utc(value)
@@ -226,9 +227,11 @@ async def update_templating(
             if field == "total_sqft" and value is not None:
                 value = str(value)
 
+            if field == "duration" and value is not None:
+                value = int(value)
+
             setattr(templating, field, value)
 
-    # Optional auto-fill on completion
     if getattr(templating, "is_completed", False) and not templating.actual_end_date:
         templating.actual_end_date = utc_now()
 
@@ -242,6 +245,10 @@ async def update_templating(
 
     technician = await db.get(User, templating.technician_id) if templating.technician_id else None
     status = await db.get(Status, templating.status_id)
+
+    # FIX: fetch fab before using current_stage/next_stage
+    fab_result = await db.execute(select(Fab).where(Fab.id == templating.fab_id))
+    fab = fab_result.scalar_one_or_none()
 
     response_data = TemplatingResponse(
         id=templating.id,
@@ -257,17 +264,18 @@ async def update_templating(
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
         is_completed=templating.is_completed,
-        rescheduled=templating.rescheduled,  # NEW
+        rescheduled=templating.rescheduled,
         status_id=templating.status_id,
         status_name=status.name if status else None,
-        current_stage=fab.current_stage,
-        next_stage=fab.next_stage,
+        current_stage=fab.current_stage if fab else None,
+        next_stage=fab.next_stage if fab else None,
         created_at=templating.created_at,
         updated_at=templating.updated_at,
         updated_by=templating.updated_by
     )
 
     return success_response(response_data, "Templating updated successfully")
+
 
 
 @router.post("/templating/{templating_id}/complete", response_model=SuccessResponse[TemplatingResponse])
