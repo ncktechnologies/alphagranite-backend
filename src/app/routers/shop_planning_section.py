@@ -11,36 +11,28 @@ router = APIRouter()
 
 @router.post("/shop-planning-section")
 def create_shop_planning_section(
-    planning_section_id: int = Form(...),
-    workstation_ids: str = Form(...),
-    total_sqft: float = Form(...),
-    machine_ids: Optional[str] = Form(None),
-    operator_ids: str = Form(...),
-    note: Optional[str] = Form(None),
-    scheduled_hours: str = Form(...),
-    fab_id: Optional[int] = Form(None),
-    scheduled_start_date: Optional[datetime] = Form(None),
-    files: Optional[List[UploadFile]] = None,
+    work_station_id: int = Form(...),
+    operator_ids: Optional[str] = Form(None),
+    machine: Optional[str] = Form(None),
+    scheduled_sqft: Optional[str] = Form(None),
+    completed_sqft: Optional[str] = Form(None),
+    start_date: Optional[datetime] = Form(None),
+    end_date: Optional[datetime] = Form(None),
+    status_id: int = Form(...),
     db: Session = Depends(get_db),
     created_by: int = 1
 ):
-    file_ids = []
-    if files:
-        file_ids = [f"file_{i+1}" for i, _ in enumerate(files)]
-    
     section = ShopPlanningSectionModel(
-        planning_section_id=planning_section_id,
-        workstation_ids=workstation_ids,
-        total_sqft=total_sqft,
-        machine_ids=machine_ids,
+        work_station_id=work_station_id,
         operator_ids=operator_ids,
-        note=note,
-        scheduled_hours=scheduled_hours,
-        file_ids=','.join(file_ids) if file_ids else None,
-        fab_id=fab_id,
-        scheduled_start_date=scheduled_start_date,
-        created_by=created_by,
-        created_at=datetime.now()
+        machine=machine,
+        scheduled_sqft=scheduled_sqft,
+        completed_sqft=completed_sqft,
+        start_date=start_date,
+        end_date=end_date,
+        status_id=status_id,
+        created_at=datetime.now(),
+        updated_by=created_by
     )
     db.add(section)
     db.commit()
@@ -50,14 +42,14 @@ def create_shop_planning_section(
 @router.put("/shop-planning-section/{section_id}")
 def update_shop_planning_section(
     section_id: int,
-    planning_section_id: int = Form(...),
-    workstation_ids: str = Form(...),
-    total_sqft: float = Form(...),
-    machine_ids: str = Form(...),
-    operator_ids: str = Form(...),
-    note: Optional[str] = Form(None),
-    scheduled_hours: str = Form(...),
-    files: Optional[List[UploadFile]] = None,
+    work_station_id: int = Form(...),
+    operator_ids: Optional[str] = Form(None),
+    machine: Optional[str] = Form(None),
+    scheduled_sqft: Optional[str] = Form(None),
+    completed_sqft: Optional[str] = Form(None),
+    start_date: Optional[datetime] = Form(None),
+    end_date: Optional[datetime] = Form(None),
+    status_id: int = Form(...),
     db: Session = Depends(get_db),
     updated_by: int = 1
 ):
@@ -65,19 +57,14 @@ def update_shop_planning_section(
     if not section:
         raise error_response("Shop planning section not found", 404)
     
-    file_ids = section.file_ids.split(',') if section.file_ids else []
-    if files:
-        new_file_ids = [f"file_{i+len(file_ids)+1}" for i, _ in enumerate(files)]
-        file_ids.extend(new_file_ids)
-    
-    section.planning_section_id = planning_section_id
-    section.workstation_ids = workstation_ids
-    section.total_sqft = total_sqft
-    section.machine_ids = machine_ids
+    section.work_station_id = work_station_id
     section.operator_ids = operator_ids
-    section.note = note
-    section.scheduled_hours = scheduled_hours
-    section.file_ids = ','.join(file_ids) if file_ids else None
+    section.machine = machine
+    section.scheduled_sqft = scheduled_sqft
+    section.completed_sqft = completed_sqft
+    section.start_date = start_date
+    section.end_date = end_date
+    section.status_id = status_id
     section.updated_by = updated_by
     section.updated_at = datetime.now()
     
@@ -103,20 +90,17 @@ def get_shop_planning_section(section_id: int, db: Session = Depends(get_db)):
 
 @router.get("/shop-planning-section")
 def list_shop_planning_sections(
-    planning_section_id: Optional[int] = None,
-    workstation_id: Optional[int] = None,
+    work_station_id: Optional[int] = None,
     operator_id: Optional[int] = None,
-    fab_id: Optional[int] = None,
+    status_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
     query = select(ShopPlanningSectionModel)
-    if planning_section_id:
-        query = query.where(ShopPlanningSectionModel.planning_section_id == planning_section_id)
-    if workstation_id:
-        query = query.where(ShopPlanningSectionModel.workstation_ids.contains(str(workstation_id)))
+    if work_station_id:
+        query = query.where(ShopPlanningSectionModel.work_station_id == work_station_id)
     if operator_id:
         query = query.where(ShopPlanningSectionModel.operator_ids.contains(str(operator_id)))
-    if fab_id:
-        query = query.where(ShopPlanningSectionModel.fab_id == fab_id)
+    if status_id:
+        query = query.where(ShopPlanningSectionModel.status_id == status_id)
     sections = db.exec(query).all()
     return success_response(sections, "Shop planning section list retrieved successfully")
