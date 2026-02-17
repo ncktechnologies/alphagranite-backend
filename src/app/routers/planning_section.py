@@ -1,14 +1,10 @@
 from typing import List
 from datetime import datetime
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-from src.app.database import get_db
 from fastapi import APIRouter, Depends, Form
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.database import get_db
-from src.app.database.planning_section import PlanningSection as PlanningSectionModel
 from src.app.interface.generated_schemas import PlanningSection as PlanningSectionSchema
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import success_response, error_response
@@ -17,24 +13,25 @@ router = APIRouter()
 
 @router.post("/planning-section", response_model=SuccessResponse[PlanningSectionSchema])
 async def create_planning_section(
-    plan_name: str = Form(...),
-    plan_description: str = Form(...),
-    status: str = Form(...),
+    name: str = Form(...),
+    description: str = Form(...),
+    status_id: int = Form(...),
     db: AsyncSession = Depends(get_db),
     created_by: int = 1
 ):
     result = await db.execute(
-        select(PlanningSectionModel).where(PlanningSectionModel.plan_name == plan_name)
+        select(PlanningSectionSchema).where(PlanningSectionSchema.name == name)
     )
     existing = result.scalar_one_or_none()
     if existing:
         raise error_response("Plan name must be unique", 400)
 
-    section = PlanningSectionModel(
-        plan_name=plan_name,
-        plan_description=plan_description,
-        status=status,
-        created_by=created_by
+    section = PlanningSectionSchema(
+        name=name,
+        description=description,
+        status_id=status_id,
+        created_by=created_by,
+        created_at=datetime.now()
     )
     db.add(section)
     await db.commit()
@@ -44,29 +41,29 @@ async def create_planning_section(
 @router.put("/planning-section/{section_id}", response_model=SuccessResponse[PlanningSectionSchema])
 async def update_planning_section(
     section_id: int,
-    plan_name: str = Form(...),
-    plan_description: str = Form(...),
-    status: str = Form(...),
+    name: str = Form(...),
+    description: str = Form(...),
+    status_id: int = Form(...),
     db: AsyncSession = Depends(get_db),
     updated_by: int = 1
 ):
-    section = await db.get(PlanningSectionModel, section_id)
+    section = await db.get(PlanningSectionSchema, section_id)
     if not section:
         raise error_response("Planning section not found", 404)
 
     result = await db.execute(
-        select(PlanningSectionModel).where(
-            PlanningSectionModel.plan_name == plan_name,
-            PlanningSectionModel.id != section_id
+        select(PlanningSectionSchema).where(
+            PlanningSectionSchema.name == name,
+            PlanningSectionSchema.id != section_id
         )
     )
     existing = result.scalar_one_or_none()
     if existing:
         raise error_response("Plan name must be unique", 400)
 
-    section.plan_name = plan_name
-    section.plan_description = plan_description
-    section.status = status
+    section.name = name
+    section.description = description
+    section.status_id = status_id
     section.updated_by = updated_by
     section.updated_at = datetime.now()
 
@@ -74,20 +71,10 @@ async def update_planning_section(
     await db.refresh(section)
     return success_response(section, "Planning section updated successfully")
 
-@router.delete("/planning-section/{section_id}")
-async def delete_planning_section(section_id: int, db: AsyncSession = Depends(get_db)):
-    section = await db.get(PlanningSectionModel, section_id)
-    if not section:
-        raise error_response("Planning section not found", 404)
-
-    await db.delete(section)
-    await db.commit()
-    return success_response(None, "Planning section deleted successfully")
-
-@router.get("/planning-section/by-name/{plan_name}", response_model=SuccessResponse[PlanningSectionSchema])
-async def get_planning_section_by_name(plan_name: str, db: AsyncSession = Depends(get_db)):
+@router.get("/planning-section/by-name/{name}", response_model=SuccessResponse[PlanningSectionSchema])
+async def get_planning_section_by_name(name: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
-        select(PlanningSectionModel).where(PlanningSectionModel.plan_name == plan_name)
+        select(PlanningSectionSchema).where(PlanningSectionSchema.name == name)
     )
     section = result.scalar_one_or_none()
     if not section:
@@ -97,7 +84,7 @@ async def get_planning_section_by_name(plan_name: str, db: AsyncSession = Depend
 @router.get("/planning-section/active", response_model=SuccessResponse[List[PlanningSectionSchema]])
 async def get_active_planning_sections(db: AsyncSession = Depends(get_db)):
     result = await db.execute(
-        select(PlanningSectionModel).where(PlanningSectionModel.status == "active")
+        select(PlanningSectionSchema).where(PlanningSectionSchema.status_id == 1)
     )
     sections = result.scalars().all()
     return success_response(sections, "Active planning sections retrieved successfully")
