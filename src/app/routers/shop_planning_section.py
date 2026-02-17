@@ -3,8 +3,7 @@ from typing import List, Optional
 from sqlmodel import Session, select
 from src.app.utils.config import get_db
 from src.app.utils.helpers import success_response, error_response
-from src.app.database.shop_planning_section import ShopPlanningSection as ShopPlanningSectionModel
-from src.app.interface.generated_schemas import ShopPlanningSection as ShopPlanningSectionSchema
+from src.app.interface.generated_schemas import ShopPlanningSection as ShopPlanningSectionModel
 from fastapi import APIRouter, Depends, Form, UploadFile
 
 router = APIRouter()
