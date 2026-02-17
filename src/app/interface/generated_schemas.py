@@ -85,9 +85,9 @@ class PlanningSection(SQLModel, table=True):
 
 
 # --- Fabs ---
-    created_at: datetime = Field()
-    updated_at: Optional[datetime] = Field(default=None)
-    curremt_stage: str = Field(description="equivalent to the table name of the process e.g templatings")
+    # created_at: datetime = Field()
+    # updated_at: Optional[datetime] = Field(default=None)
+    # curremt_stage: str = Field(description="equivalent to the table name of the process e.g templatings")
 
 # --- Stone Types ---
 
