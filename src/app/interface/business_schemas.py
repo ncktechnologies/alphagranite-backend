@@ -1,6 +1,7 @@
 from typing import Optional, List
 from datetime import datetime
 from pydantic import BaseModel, Field
+from decimal import Decimal
 
 # Job Schemas
 class JobCreate(BaseModel):
@@ -1229,7 +1230,8 @@ class ShopCutPlanStageCreate(BaseModel):
     planning_section_id: int
     operator_ids: List[int]
     estimated_hours: float = Field(gt=0)
-    scheduled_start: datetime
+    # optional => allows auto-scheduling when omitted
+    scheduled_start: Optional[datetime] = None
 
 
 class ShopCutPlanCreate(BaseModel):
