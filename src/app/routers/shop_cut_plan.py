@@ -14,7 +14,8 @@ from src.app.database.user import User
 from src.app.interface.business_schemas import (
     ShopCutPlanCreate,
     ShopCutPlanResponse,
-    ShopCutPlanStageCreate
+    ShopCutPlanStageCreate,
+    ShopCutPlanUpdate
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.utils.helpers import error_response, success_response
@@ -302,13 +303,19 @@ async def get_shop_plan(
 @router.put("/plans/{plan_id}", response_model=dict)
 async def update_shop_plan(
     plan_id: int,
-    update_data: ShopCutPlanStageCreate,
+    update_data: ShopCutPlanUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Update a shop cut plan with stage details"""
-    
+    """Update a shop cut plan with stage details and metadata"""
+
     try:
+        if update_data.status_id not in (0, 1):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="status_id must be 0 (inactive) or 1 (active)"
+            )
+
         result = await db.execute(select(ShopCutPlan).where(ShopCutPlan.id == plan_id))
         plan = result.scalar_one_or_none()
         if not plan:
@@ -317,51 +324,63 @@ async def update_shop_plan(
                 detail=f"Shop plan with ID {plan_id} not found"
             )
 
+        stage = update_data.stage
+
         ws_result = await db.execute(
-            select(WorkStation).where(WorkStation.id == update_data.workstation_id)
+            select(WorkStation).where(WorkStation.id == stage.workstation_id)
         )
         workstation = ws_result.scalar_one_or_none()
         if not workstation:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Workstation with ID {update_data.workstation_id} not found"
+                detail=f"Workstation with ID {stage.workstation_id} not found"
             )
 
-        if not update_data.operator_ids:
+        if not stage.operator_ids:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="At least one operator is required"
             )
 
-        user_result = await db.execute(select(User).where(User.id == update_data.operator_ids[0]))
+        user_result = await db.execute(select(User).where(User.id == stage.operator_ids[0]))
         user = user_result.scalar_one_or_none()
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Operator with ID {update_data.operator_ids[0]} not found"
+                detail=f"Operator with ID {stage.operator_ids[0]} not found"
             )
 
         ps_result = await db.execute(
-            select(PlanningSection).where(PlanningSection.id == update_data.planning_section_id)
+            select(PlanningSection).where(PlanningSection.id == stage.planning_section_id)
         )
         planning_section = ps_result.scalar_one_or_none()
         if not planning_section:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Planning section with ID {update_data.planning_section_id} not found"
+                detail=f"Planning section with ID {stage.planning_section_id} not found"
             )
 
-        scheduled_start = update_data.scheduled_start.replace(tzinfo=None) if update_data.scheduled_start.tzinfo else update_data.scheduled_start
+        scheduled_start = (
+            stage.scheduled_start.replace(tzinfo=None)
+            if stage.scheduled_start and stage.scheduled_start.tzinfo
+            else stage.scheduled_start
+        )
 
-        plan.workstation_id = update_data.workstation_id
-        plan.planning_section_id = update_data.planning_section_id
-        plan.user_id = update_data.operator_ids[0]
-        plan.estimated_hours = update_data.estimated_hours
+        plan.workstation_id = stage.workstation_id
+        plan.planning_section_id = stage.planning_section_id
+        plan.user_id = stage.operator_ids[0]
+        plan.estimated_hours = stage.estimated_hours
         plan.scheduled_start_date = scheduled_start
-        plan.cut_type = planning_section.plan_name.lower().strip()
-        plan.stage_name = planning_section.plan_name.strip()
         plan.updated_at = datetime.now()
         plan.updated_by = current_user.id
+
+        shop_note = ShopNotes(
+            fab_id=plan.fab_id,
+            note=f"Shop cut plan updated. color_theme={update_data.color_theme}, status_id={update_data.status_id}",
+            created_by=current_user.id,
+            created_at=datetime.now()
+        )
+        db.add(shop_note)
 
         await db.commit()
         await db.refresh(plan)
@@ -376,10 +395,12 @@ async def update_shop_plan(
                 "planning_section_id": plan.planning_section_id,
                 "operator_id": plan.user_id,
                 "estimated_hours": plan.estimated_hours,
-                "scheduled_start_date": plan.scheduled_start_date.isoformat(),
+                "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
                 "work_percentage": plan.work_percentage,
                 "updated_at": plan.updated_at.isoformat(),
-                "updated_by": plan.updated_by
+                "updated_by": plan.updated_by,
+                "color_theme": update_data.color_theme,
+                "status_id": update_data.status_id
             }
         }
 

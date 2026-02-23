@@ -1262,3 +1262,10 @@ class ShopCutPlanResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ShopCutPlanUpdate(BaseModel):
+    """Schema for updating a shop cut plan (matches POST structure)"""
+    color_theme: Optional[str] = None
+    status_id: int = Field(default=1, ge=0, le=1)
+    stage: ShopCutPlanStageCreate  # single stage for one plan
