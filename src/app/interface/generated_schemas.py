@@ -58,17 +58,6 @@ class ShopPlanning(SQLModel, table=True):
     created_at: datetime = Field()
     updated_at: Optional[datetime] = Field(default=None)
 
-class PlanningSection(SQLModel, table=True):
-    __tablename__ = "planning_sections"
-    id: Optional[int] = Field(default=None, primary_key=True)
-    name: str = Field()
-    description: Optional[str] = Field(default=None)
-    status_id: int = Field()
-    created_by: int = Field()
-    updated_by: Optional[int] = Field(default=None)
-    created_at: datetime = Field()
-    updated_at: Optional[datetime] = Field(default=None)
-
 
 # # --- WorkStations ---
 # class WorkStation(SQLModel, table=True):

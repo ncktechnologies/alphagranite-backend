@@ -8,15 +8,17 @@ class ShopCutPlan(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     fab_id: int = Field(foreign_key="fabs.id")
-    workstation_id: int = Field(foreign_key="work_stations.id")  # Changed from "workstations" to "work_stations"
+    workstation_id: int = Field(foreign_key="work_stations.id")
+    planning_section_id: int = Field(foreign_key="planning_sections.id")
     user_id: int = Field(foreign_key="users.id")
     estimated_hours: float = Field(gt=0, description="Estimated hours to complete")
-    scheduled_start_date: datetime = Field(description="Scheduled start date")
+    scheduled_start_date: Optional[datetime] = Field(
+        default=None,
+        description="Scheduled start date"
+    )
     actual_start_date: Optional[datetime] = Field(default=None, description="Actual start date")
     actual_end_date: Optional[datetime] = Field(default=None, description="Actual end date")
     work_percentage: int = Field(default=0, ge=0, le=100, description="Work completion percentage")
-    cut_type: str = Field(description="Type of cut: 'waterjet' or 'saw'")
-    stage_name: str = Field(description="Name of the stage, e.g., 'cut_plan', 'wj_plan', 'edging', 'cnc'")
     notes: Optional[str] = Field(default=None, description="Additional notes")
     created_at: datetime = Field(default_factory=datetime.now)
     created_by: int = Field(foreign_key="users.id")

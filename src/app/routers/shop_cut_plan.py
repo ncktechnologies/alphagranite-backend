@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import func
+from sqlalchemy import func, and_, or_, cast, String
 from datetime import datetime, timezone
 from typing import List, Optional
+from pydantic import BaseModel
 
 from src.app.database import get_db
 from src.app.database.fab import Fab
@@ -18,6 +19,7 @@ from src.app.interface.business_schemas import (
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.utils.helpers import error_response, success_response
 from src.app.database.work_station import WorkStation
+from src.app.database.planning_section import PlanningSection
 
 router = APIRouter(
     prefix="/shop",
@@ -34,6 +36,12 @@ async def create_shop_plans(
     """Create shop cut plans with multiple stages for a FAB"""
     
     try:
+        if plan_data.status_id not in (0, 1):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="status_id must be 0 (inactive) or 1 (active)"
+            )
+
         # Verify FAB exists
         result = await db.execute(select(Fab).where(Fab.id == plan_data.fab_id))
         fab = result.scalar_one_or_none()
@@ -43,105 +51,99 @@ async def create_shop_plans(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"FAB with ID {plan_data.fab_id} not found"
             )
-        
-        # Validate that stages exist
-        if not plan_data.stages or len(plan_data.stages) == 0:
+
+        if not plan_data.stages:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="At least one stage is required"
             )
-        
+
         created_plans = []
-        
-        # Create a shop cut plan for each stage
+
         for stage in plan_data.stages:
-            # Validate workstation exists
             ws_result = await db.execute(
                 select(WorkStation).where(WorkStation.id == stage.workstation_id)
             )
             workstation = ws_result.scalar_one_or_none()
-            
             if not workstation:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Workstation with ID {stage.workstation_id} not found"
                 )
-            
-            # Validate operators exist
-            if not stage.operator_ids or len(stage.operator_ids) == 0:
+
+            if not stage.operator_ids:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"At least one operator is required for stage '{stage.stage_name}'"
+                    detail="At least one operator is required"
                 )
-            
+
+            ps_result = await db.execute(
+                select(PlanningSection).where(PlanningSection.id == stage.planning_section_id)
+            )
+            planning_section = ps_result.scalar_one_or_none()
+            if not planning_section:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Planning section with ID {stage.planning_section_id} not found"
+                )
+
+            # derive cut_type / stage_name from planning section
+            derived_cut_type = planning_section.plan_name.lower().strip()
+            derived_stage_name = planning_section.plan_name.strip()
+
+            scheduled_start = stage.scheduled_start.replace(tzinfo=None) if stage.scheduled_start.tzinfo else stage.scheduled_start
+
             for operator_id in stage.operator_ids:
-                # Verify operator exists
-                user_result = await db.execute(
-                    select(User).where(User.id == operator_id)
-                )
+                user_result = await db.execute(select(User).where(User.id == operator_id))
                 user = user_result.scalar_one_or_none()
-                
                 if not user:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
                         detail=f"Operator with ID {operator_id} not found"
                     )
-                
-                # Remove timezone from scheduled_start if present
-                scheduled_start = stage.scheduled_start
-                if scheduled_start.tzinfo is not None:
-                    scheduled_start = scheduled_start.replace(tzinfo=None)
-                
-                # Validate estimated hours
-                if stage.estimated_hours <= 0:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Estimated hours must be greater than 0"
-                    )
-                
+
                 plan = ShopCutPlan(
                     fab_id=plan_data.fab_id,
                     workstation_id=stage.workstation_id,
+                    planning_section_id=stage.planning_section_id,
                     user_id=operator_id,
                     estimated_hours=stage.estimated_hours,
                     scheduled_start_date=scheduled_start,
-                    cut_type=stage.cut_type.lower(),
-                    stage_name=stage.stage_name,
+                    cut_type=derived_cut_type,
+                    stage_name=derived_stage_name,
                     work_percentage=0,
                     created_by=current_user.id,
                     created_at=datetime.now()
                 )
                 db.add(plan)
                 created_plans.append(plan)
-        
-        # Add shop note
+
         shop_note = ShopNotes(
             fab_id=plan_data.fab_id,
-            note=f"Shop cut plan created with {len(plan_data.stages)} stage(s). Total estimated hours: {plan_data.total_estimated_hours}",
+            note=f"Shop cut plan created. color_theme={plan_data.color_theme}, status_id={plan_data.status_id}",
             created_by=current_user.id,
             created_at=datetime.now()
         )
         db.add(shop_note)
-        
+
         await db.commit()
-        
-        # Refresh all plans to get IDs
         for plan in created_plans:
             await db.refresh(plan)
-        
+
         return {
             "success": True,
             "message": f"Shop plans created successfully with {len(created_plans)} plan(s)",
             "data": {
                 "fab_id": plan_data.fab_id,
                 "total_estimated_hours": plan_data.total_estimated_hours,
+                "color_theme": plan_data.color_theme,
+                "status_id": plan_data.status_id,
                 "plans_created": len(created_plans),
                 "plans": [
                     {
                         "id": plan.id,
-                        "cut_type": plan.cut_type,
-                        "stage_name": plan.stage_name,
                         "workstation_id": plan.workstation_id,
+                        "planning_section_id": plan.planning_section_id,
                         "operator_id": plan.user_id,
                         "estimated_hours": plan.estimated_hours,
                         "scheduled_start_date": plan.scheduled_start_date.isoformat(),
@@ -151,7 +153,7 @@ async def create_shop_plans(
                 ]
             }
         }
-    
+
     except HTTPException:
         await db.rollback()
         raise
@@ -165,41 +167,98 @@ async def create_shop_plans(
 
 @router.get("/plans", response_model=dict)
 async def get_all_shop_plans(
-    fab_id: Optional[int] = None,
+    fab_id: Optional[int] = None,                 # exact FAB id
+    search_fab_id: Optional[str] = None,          # search FAB id (contains)
+    fab_type: Optional[str] = None,               # filter by FAB type
     workstation_id: Optional[int] = None,
+    planning_section_id: Optional[int] = None,
     operator_id: Optional[int] = None,
-    cut_type: Optional[str] = None,
-    stage_name: Optional[str] = None,
+    status_id: Optional[int] = None,              # filter by status_id (if model has it)
+    cut_type: Optional[str] = None,               # filter by planning section name
+    month: Optional[int] = None,
+    year: Optional[int] = None,
     skip: int = 0,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get all shop cut plans with optional filters"""
-    
-    query = select(ShopCutPlan)
-    
+    """Get shop plans with filters; default month/year; unscheduled first."""
+    now = datetime.now()
+    target_month = month or now.month
+    target_year = year or now.year
+
+    if target_month < 1 or target_month > 12:
+        raise HTTPException(status_code=400, detail="month must be between 1 and 12")
+    if target_year < 1900 or target_year > 9999:
+        raise HTTPException(status_code=400, detail="year must be between 1900 and 9999")
+
+    # join Fab + PlanningSection so fab_type and cut_type filters work
+    query = (
+        select(ShopCutPlan)
+        .join(Fab, Fab.id == ShopCutPlan.fab_id)
+        .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
+    )
+
     if fab_id is not None:
         query = query.where(ShopCutPlan.fab_id == fab_id)
+
+    if search_fab_id:
+        query = query.where(cast(ShopCutPlan.fab_id, String).ilike(f"%{search_fab_id.strip()}%"))
+
     if workstation_id is not None:
         query = query.where(ShopCutPlan.workstation_id == workstation_id)
+
+    if planning_section_id is not None:
+        query = query.where(ShopCutPlan.planning_section_id == planning_section_id)
+
     if operator_id is not None:
         query = query.where(ShopCutPlan.user_id == operator_id)
+
+    if status_id is not None:
+        if not hasattr(ShopCutPlan, "status_id"):
+            raise HTTPException(status_code=400, detail="status_id filter is not supported by ShopCutPlan model")
+        query = query.where(getattr(ShopCutPlan, "status_id") == status_id)
+
     if cut_type:
-        query = query.where(ShopCutPlan.cut_type == cut_type.lower())
-    if stage_name:
-        query = query.where(ShopCutPlan.stage_name == stage_name)
-    
-    # Get total count
-    count_result = await db.execute(select(func.count(ShopCutPlan.id)).select_from(ShopCutPlan))
-    total = count_result.scalar()
-    
-    # Apply pagination
-    query = query.offset(skip).limit(limit).order_by(ShopCutPlan.scheduled_start_date)
-    
+        # cut_type is matched from planning section name (since cut_type field is removed)
+        query = query.where(func.lower(PlanningSection.plan_name) == cut_type.strip().lower())
+
+    if fab_type:
+        # adjust column name if your Fab model uses a different field
+        if hasattr(Fab, "fab_type"):
+            query = query.where(func.lower(getattr(Fab, "fab_type")) == fab_type.strip().lower())
+        elif hasattr(Fab, "type"):
+            query = query.where(func.lower(getattr(Fab, "type")) == fab_type.strip().lower())
+        else:
+            raise HTTPException(status_code=400, detail="fab_type filter is not supported by Fab model")
+
+    # default scope: current month/year + unscheduled
+    query = query.where(
+        or_(
+            ShopCutPlan.scheduled_start_date.is_(None),
+            and_(
+                func.extract("month", ShopCutPlan.scheduled_start_date) == target_month,
+                func.extract("year", ShopCutPlan.scheduled_start_date) == target_year,
+            ),
+        )
+    )
+
+    count_result = await db.execute(select(func.count()).select_from(query.subquery()))
+    total = count_result.scalar() or 0
+
+    query = (
+        query.order_by(
+            ShopCutPlan.scheduled_start_date.is_(None).desc(),
+            ShopCutPlan.scheduled_start_date.asc()
+        )
+        .offset(skip)
+        .limit(limit)
+    )
+
     result = await db.execute(query)
     plans = result.scalars().all()
-    
+    serialized_plans, grouped_plans = _serialize_and_group_plans(plans)
+
     return {
         "success": True,
         "message": "Shop plans retrieved successfully",
@@ -207,25 +266,71 @@ async def get_all_shop_plans(
             "total": total,
             "page": (skip // limit) + 1 if limit > 0 else 1,
             "per_page": limit,
-            "plans": [
-                {
-                    "id": plan.id,
-                    "fab_id": plan.fab_id,
-                    "workstation_id": plan.workstation_id,
-                    "operator_id": plan.user_id,
-                    "estimated_hours": plan.estimated_hours,
-                    "scheduled_start_date": plan.scheduled_start_date.isoformat(),
-                    "actual_start_date": plan.actual_start_date.isoformat() if plan.actual_start_date else None,
-                    "actual_end_date": plan.actual_end_date.isoformat() if plan.actual_end_date else None,
-                    "work_percentage": plan.work_percentage,
-                    "cut_type": plan.cut_type,
-                    "stage_name": plan.stage_name,
-                    "notes": plan.notes,
-                    "created_at": plan.created_at.isoformat(),
-                    "updated_at": plan.updated_at.isoformat() if plan.updated_at else None
-                }
-                for plan in plans
-            ]
+            "month": target_month,
+            "year": target_year,
+            "plans": serialized_plans,
+            "grouped_plans": grouped_plans
+        }
+    }
+
+
+@router.get("/plans/fab/{fab_id}", response_model=dict)
+async def get_shop_plans_by_fab_id(
+    fab_id: int,
+    month: Optional[int] = None,
+    year: Optional[int] = None,
+    skip: int = 0,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get shop plans by FAB id (grouped by date, unscheduled first)."""
+    now = datetime.now()
+    target_month = month or now.month
+    target_year = year or now.year
+
+    query = (
+        select(ShopCutPlan)
+        .where(ShopCutPlan.fab_id == fab_id)
+        .where(
+            or_(
+                ShopCutPlan.scheduled_start_date.is_(None),
+                and_(
+                    func.extract("month", ShopCutPlan.scheduled_start_date) == target_month,
+                    func.extract("year", ShopCutPlan.scheduled_start_date) == target_year,
+                ),
+            )
+        )
+    )
+
+    count_result = await db.execute(select(func.count()).select_from(query.subquery()))
+    total = count_result.scalar() or 0
+
+    query = (
+        query.order_by(
+            ShopCutPlan.scheduled_start_date.is_(None).desc(),
+            ShopCutPlan.scheduled_start_date.asc()
+        )
+        .offset(skip)
+        .limit(limit)
+    )
+
+    result = await db.execute(query)
+    plans = result.scalars().all()
+    serialized_plans, grouped_plans = _serialize_and_group_plans(plans)
+
+    return {
+        "success": True,
+        "message": "Shop plans by FAB retrieved successfully",
+        "data": {
+            "fab_id": fab_id,
+            "total": total,
+            "page": (skip // limit) + 1 if limit > 0 else 1,
+            "per_page": limit,
+            "month": target_month,
+            "year": target_year,
+            "plans": serialized_plans,
+            "grouped_plans": grouped_plans
         }
     }
 
@@ -254,14 +359,13 @@ async def get_shop_plan(
             "id": plan.id,
             "fab_id": plan.fab_id,
             "workstation_id": plan.workstation_id,
+            "planning_section_id": plan.planning_section_id,
             "operator_id": plan.user_id,
             "estimated_hours": plan.estimated_hours,
-            "scheduled_start_date": plan.scheduled_start_date.isoformat(),
+            "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
             "actual_start_date": plan.actual_start_date.isoformat() if plan.actual_start_date else None,
             "actual_end_date": plan.actual_end_date.isoformat() if plan.actual_end_date else None,
             "work_percentage": plan.work_percentage,
-            "cut_type": plan.cut_type,
-            "stage_name": plan.stage_name,
             "notes": plan.notes,
             "created_at": plan.created_at.isoformat(),
             "created_by": plan.created_by,
@@ -281,74 +385,71 @@ async def update_shop_plan(
     """Update a shop cut plan with stage details"""
     
     try:
-        # Get the plan
         result = await db.execute(select(ShopCutPlan).where(ShopCutPlan.id == plan_id))
         plan = result.scalar_one_or_none()
-        
         if not plan:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Shop plan with ID {plan_id} not found"
             )
-        
-        # Validate workstation exists
+
         ws_result = await db.execute(
             select(WorkStation).where(WorkStation.id == update_data.workstation_id)
         )
         workstation = ws_result.scalar_one_or_none()
-        
         if not workstation:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Workstation with ID {update_data.workstation_id} not found"
             )
-        
-        # Validate operator exists
-        user_result = await db.execute(
-            select(User).where(User.id == update_data.operator_ids[0])
-        )
+
+        if not update_data.operator_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one operator is required"
+            )
+
+        user_result = await db.execute(select(User).where(User.id == update_data.operator_ids[0]))
         user = user_result.scalar_one_or_none()
-        
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Operator with ID {update_data.operator_ids[0]} not found"
             )
-        
-        # Validate estimated hours
-        if update_data.estimated_hours <= 0:
+
+        ps_result = await db.execute(
+            select(PlanningSection).where(PlanningSection.id == update_data.planning_section_id)
+        )
+        planning_section = ps_result.scalar_one_or_none()
+        if not planning_section:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Estimated hours must be greater than 0"
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Planning section with ID {update_data.planning_section_id} not found"
             )
-        
-        # Remove timezone from scheduled_start if present
-        scheduled_start = update_data.scheduled_start
-        if scheduled_start.tzinfo is not None:
-            scheduled_start = scheduled_start.replace(tzinfo=None)
-        
-        # Update plan fields
+
+        scheduled_start = update_data.scheduled_start.replace(tzinfo=None) if update_data.scheduled_start.tzinfo else update_data.scheduled_start
+
         plan.workstation_id = update_data.workstation_id
+        plan.planning_section_id = update_data.planning_section_id
         plan.user_id = update_data.operator_ids[0]
         plan.estimated_hours = update_data.estimated_hours
         plan.scheduled_start_date = scheduled_start
-        plan.cut_type = update_data.cut_type.lower()
-        plan.stage_name = update_data.stage_name
+        plan.cut_type = planning_section.plan_name.lower().strip()
+        plan.stage_name = planning_section.plan_name.strip()
         plan.updated_at = datetime.now()
         plan.updated_by = current_user.id
-        
+
         await db.commit()
         await db.refresh(plan)
-        
+
         return {
             "success": True,
             "message": "Shop plan updated successfully",
             "data": {
                 "id": plan.id,
                 "fab_id": plan.fab_id,
-                "cut_type": plan.cut_type,
-                "stage_name": plan.stage_name,
                 "workstation_id": plan.workstation_id,
+                "planning_section_id": plan.planning_section_id,
                 "operator_id": plan.user_id,
                 "estimated_hours": plan.estimated_hours,
                 "scheduled_start_date": plan.scheduled_start_date.isoformat(),
@@ -357,7 +458,7 @@ async def update_shop_plan(
                 "updated_by": plan.updated_by
             }
         }
-    
+
     except HTTPException:
         await db.rollback()
         raise
@@ -409,3 +510,139 @@ async def delete_shop_plan(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete shop plan: {str(e)}"
         )
+
+
+class RescheduleShopPlanRequest(BaseModel):
+    scheduled_start: datetime
+
+
+@router.put("/plans/{plan_id}/unschedule", response_model=dict)
+async def unschedule_shop_plan(
+    plan_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Unschedule date from a shop plan"""
+    try:
+        result = await db.execute(select(ShopCutPlan).where(ShopCutPlan.id == plan_id))
+        plan = result.scalar_one_or_none()
+        if not plan:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Shop plan with ID {plan_id} not found"
+            )
+
+        plan.scheduled_start_date = None
+        plan.updated_at = datetime.now()
+        plan.updated_by = current_user.id
+
+        await db.commit()
+        await db.refresh(plan)
+
+        return {
+            "success": True,
+            "message": "Shop plan unscheduled successfully",
+            "data": {
+                "id": plan.id,
+                "scheduled_start_date": None,
+                "updated_at": plan.updated_at.isoformat(),
+                "updated_by": plan.updated_by
+            }
+        }
+
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to unschedule shop plan: {str(e)}"
+        )
+
+
+@router.put("/plans/{plan_id}/reschedule", response_model=dict)
+async def reschedule_shop_plan(
+    plan_id: int,
+    payload: RescheduleShopPlanRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Reschedule date for a shop plan"""
+    try:
+        result = await db.execute(select(ShopCutPlan).where(ShopCutPlan.id == plan_id))
+        plan = result.scalar_one_or_none()
+        if not plan:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Shop plan with ID {plan_id} not found"
+            )
+
+        scheduled_start = payload.scheduled_start.replace(tzinfo=None) if payload.scheduled_start.tzinfo else payload.scheduled_start
+        plan.scheduled_start_date = scheduled_start
+        plan.updated_at = datetime.now()
+        plan.updated_by = current_user.id
+
+        await db.commit()
+        await db.refresh(plan)
+
+        return {
+            "success": True,
+            "message": "Shop plan rescheduled successfully",
+            "data": {
+                "id": plan.id,
+                "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
+                "updated_at": plan.updated_at.isoformat(),
+                "updated_by": plan.updated_by
+            }
+        }
+
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to reschedule shop plan: {str(e)}"
+        )
+
+
+def _serialize_and_group_plans(plans: list[ShopCutPlan]):
+    serialized_plans = []
+    grouped = {}
+
+    for plan in plans:
+        item = {
+            "id": plan.id,
+            "fab_id": plan.fab_id,
+            "workstation_id": plan.workstation_id,
+            "planning_section_id": plan.planning_section_id,
+            "operator_id": plan.user_id,
+            "estimated_hours": plan.estimated_hours,
+            "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
+            "actual_start_date": plan.actual_start_date.isoformat() if plan.actual_start_date else None,
+            "actual_end_date": plan.actual_end_date.isoformat() if plan.actual_end_date else None,
+            "work_percentage": plan.work_percentage,
+            "notes": plan.notes,
+            "created_at": plan.created_at.isoformat(),
+            "updated_at": plan.updated_at.isoformat() if plan.updated_at else None
+        }
+        serialized_plans.append(item)
+
+        group_key = plan.scheduled_start_date.date().isoformat() if plan.scheduled_start_date else "unscheduled"
+        if group_key not in grouped:
+            grouped[group_key] = {
+                "date": None if group_key == "unscheduled" else group_key,
+                "label": "Unscheduled" if group_key == "unscheduled" else group_key,
+                "plans": []
+            }
+        grouped[group_key]["plans"].append(item)
+
+    grouped_plans = []
+    if "unscheduled" in grouped:
+        grouped_plans.append(grouped.pop("unscheduled"))
+    for key in sorted(grouped.keys()):
+        grouped_plans.append(grouped[key])
+
+    return serialized_plans, grouped_plans

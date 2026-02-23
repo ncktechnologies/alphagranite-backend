@@ -1,8 +1,6 @@
 from typing import Optional, List
-from datetime import datetime, date
-from pydantic import BaseModel, Field, field_validator
-from decimal import Decimal
-
+from datetime import datetime
+from pydantic import BaseModel, Field
 
 # Job Schemas
 class JobCreate(BaseModel):
@@ -1227,20 +1225,20 @@ class FabTypeResponse(BaseModel):
 
 class ShopCutPlanStageCreate(BaseModel):
     """Schema for a stage in shop cut plan creation"""
-    cut_type: str = Field(..., description="Cut type: saw, waterjet.")
-    stage_name: str = Field(..., description="Stage name, e.g., cut_plan, wj_plan, edging, cnc")
-    workstation_id: int = Field(..., description="Workstation ID")
-    operator_ids: List[int] = Field(..., description="List of operator user IDs")
-    estimated_hours: float = Field(..., gt=0, description="Estimated hours for this stage")
-    scheduled_start: datetime = Field(..., description="Scheduled start datetime")
+    workstation_id: int
+    planning_section_id: int
+    operator_ids: List[int]
+    estimated_hours: float = Field(gt=0)
+    scheduled_start: datetime
 
 
 class ShopCutPlanCreate(BaseModel):
     """Schema for creating shop cut plans"""
-    fab_id: int = Field(..., description="FAB ID")
-    total_estimated_hours: float = Field(..., gt=0, description="Total estimated hours")
-    notes: Optional[str] = Field(None, description="Additional notes")
-    stages: List[ShopCutPlanStageCreate] = Field(..., description="List of stages")
+    fab_id: int
+    total_estimated_hours: float = Field(gt=0)
+    color_theme: Optional[str] = None
+    status_id: int = Field(default=1, ge=0, le=1)  # 0=inactive, 1=active
+    stages: List[ShopCutPlanStageCreate]
 
 
 class ShopCutPlanResponse(BaseModel):
