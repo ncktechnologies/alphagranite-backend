@@ -167,14 +167,14 @@ async def create_shop_plans(
 
 @router.get("/plans", response_model=dict)
 async def get_all_shop_plans(
-    fab_id: Optional[int] = None,                 # exact FAB id
-    search_fab_id: Optional[str] = None,          # search FAB id (contains)
-    fab_type: Optional[str] = None,               # filter by FAB type
+    fab_id: Optional[int] = None,
+    search_fab_id: Optional[str] = None,
+    fab_type: Optional[str] = None,
     workstation_id: Optional[int] = None,
     planning_section_id: Optional[int] = None,
     operator_id: Optional[int] = None,
-    status_id: Optional[int] = None,              # filter by status_id (if model has it)
-    cut_type: Optional[str] = None,               # filter by planning section name
+    status_id: Optional[int] = None,
+    cut_type: Optional[str] = None,
     month: Optional[int] = None,
     year: Optional[int] = None,
     skip: int = 0,
@@ -182,81 +182,27 @@ async def get_all_shop_plans(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get shop plans with filters; default month/year; unscheduled first."""
     now = datetime.now()
     target_month = month or now.month
     target_year = year or now.year
+    _validate_month_year(target_month, target_year)
 
-    if target_month < 1 or target_month > 12:
-        raise HTTPException(status_code=400, detail="month must be between 1 and 12")
-    if target_year < 1900 or target_year > 9999:
-        raise HTTPException(status_code=400, detail="year must be between 1900 and 9999")
-
-    # join Fab + PlanningSection so fab_type and cut_type filters work
-    query = (
-        select(ShopCutPlan)
-        .join(Fab, Fab.id == ShopCutPlan.fab_id)
-        .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
+    query = _build_shop_plans_query()
+    query = _apply_shop_plan_filters(
+        query,
+        fab_id=fab_id,
+        search_fab_id=search_fab_id,
+        fab_type=fab_type,
+        workstation_id=workstation_id,
+        planning_section_id=planning_section_id,
+        operator_id=operator_id,
+        status_id=status_id,
+        cut_type=cut_type,
     )
+    query = _apply_month_scope(query, target_month, target_year)
 
-    if fab_id is not None:
-        query = query.where(ShopCutPlan.fab_id == fab_id)
-
-    if search_fab_id:
-        query = query.where(cast(ShopCutPlan.fab_id, String).ilike(f"%{search_fab_id.strip()}%"))
-
-    if workstation_id is not None:
-        query = query.where(ShopCutPlan.workstation_id == workstation_id)
-
-    if planning_section_id is not None:
-        query = query.where(ShopCutPlan.planning_section_id == planning_section_id)
-
-    if operator_id is not None:
-        query = query.where(ShopCutPlan.user_id == operator_id)
-
-    if status_id is not None:
-        if not hasattr(ShopCutPlan, "status_id"):
-            raise HTTPException(status_code=400, detail="status_id filter is not supported by ShopCutPlan model")
-        query = query.where(getattr(ShopCutPlan, "status_id") == status_id)
-
-    if cut_type:
-        # cut_type is matched from planning section name (since cut_type field is removed)
-        query = query.where(func.lower(PlanningSection.plan_name) == cut_type.strip().lower())
-
-    if fab_type:
-        # adjust column name if your Fab model uses a different field
-        if hasattr(Fab, "fab_type"):
-            query = query.where(func.lower(getattr(Fab, "fab_type")) == fab_type.strip().lower())
-        elif hasattr(Fab, "type"):
-            query = query.where(func.lower(getattr(Fab, "type")) == fab_type.strip().lower())
-        else:
-            raise HTTPException(status_code=400, detail="fab_type filter is not supported by Fab model")
-
-    # default scope: current month/year + unscheduled
-    query = query.where(
-        or_(
-            ShopCutPlan.scheduled_start_date.is_(None),
-            and_(
-                func.extract("month", ShopCutPlan.scheduled_start_date) == target_month,
-                func.extract("year", ShopCutPlan.scheduled_start_date) == target_year,
-            ),
-        )
-    )
-
-    count_result = await db.execute(select(func.count()).select_from(query.subquery()))
-    total = count_result.scalar() or 0
-
-    query = (
-        query.order_by(
-            ShopCutPlan.scheduled_start_date.is_(None).desc(),
-            ShopCutPlan.scheduled_start_date.asc()
-        )
-        .offset(skip)
-        .limit(limit)
-    )
-
-    result = await db.execute(query)
-    plans = result.scalars().all()
+    total = await _get_total_count(db, query)
+    plans = await _fetch_ordered_plans(db, query, skip, limit)
     serialized_plans, grouped_plans = _serialize_and_group_plans(plans)
 
     return {
@@ -288,35 +234,13 @@ async def get_shop_plans_by_fab_id(
     now = datetime.now()
     target_month = month or now.month
     target_year = year or now.year
+    _validate_month_year(target_month, target_year)
 
-    query = (
-        select(ShopCutPlan)
-        .where(ShopCutPlan.fab_id == fab_id)
-        .where(
-            or_(
-                ShopCutPlan.scheduled_start_date.is_(None),
-                and_(
-                    func.extract("month", ShopCutPlan.scheduled_start_date) == target_month,
-                    func.extract("year", ShopCutPlan.scheduled_start_date) == target_year,
-                ),
-            )
-        )
-    )
+    query = select(ShopCutPlan).where(ShopCutPlan.fab_id == fab_id)
+    query = _apply_month_scope(query, target_month, target_year)
 
-    count_result = await db.execute(select(func.count()).select_from(query.subquery()))
-    total = count_result.scalar() or 0
-
-    query = (
-        query.order_by(
-            ShopCutPlan.scheduled_start_date.is_(None).desc(),
-            ShopCutPlan.scheduled_start_date.asc()
-        )
-        .offset(skip)
-        .limit(limit)
-    )
-
-    result = await db.execute(query)
-    plans = result.scalars().all()
+    total = await _get_total_count(db, query)
+    plans = await _fetch_ordered_plans(db, query, skip, limit)
     serialized_plans, grouped_plans = _serialize_and_group_plans(plans)
 
     return {
@@ -646,3 +570,95 @@ def _serialize_and_group_plans(plans: list[ShopCutPlan]):
         grouped_plans.append(grouped[key])
 
     return serialized_plans, grouped_plans
+
+
+def _normalize_naive_dt(value: datetime) -> datetime:
+    return value.replace(tzinfo=None) if value and value.tzinfo else value
+
+
+def _validate_month_year(month: int, year: int) -> None:
+    if month < 1 or month > 12:
+        raise HTTPException(status_code=400, detail="month must be between 1 and 12")
+    if year < 1900 or year > 9999:
+        raise HTTPException(status_code=400, detail="year must be between 1900 and 9999")
+
+
+def _build_shop_plans_query():
+    return (
+        select(ShopCutPlan)
+        .join(Fab, Fab.id == ShopCutPlan.fab_id)
+        .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
+    )
+
+
+def _apply_shop_plan_filters(
+    query,
+    *,
+    fab_id: Optional[int],
+    search_fab_id: Optional[str],
+    fab_type: Optional[str],
+    workstation_id: Optional[int],
+    planning_section_id: Optional[int],
+    operator_id: Optional[int],
+    status_id: Optional[int],
+    cut_type: Optional[str],
+):
+    if fab_id is not None:
+        query = query.where(ShopCutPlan.fab_id == fab_id)
+
+    if search_fab_id:
+        query = query.where(cast(ShopCutPlan.fab_id, String).ilike(f"%{search_fab_id.strip()}%"))
+
+    if workstation_id is not None:
+        query = query.where(ShopCutPlan.workstation_id == workstation_id)
+
+    if planning_section_id is not None:
+        query = query.where(ShopCutPlan.planning_section_id == planning_section_id)
+
+    if operator_id is not None:
+        query = query.where(ShopCutPlan.user_id == operator_id)
+
+    if status_id is not None:
+        if not hasattr(ShopCutPlan, "status_id"):
+            raise HTTPException(status_code=400, detail="status_id filter is not supported by ShopCutPlan model")
+        query = query.where(getattr(ShopCutPlan, "status_id") == status_id)
+
+    if cut_type:
+        query = query.where(func.lower(PlanningSection.plan_name) == cut_type.strip().lower())
+
+    if fab_type:
+        if hasattr(Fab, "fab_type"):
+            query = query.where(func.lower(getattr(Fab, "fab_type")) == fab_type.strip().lower())
+        elif hasattr(Fab, "type"):
+            query = query.where(func.lower(getattr(Fab, "type")) == fab_type.strip().lower())
+        else:
+            raise HTTPException(status_code=400, detail="fab_type filter is not supported by Fab model")
+
+    return query
+
+
+def _apply_month_scope(query, month: int, year: int):
+    return query.where(
+        or_(
+            ShopCutPlan.scheduled_start_date.is_(None),
+            and_(
+                func.extract("month", ShopCutPlan.scheduled_start_date) == month,
+                func.extract("year", ShopCutPlan.scheduled_start_date) == year,
+            ),
+        )
+    )
+
+
+async def _get_total_count(db: AsyncSession, query) -> int:
+    count_result = await db.execute(select(func.count()).select_from(query.subquery()))
+    return count_result.scalar() or 0
+
+
+async def _fetch_ordered_plans(db: AsyncSession, query, skip: int, limit: int):
+    result = await db.execute(
+        query.order_by(
+            ShopCutPlan.scheduled_start_date.is_(None).desc(),
+            ShopCutPlan.scheduled_start_date.asc()
+        ).offset(skip).limit(limit)
+    )
+    return result.scalars().all()
