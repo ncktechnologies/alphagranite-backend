@@ -1240,32 +1240,13 @@ class ShopCutPlanCreate(BaseModel):
     total_estimated_hours: float = Field(gt=0)
     color_theme: Optional[str] = None
     status_id: int = Field(default=1, ge=0, le=1)  # 0=inactive, 1=active
-    stages: List[ShopCutPlanStageCreate]
-
-
-class ShopCutPlanResponse(BaseModel):
-    """Schema for shop cut plan response"""
-    id: int
-    fab_id: int
-    workstation_id: int
-    operator_id: int
-    estimated_hours: float
-    scheduled_start_date: str
-    actual_start_date: Optional[str] = None
-    actual_end_date: Optional[str] = None
-    work_percentage: int
-    cut_type: str
-    stage_name: str
     notes: Optional[str] = None
-    created_at: str
-    updated_at: Optional[str] = None
-
-    class Config:
-        from_attributes = True
+    stages: List[ShopCutPlanStageCreate]
 
 
 class ShopCutPlanUpdate(BaseModel):
     """Schema for updating a shop cut plan (matches POST structure)"""
     color_theme: Optional[str] = None
     status_id: int = Field(default=1, ge=0, le=1)
-    stage: ShopCutPlanStageCreate  # single stage for one plan
+    notes: Optional[str] = None
+    stage: ShopCutPlanStageCreate

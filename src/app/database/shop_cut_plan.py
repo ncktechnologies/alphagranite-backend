@@ -24,3 +24,5 @@ class ShopCutPlan(SQLModel, table=True):
     created_by: int = Field(foreign_key="users.id")
     updated_at: Optional[datetime] = Field(default=None)
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    total_estimated_hours: Optional[float] = Field(default=None, gt=0)
+    color_theme: Optional[str] = Field(default=None)

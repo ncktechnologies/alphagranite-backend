@@ -13,7 +13,6 @@ from src.app.database.shop_notes import ShopNotes
 from src.app.database.user import User
 from src.app.interface.business_schemas import (
     ShopCutPlanCreate,
-    ShopCutPlanResponse,
     ShopCutPlanStageCreate,
     ShopCutPlanUpdate
 )
