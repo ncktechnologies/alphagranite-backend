@@ -109,9 +109,8 @@ async def create_shop_plans(
                     user_id=operator_id,
                     estimated_hours=stage.estimated_hours,
                     scheduled_start_date=scheduled_start,
-                    cut_type=derived_cut_type,
-                    stage_name=derived_stage_name,
                     work_percentage=0,
+                    notes=plan_data.notes,
                     created_by=current_user.id,
                     created_at=datetime.now()
                 )
@@ -144,8 +143,9 @@ async def create_shop_plans(
                         "planning_section_id": plan.planning_section_id,
                         "operator_id": plan.user_id,
                         "estimated_hours": plan.estimated_hours,
-                        "scheduled_start_date": plan.scheduled_start_date.isoformat(),
-                        "work_percentage": plan.work_percentage
+                        "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
+                        "work_percentage": plan.work_percentage,
+                        "notes": plan.notes
                     }
                     for plan in created_plans
                 ]
@@ -368,6 +368,7 @@ async def update_shop_plan(
         plan.user_id = stage.operator_ids[0]
         plan.estimated_hours = stage.estimated_hours
         plan.scheduled_start_date = scheduled_start
+        plan.notes = update_data.notes
         plan.updated_at = datetime.now()
         plan.updated_by = current_user.id
 
@@ -394,6 +395,7 @@ async def update_shop_plan(
                 "estimated_hours": plan.estimated_hours,
                 "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
                 "work_percentage": plan.work_percentage,
+                "notes": plan.notes,
                 "updated_at": plan.updated_at.isoformat(),
                 "updated_by": plan.updated_by,
                 "status_id": update_data.status_id
