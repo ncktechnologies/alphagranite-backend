@@ -1230,8 +1230,8 @@ class ShopCutPlanStageCreate(BaseModel):
     planning_section_id: int
     operator_ids: List[int]
     estimated_hours: float = Field(gt=0)
-    # optional => allows auto-scheduling when omitted
     scheduled_start: Optional[datetime] = None
+    notes: Optional[str] = None  # add this
 
 
 class ShopCutPlanCreate(BaseModel):

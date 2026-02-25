@@ -110,7 +110,7 @@ async def create_shop_plans(
                     estimated_hours=stage.estimated_hours,
                     scheduled_start_date=scheduled_start,
                     work_percentage=0,
-                    notes=plan_data.notes,
+                    notes=stage.notes,
                     created_by=current_user.id,
                     created_at=datetime.now()
                 )
