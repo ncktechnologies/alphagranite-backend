@@ -77,6 +77,14 @@ async def create_shop_plans(
                     detail="At least one operator is required"
                 )
 
+            user_result = await db.execute(select(User).where(User.id == stage.operator_ids[0]))
+            user = user_result.scalar_one_or_none()
+            if not user:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Operator with ID {stage.operator_ids[0]} not found"
+                )
+
             ps_result = await db.execute(
                 select(PlanningSection).where(PlanningSection.id == stage.planning_section_id)
             )
@@ -563,7 +571,10 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
 
         user_result = await db.execute(select(User).where(User.id == plan.user_id))
         user = user_result.scalar_one_or_none()
-        operator_name = user.name if user else None
+
+        operator_name = None
+        if user:
+            operator_name = f"{user.first_name} {user.last_name}".strip() or user.username
 
         ps_result = await db.execute(select(PlanningSection).where(PlanningSection.id == plan.planning_section_id))
         planning_section = ps_result.scalar_one_or_none()
