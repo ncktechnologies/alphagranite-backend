@@ -7,6 +7,10 @@ from sqlalchemy import func, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
+from src.app.database.shop_cut_plan import ShopCutPlan
+from src.app.database.work_station import WorkStation
+from src.app.database.planning_section import PlanningSection
+from collections import defaultdict
 import os
 
 from src.app.database import get_db
@@ -2790,3 +2794,60 @@ async def _batch_load_drafting_sessions(db: AsyncSession, fab_ids: List[int]) ->
             "notes": notes_by_session.get(s.id, []),
         }
     return result
+
+
+async def _load_plans_for_fabs(db: AsyncSession, fab_ids: list[int]) -> dict[int, list[dict]]:
+    if not fab_ids:
+        return {}
+
+    plans_result = await db.execute(
+        select(ShopCutPlan).where(ShopCutPlan.fab_id.in_(fab_ids))
+    )
+    plans = plans_result.scalars().all()
+
+    ws_ids = {p.workstation_id for p in plans}
+    ps_ids = {p.planning_section_id for p in plans}
+    user_ids = {p.user_id for p in plans}
+
+    ws_map = {}
+    if ws_ids:
+        ws_result = await db.execute(select(WorkStation).where(WorkStation.id.in_(ws_ids)))
+        ws_map = {w.id: w for w in ws_result.scalars().all()}
+
+    ps_map = {}
+    if ps_ids:
+        ps_result = await db.execute(select(PlanningSection).where(PlanningSection.id.in_(ps_ids)))
+        ps_map = {p.id: p for p in ps_result.scalars().all()}
+
+    user_map = {}
+    if user_ids:
+        user_result = await db.execute(select(User).where(User.id.in_(user_ids)))
+        user_map = {u.id: u for u in user_result.scalars().all()}
+
+    by_fab = defaultdict(list)
+    for p in plans:
+        u = user_map.get(p.user_id)
+        operator_name = None
+        if u:
+            operator_name = f"{u.first_name} {u.last_name}".strip() or u.username
+
+        ws = ws_map.get(p.workstation_id)
+        ps = ps_map.get(p.planning_section_id)
+
+        by_fab[p.fab_id].append({
+            "id": p.id,
+            "workstation_id": p.workstation_id,
+            "workstation_name": getattr(ws, "name", None),
+            "planning_section_id": p.planning_section_id,
+            "plan_name": getattr(ps, "plan_name", None),
+            "operator_id": p.user_id,
+            "operator_name": operator_name,
+            "estimated_hours": p.estimated_hours,
+            "scheduled_start_date": p.scheduled_start_date,
+            "actual_start_date": p.actual_start_date,
+            "actual_end_date": p.actual_end_date,
+            "work_percentage": p.work_percentage,
+            "notes": p.notes,
+        })
+
+    return by_fab

@@ -128,7 +128,7 @@ async def delete_workstation(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Delete a workstation"""
+    """Deactivate a workstation (soft delete)"""
     
     result = await db.execute(select(WorkStation).where(WorkStation.id == ws_id))
     ws = result.scalar_one_or_none()
@@ -139,10 +139,23 @@ async def delete_workstation(
             detail="Workstation not found"
         )
     
-    await db.delete(ws)
-    await db.commit()
+    ws.status_id = 0
+    ws.updated_at = datetime.now()
+    ws.updated_by = current_user.id
     
-    return success_response({"deleted_id": ws_id}, "Workstation deleted successfully")
+    await db.commit()
+    await db.refresh(ws)
+    
+    return success_response(
+        {
+            "id": ws.id,
+            "name": ws.name,
+            "status_id": ws.status_id,
+            "updated_at": ws.updated_at.isoformat(),
+            "updated_by": ws.updated_by
+        },
+        "Workstation deactivated successfully"
+    )
 
 
 @router.get("/by-name/{workstation_name}", response_model=SuccessResponse[dict])

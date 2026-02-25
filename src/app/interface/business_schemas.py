@@ -211,16 +211,20 @@ class StoneTypeResponse(BaseModel):
 
 
 # Fab Type Schemas (simple string list for now)
-class FabTypeResponse(BaseModel):
+class FabPlanItem(BaseModel):
     id: int
-    name: str
-    description: Optional[str] = None
-    created_at: datetime
-    updated_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True  # Enables SQLModel -> Pydantic conversion
-
+    workstation_id: int
+    workstation_name: Optional[str] = None
+    planning_section_id: int
+    plan_name: Optional[str] = None
+    operator_id: int
+    operator_name: Optional[str] = None
+    estimated_hours: float
+    scheduled_start_date: Optional[datetime] = None
+    actual_start_date: Optional[datetime] = None
+    actual_end_date: Optional[datetime] = None
+    work_percentage: int
+    notes: Optional[str] = None
 
 # Fab Schemas
 class FabCreate(BaseModel):
@@ -382,6 +386,8 @@ class FabResponse(BaseModel):
     predraft_completed_date: Optional[datetime] = None
     template_review_complete: Optional[bool] = None
     template_completed_date: Optional[datetime] = None
+
+    plans: List[FabPlanItem] = []
 
 
     class Config:
