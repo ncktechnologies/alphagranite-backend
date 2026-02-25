@@ -120,7 +120,7 @@ async def create_shop_plans(
 
         shop_note = ShopNotes(
             fab_id=plan_data.fab_id,
-            note=f"Shop cut plan created. color_theme={plan_data.color_theme}, status_id={plan_data.status_id}",
+            note=f"Shop cut plan created. status_id={plan_data.status_id}",
             created_by=current_user.id,
             created_at=datetime.now()
         )
@@ -135,8 +135,6 @@ async def create_shop_plans(
             "message": f"Shop plans created successfully with {len(created_plans)} plan(s)",
             "data": {
                 "fab_id": plan_data.fab_id,
-                "total_estimated_hours": plan_data.total_estimated_hours,
-                "color_theme": plan_data.color_theme,
                 "status_id": plan_data.status_id,
                 "plans_created": len(created_plans),
                 "plans": [
@@ -375,7 +373,7 @@ async def update_shop_plan(
 
         shop_note = ShopNotes(
             fab_id=plan.fab_id,
-            note=f"Shop cut plan updated. color_theme={update_data.color_theme}, status_id={update_data.status_id}",
+            note=f"Shop cut plan updated. status_id={update_data.status_id}",
             created_by=current_user.id,
             created_at=datetime.now()
         )
@@ -398,7 +396,6 @@ async def update_shop_plan(
                 "work_percentage": plan.work_percentage,
                 "updated_at": plan.updated_at.isoformat(),
                 "updated_by": plan.updated_by,
-                "color_theme": update_data.color_theme,
                 "status_id": update_data.status_id
             }
         }

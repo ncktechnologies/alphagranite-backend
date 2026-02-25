@@ -1237,8 +1237,7 @@ class ShopCutPlanStageCreate(BaseModel):
 class ShopCutPlanCreate(BaseModel):
     """Schema for creating shop cut plans"""
     fab_id: int
-    total_estimated_hours: float = Field(gt=0)
-    color_theme: Optional[str] = None
+    estimated_hours: float = Field(gt=0)
     status_id: int = Field(default=1, ge=0, le=1)  # 0=inactive, 1=active
     notes: Optional[str] = None
     stages: List[ShopCutPlanStageCreate]
@@ -1246,7 +1245,6 @@ class ShopCutPlanCreate(BaseModel):
 
 class ShopCutPlanUpdate(BaseModel):
     """Schema for updating a shop cut plan (matches POST structure)"""
-    color_theme: Optional[str] = None
     status_id: int = Field(default=1, ge=0, le=1)
     notes: Optional[str] = None
     stage: ShopCutPlanStageCreate
