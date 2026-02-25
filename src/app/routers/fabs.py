@@ -234,17 +234,26 @@ async def create_fab(
         if not cost_stone:
             return error_response("Cost of stone record not found", 404)
     
-    # Create the fab and start it at templating stage
+    # Create the fab and start it at templating stage (or resurface_scheduling if fab_type is RESURFACE)
     fab_dict = fab_data.model_dump()
     
     # Set default total_sqft to 1 if not provided (as per client requirement)
     if "total_sqft" not in fab_dict or fab_dict["total_sqft"] is None:
         fab_dict["total_sqft"] = 1.0
     
+    # Determine initial stage based on fab_type
+    fab_type = fab_dict.get("fab_type", "").upper()
+    if fab_type == "RESURFACE":
+        current_stage = "resurface_scheduling"
+        next_stage = get_next_stage("resurface_scheduling")
+    else:
+        current_stage = "templating"
+        next_stage = "pre_draft_review"
+    
     fab = Fab(
         **fab_dict,
-        current_stage="templating",
-        next_stage="pre_draft_review",
+        current_stage=current_stage,
+        next_stage=next_stage,
         status_id=1,
         created_by=current_user.id,
         created_at=datetime.now()

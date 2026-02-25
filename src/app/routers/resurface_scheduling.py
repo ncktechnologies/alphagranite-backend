@@ -105,6 +105,16 @@ async def update_resurface_scheduling(
     resurface_scheduling.updated_at = datetime.now()
     resurface_scheduling.updated_by = current_user.id
     
+    # If is_completed is True, move FAB to cut_list stage
+    if resurface_scheduling.is_completed:
+        fab_result = await db.execute(select(Fab).where(Fab.id == resurface_scheduling.fab_id))
+        fab = fab_result.scalar_one_or_none()
+        if fab:
+            fab.current_stage = "cut_list"
+            fab.next_stage = "cut_list_review"
+            fab.updated_at = datetime.now()
+            fab.updated_by = current_user.id
+    
     await db.commit()
     await db.refresh(resurface_scheduling)
     

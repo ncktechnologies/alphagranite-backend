@@ -201,7 +201,7 @@ async def get_all_shop_plans(
 
     total = await _get_total_count(db, query)
     plans = await _fetch_ordered_plans(db, query, skip, limit)
-    serialized_plans, grouped_plans = _serialize_and_group_plans(plans)
+    serialized_plans, grouped_plans = await _serialize_and_group_plans(db, plans)
 
     return {
         "success": True,
@@ -239,7 +239,7 @@ async def get_shop_plans_by_fab_id(
 
     total = await _get_total_count(db, query)
     plans = await _fetch_ordered_plans(db, query, skip, limit)
-    serialized_plans, grouped_plans = _serialize_and_group_plans(plans)
+    serialized_plans, grouped_plans = await _serialize_and_group_plans(db, plans)
 
     return {
         "success": True,
@@ -551,17 +551,38 @@ async def reschedule_shop_plan(
         )
 
 
-def _serialize_and_group_plans(plans: list[ShopCutPlan]):
+async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan]):
     serialized_plans = []
     grouped = {}
 
     for plan in plans:
+        # Fetch related data
+        ws_result = await db.execute(select(WorkStation).where(WorkStation.id == plan.workstation_id))
+        workstation = ws_result.scalar_one_or_none()
+        workstation_name = workstation.name if workstation else None
+
+        user_result = await db.execute(select(User).where(User.id == plan.user_id))
+        user = user_result.scalar_one_or_none()
+        operator_name = user.name if user else None
+
+        ps_result = await db.execute(select(PlanningSection).where(PlanningSection.id == plan.planning_section_id))
+        planning_section = ps_result.scalar_one_or_none()
+        plan_name = planning_section.plan_name if planning_section else None
+
+        fab_result = await db.execute(select(Fab).where(Fab.id == plan.fab_id))
+        fab = fab_result.scalar_one_or_none()
+        fab_type = fab.fab_type if fab else None
+
         item = {
             "id": plan.id,
             "fab_id": plan.fab_id,
+            "fab_type": fab_type,
             "workstation_id": plan.workstation_id,
+            "workstation_name": workstation_name,
             "planning_section_id": plan.planning_section_id,
+            "plan_name": plan_name,
             "operator_id": plan.user_id,
+            "operator_name": operator_name,
             "estimated_hours": plan.estimated_hours,
             "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
             "actual_start_date": plan.actual_start_date.isoformat() if plan.actual_start_date else None,
