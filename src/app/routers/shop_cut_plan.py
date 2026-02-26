@@ -5,6 +5,7 @@ from sqlalchemy import func, and_, or_, cast, String
 from datetime import datetime, timezone
 from typing import List, Optional
 from pydantic import BaseModel
+from collections import Counter
 
 from src.app.database import get_db
 from src.app.database.fab import Fab
@@ -58,6 +59,38 @@ async def create_shop_plans(
                 detail="At least one stage is required"
             )
 
+        # Prevent duplicate planning_section_id in the same payload
+        section_ids = [stage.planning_section_id for stage in plan_data.stages]
+        section_counts = Counter(section_ids)
+        duplicate_sections_in_payload = sorted([sid for sid, cnt in section_counts.items() if cnt > 1])
+        if duplicate_sections_in_payload:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Duplicate planning_section_id in request for this FAB is not allowed. "
+                    f"Duplicate section(s): {duplicate_sections_in_payload}"
+                )
+            )
+
+        # Prevent duplicate planning against existing records
+        existing_result = await db.execute(
+            select(ShopCutPlan.planning_section_id)
+            .where(
+                ShopCutPlan.fab_id == plan_data.fab_id,
+                ShopCutPlan.planning_section_id.in_(section_ids)
+            )
+            .distinct()
+        )
+        existing_sections = sorted([row[0] for row in existing_result.all()])
+        if existing_sections:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Duplicate planning not allowed: FAB {plan_data.fab_id} already has plan(s) "
+                    f"for planning_section_id(s): {existing_sections}"
+                )
+            )
+
         created_plans = []
 
         for stage in plan_data.stages:
@@ -75,6 +108,16 @@ async def create_shop_plans(
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="At least one operator is required"
+                )
+
+            # Enforce one plan per (fab_id, planning_section_id)
+            if len(stage.operator_ids) > 1:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "Only one operator is allowed per stage. "
+                        "A FAB cannot have more than one plan for the same planning_section_id."
+                    )
                 )
 
             user_result = await db.execute(select(User).where(User.id == stage.operator_ids[0]))

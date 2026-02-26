@@ -246,8 +246,13 @@ async def create_fab(
         fab_dict["total_sqft"] = 1.0
     
     # Determine initial stage based on fab_type
-    fab_type = fab_dict.get("fab_type", "").upper()
-    if fab_type == "RESURFACE":
+    fab_type = (fab_dict.get("fab_type") or "").strip().upper()
+    fab_dict["fab_type"] = fab_type  # persist uppercase globally
+
+    if fab_type in {"PUNCHOUT-AG", "PUNCHOUT-BILLABLE"}:
+        current_stage = "install_scheduling"
+        next_stage = get_next_stage("install_scheduling")
+    elif fab_type == "RESURFACE":
         current_stage = "resurface_scheduling"
         next_stage = get_next_stage("resurface_scheduling")
     else:
