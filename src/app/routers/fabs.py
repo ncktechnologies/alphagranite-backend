@@ -34,6 +34,8 @@ from src.app.interface.response_wrappers import SuccessResponse, error_response,
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.utils.helpers import utc_now
 
+
+
 router = APIRouter()
 
 # Define the fab workflow stages in order (based on client workflow)
@@ -75,6 +77,57 @@ def get_next_stage(current_stage: str) -> Optional[str]:
     except ValueError:
         # Current stage not in list, default to templating
         return "templating"
+
+
+async def get_plans_map_for_fabs(db: AsyncSession, fab_ids: List[int]) -> dict[int, list[dict]]:
+    if not fab_ids:
+        return {}
+
+    q = (
+        select(
+            ShopCutPlan,
+            Fab.fab_type.label("fab_type"),
+            WorkStation.name.label("workstation_name"),
+            PlanningSection.plan_name.label("plan_name"),
+            User.first_name.label("operator_first_name"),
+            User.last_name.label("operator_last_name"),
+        )
+        .join(Fab, Fab.id == ShopCutPlan.fab_id)
+        .join(WorkStation, WorkStation.id == ShopCutPlan.workstation_id, isouter=True)
+        .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id, isouter=True)
+        .join(User, User.id == ShopCutPlan.user_id, isouter=True)
+        .where(ShopCutPlan.fab_id.in_(fab_ids))
+        .order_by(ShopCutPlan.fab_id, ShopCutPlan.id.desc())
+    )
+    rows = (await db.execute(q)).all()
+
+    plans_map: dict[int, list[dict]] = defaultdict(list)
+    for row in rows:
+        p = row[0]
+        plans_map[p.fab_id].append({
+            "id": p.id,
+            "fab_id": p.fab_id,
+            "fab_type": row.fab_type,
+            "workstation_id": p.workstation_id,
+            "workstation_name": row.workstation_name,
+            "planning_section_id": p.planning_section_id,
+            "plan_name": row.plan_name,
+            "operator_id": p.user_id,
+            "operator_name": (
+                f"{row.operator_first_name} {row.operator_last_name}".strip()
+                if row.operator_first_name else None
+            ),
+            "estimated_hours": p.estimated_hours,
+            "scheduled_start_date": p.scheduled_start_date.isoformat() if p.scheduled_start_date else None,
+            "actual_start_date": p.actual_start_date.isoformat() if p.actual_start_date else None,
+            "actual_end_date": p.actual_end_date.isoformat() if p.actual_end_date else None,
+            "work_percentage": p.work_percentage,
+            "notes": p.notes,
+            "created_at": p.created_at.isoformat() if p.created_at else None,
+            "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+        })
+
+    return plans_map
 
 
 async def get_stage_completion_data(db: AsyncSession, fab_id: int, current_stage: Optional[str]) -> dict:
@@ -353,6 +406,12 @@ async def get_fabs(
     
     # Step 6: Batch load related data
     await _batch_load_fab_related_data(db, fabs)
+
+    # Step 6.1: Batch load plans and attach per FAB
+    fab_ids = [f["id"] for f in fabs]
+    plans_map = await get_plans_map_for_fabs(db, fab_ids)
+    for f in fabs:
+        f["plans"] = plans_map.get(f["id"], [])
     
     # Step 7: Get total count with stage-specific date filtering
     count_query = select(func.count(Fab.id)).select_from(Fab)
@@ -690,6 +749,10 @@ async def get_fab(
     stage_info = await get_stage_completion_data(db, fab_id, fab_dict.get("current_stage"))
     fab_dict["is_complete"] = stage_info["is_complete"]
     fab_dict["stage_data"] = stage_info["stage_data"]
+    
+    # Attach plans for this FAB
+    plans_map = await get_plans_map_for_fabs(db, [fab_id])
+    fab_dict["plans"] = plans_map.get(fab_id, [])
     
     # Determine success message based on stage
     message = "Fab fetched successfully"
