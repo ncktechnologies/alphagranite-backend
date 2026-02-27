@@ -2,6 +2,28 @@ from typing import Optional, List
 from datetime import datetime, date
 from pydantic import BaseModel, Field, field_validator
 from decimal import Decimal
+from typing import List, Optional
+from datetime import datetime
+
+
+class FabPlanResponse(BaseModel):
+    id: int
+    fab_id: int
+    fab_type: Optional[str] = None
+    workstation_id: Optional[int] = None
+    workstation_name: Optional[str] = None
+    planning_section_id: Optional[int] = None
+    plan_name: Optional[str] = None
+    operator_id: Optional[int] = None
+    operator_name: Optional[str] = None
+    estimated_hours: Optional[float] = None
+    scheduled_start_date: Optional[datetime] = None
+    actual_start_date: Optional[datetime] = None
+    actual_end_date: Optional[datetime] = None
+    work_percentage: Optional[float] = None
+    notes: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 # Job Schemas
 class JobCreate(BaseModel):
@@ -64,7 +86,8 @@ class JobResponse(BaseModel):
     updated_at: Optional[datetime] = None
     updated_by: Optional[int] = None
     need_to_invoice: Optional[bool] = None
-    notes: List[JobNoteResponse] = []  # Add this field
+    notes: List[JobNoteResponse] = []
+    plans: List[FabPlanResponse] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
@@ -225,6 +248,7 @@ class FabPlanItem(BaseModel):
     actual_end_date: Optional[datetime] = None
     work_percentage: int
     notes: Optional[str] = None
+
 
 # Fab Schemas
 class FabCreate(BaseModel):
@@ -387,7 +411,7 @@ class FabResponse(BaseModel):
     template_review_complete: Optional[bool] = None
     template_completed_date: Optional[datetime] = None
 
-    plans: List[FabPlanItem] = []
+    plans: List[FabPlanResponse] = []
 
 
     class Config:
