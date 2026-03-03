@@ -6,7 +6,6 @@ from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Tuple
 from pydantic import BaseModel
 from collections import Counter
-from app.interface.business_schemas import ShopPlanSuggestionsRequest
 
 from src.app.database import get_db
 from src.app.database.fab import Fab
@@ -16,7 +15,8 @@ from src.app.database.user import User
 from src.app.interface.business_schemas import (
     ShopCutPlanCreate,
     ShopCutPlanStageCreate,
-    ShopCutPlanUpdate
+    ShopCutPlanUpdate,
+    ShopPlanSuggestionsRequest
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.utils.helpers import error_response, success_response
