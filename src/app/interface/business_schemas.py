@@ -1278,3 +1278,11 @@ class ShopCutPlanUpdate(BaseModel):
     status_id: int = Field(default=1, ge=0, le=1)
     notes: Optional[str] = None
     stage: ShopCutPlanStageCreate
+
+
+class ShopPlanSuggestionsRequest(BaseModel):
+    plan_data: ShopCutPlanCreate
+    window_start: datetime
+    window_end: datetime
+    slot_minutes: int = Field(default=30, gt=0)
+    max_suggestions_per_stage: int = Field(default=10, gt=0)

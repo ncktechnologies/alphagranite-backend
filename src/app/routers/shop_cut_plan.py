@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Body
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, and_, or_, cast, String
@@ -6,6 +6,7 @@ from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Tuple
 from pydantic import BaseModel
 from collections import Counter
+from app.interface.business_schemas import ShopPlanSuggestionsRequest
 
 from src.app.database import get_db
 from src.app.database.fab import Fab
@@ -762,22 +763,17 @@ async def _fetch_ordered_plans(db: AsyncSession, query, skip: int, limit: int):
 #Auto Scheduler Endpoint - Dry Run for Available Slots
 @router.post("/plans/suggestions", response_model=dict)
 async def suggest_shop_plan_slots(
-    plan_data: ShopCutPlanCreate,
-    window_start: datetime,
-    window_end: datetime,
-    slot_minutes: int = 30,
-    max_suggestions_per_stage: int = 10,
+    request: ShopPlanSuggestionsRequest = Body(...),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Dry-run scheduler:
-    - validates same rules as create endpoint
-    - checks availability for workstation, operator, and fab
-    - returns suggested available ranges
-    - does not create ShopCutPlan rows
-    """
     try:
+        plan_data = request.plan_data
+        window_start = _normalize_naive_dt(request.window_start)
+        window_end = _normalize_naive_dt(request.window_end)
+        slot_minutes = request.slot_minutes
+        max_suggestions_per_stage = request.max_suggestions_per_stage
+
         # Basic window validation
         window_start = _normalize_naive_dt(window_start)
         window_end = _normalize_naive_dt(window_end)
