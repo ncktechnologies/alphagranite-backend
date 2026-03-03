@@ -2,8 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, and_, or_, cast, String
-from datetime import datetime, timezone
-from typing import List, Optional
+from datetime import datetime, timezone, timedelta
+from typing import List, Optional, Dict, Tuple
 from pydantic import BaseModel
 from collections import Counter
 
@@ -756,3 +756,281 @@ async def _fetch_ordered_plans(db: AsyncSession, query, skip: int, limit: int):
         ).offset(skip).limit(limit)
     )
     return result.scalars().all()
+
+
+
+#Auto Scheduler Endpoint - Dry Run for Available Slots
+@router.post("/plans/suggestions", response_model=dict)
+async def suggest_shop_plan_slots(
+    plan_data: ShopCutPlanCreate,
+    window_start: datetime,
+    window_end: datetime,
+    slot_minutes: int = 30,
+    max_suggestions_per_stage: int = 10,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Dry-run scheduler:
+    - validates same rules as create endpoint
+    - checks availability for workstation, operator, and fab
+    - returns suggested available ranges
+    - does not create ShopCutPlan rows
+    """
+    try:
+        # Basic window validation
+        window_start = _normalize_naive_dt(window_start)
+        window_end = _normalize_naive_dt(window_end)
+
+        if window_start >= window_end:
+            raise HTTPException(status_code=400, detail="window_start must be before window_end")
+        if slot_minutes <= 0:
+            raise HTTPException(status_code=400, detail="slot_minutes must be > 0")
+        if max_suggestions_per_stage <= 0:
+            raise HTTPException(status_code=400, detail="max_suggestions_per_stage must be > 0")
+
+        # Reuse create validations
+        if plan_data.status_id not in (0, 1):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="status_id must be 0 (inactive) or 1 (active)"
+            )
+
+        fab_result = await db.execute(select(Fab).where(Fab.id == plan_data.fab_id))
+        fab = fab_result.scalar_one_or_none()
+        if not fab:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"FAB with ID {plan_data.fab_id} not found"
+            )
+
+        if not plan_data.stages:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one stage is required"
+            )
+
+        section_ids = [stage.planning_section_id for stage in plan_data.stages]
+        section_counts = Counter(section_ids)
+        duplicate_sections_in_payload = sorted([sid for sid, cnt in section_counts.items() if cnt > 1])
+        if duplicate_sections_in_payload:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Duplicate planning_section_id in request for this FAB is not allowed. "
+                    f"Duplicate section(s): {duplicate_sections_in_payload}"
+                )
+            )
+
+        existing_result = await db.execute(
+            select(ShopCutPlan.planning_section_id)
+            .where(
+                ShopCutPlan.fab_id == plan_data.fab_id,
+                ShopCutPlan.planning_section_id.in_(section_ids)
+            )
+            .distinct()
+        )
+        existing_sections = sorted([row[0] for row in existing_result.all()])
+        if existing_sections:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Duplicate planning not allowed: FAB {plan_data.fab_id} already has plan(s) "
+                    f"for planning_section_id(s): {existing_sections}"
+                )
+            )
+
+        # Stage-level validations and prep
+        stage_meta = []
+        workstation_ids = set()
+        operator_ids = set()
+        max_duration_hours = 0.0
+
+        for stage in plan_data.stages:
+            ws_result = await db.execute(select(WorkStation).where(WorkStation.id == stage.workstation_id))
+            workstation = ws_result.scalar_one_or_none()
+            if not workstation:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Workstation with ID {stage.workstation_id} not found"
+                )
+
+            if not stage.operator_ids:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="At least one operator is required"
+                )
+
+            if len(stage.operator_ids) > 1:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "Only one operator is allowed per stage. "
+                        "A FAB cannot have more than one plan for the same planning_section_id."
+                    )
+                )
+
+            operator_id = stage.operator_ids[0]
+            user_result = await db.execute(select(User).where(User.id == operator_id))
+            user = user_result.scalar_one_or_none()
+            if not user:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Operator with ID {operator_id} not found"
+                )
+
+            ps_result = await db.execute(select(PlanningSection).where(PlanningSection.id == stage.planning_section_id))
+            planning_section = ps_result.scalar_one_or_none()
+            if not planning_section:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Planning section with ID {stage.planning_section_id} not found"
+                )
+
+            est_hours = float(stage.estimated_hours or 0)
+            if est_hours <= 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"estimated_hours must be > 0 for planning_section_id={stage.planning_section_id}"
+                )
+
+            max_duration_hours = max(max_duration_hours, est_hours)
+            workstation_ids.add(stage.workstation_id)
+            operator_ids.add(operator_id)
+
+            stage_meta.append({
+                "planning_section_id": stage.planning_section_id,
+                "plan_name": planning_section.plan_name,
+                "workstation_id": stage.workstation_id,
+                "workstation_name": workstation.name,
+                "operator_id": operator_id,
+                "operator_name": (f"{user.first_name} {user.last_name}".strip() or user.username),
+                "estimated_hours": est_hours,
+            })
+
+        # Pull potentially conflicting plans in one query
+        # Include plans starting before window_start (up to max duration) that can overlap into window.
+        fetch_from = window_start - timedelta(hours=max_duration_hours)
+
+        conflict_query = (
+            select(ShopCutPlan)
+            .where(
+                ShopCutPlan.scheduled_start_date.is_not(None),
+                ShopCutPlan.scheduled_start_date < window_end,
+                ShopCutPlan.scheduled_start_date >= fetch_from,
+                or_(
+                    ShopCutPlan.workstation_id.in_(list(workstation_ids)),
+                    ShopCutPlan.user_id.in_(list(operator_ids)),
+                    ShopCutPlan.fab_id == plan_data.fab_id
+                )
+            )
+        )
+        conflict_rows = (await db.execute(conflict_query)).scalars().all()
+
+        busy_by_ws: Dict[int, List[Tuple[datetime, datetime]]] = {}
+        busy_by_user: Dict[int, List[Tuple[datetime, datetime]]] = {}
+        busy_by_fab: List[Tuple[datetime, datetime]] = []
+
+        for p in conflict_rows:
+            p_start = _normalize_naive_dt(p.scheduled_start_date)
+            duration_hours = float(p.estimated_hours or 0)
+            if not p_start or duration_hours <= 0:
+                continue
+            p_end = p_start + timedelta(hours=duration_hours)
+
+            busy_by_ws.setdefault(p.workstation_id, []).append((p_start, p_end))
+            busy_by_user.setdefault(p.user_id, []).append((p_start, p_end))
+            if p.fab_id == plan_data.fab_id:
+                busy_by_fab.append((p_start, p_end))
+
+        # Build suggestions per stage
+        suggestions = []
+        for meta in stage_meta:
+            candidates = _build_candidate_ranges(
+                window_start=window_start,
+                window_end=window_end,
+                duration_hours=meta["estimated_hours"],
+                slot_minutes=slot_minutes
+            )
+
+            available = []
+            ws_busy = busy_by_ws.get(meta["workstation_id"], [])
+            user_busy = busy_by_user.get(meta["operator_id"], [])
+
+            for c_start, c_end in candidates:
+                ws_conflict = any(_intervals_overlap(c_start, c_end, b_start, b_end) for b_start, b_end in ws_busy)
+                if ws_conflict:
+                    continue
+
+                user_conflict = any(_intervals_overlap(c_start, c_end, b_start, b_end) for b_start, b_end in user_busy)
+                if user_conflict:
+                    continue
+
+                fab_conflict = any(_intervals_overlap(c_start, c_end, b_start, b_end) for b_start, b_end in busy_by_fab)
+                if fab_conflict:
+                    continue
+
+                available.append({
+                    "start": c_start.isoformat(),
+                    "end": c_end.isoformat()
+                })
+
+                if len(available) >= max_suggestions_per_stage:
+                    break
+
+            suggestions.append({
+                "planning_section_id": meta["planning_section_id"],
+                "plan_name": meta["plan_name"],
+                "workstation_id": meta["workstation_id"],
+                "workstation_name": meta["workstation_name"],
+                "operator_id": meta["operator_id"],
+                "operator_name": meta["operator_name"],
+                "estimated_hours": meta["estimated_hours"],
+                "available_ranges": available
+            })
+
+        return {
+            "success": True,
+            "message": "Suggestions generated",
+            "data": {
+                "fab_id": plan_data.fab_id,
+                "window_start": window_start.isoformat(),
+                "window_end": window_end.isoformat(),
+                "slot_minutes": slot_minutes,
+                "max_suggestions_per_stage": max_suggestions_per_stage,
+                "suggestions": suggestions
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate plan suggestions: {str(e)}"
+        )
+
+
+def _intervals_overlap(start_a: datetime, end_a: datetime, start_b: datetime, end_b: datetime) -> bool:
+    return start_a < end_b and end_a > start_b
+
+
+def _build_candidate_ranges(
+    window_start: datetime,
+    window_end: datetime,
+    duration_hours: float,
+    slot_minutes: int
+) -> List[Tuple[datetime, datetime]]:
+    duration = timedelta(hours=float(duration_hours))
+    if duration.total_seconds() <= 0:
+        return []
+
+    out: List[Tuple[datetime, datetime]] = []
+    cursor = window_start
+    step = timedelta(minutes=slot_minutes)
+
+    while cursor + duration <= window_end:
+        out.append((cursor, cursor + duration))
+        cursor += step
+
+    return out
