@@ -298,7 +298,7 @@ async def create_fab(
     if "total_sqft" not in fab_dict or fab_dict["total_sqft"] is None:
         fab_dict["total_sqft"] = 1.0
     
-    # Determine initial stage based on fab_type
+    # Determine initial stage based on fab_type / slab_smith_ag_needed
     fab_type = (fab_dict.get("fab_type") or "").strip().upper()
     fab_dict["fab_type"] = fab_type  # persist uppercase globally
 
@@ -308,6 +308,10 @@ async def create_fab(
     elif fab_type == "RESURFACE":
         current_stage = "resurface_scheduling"
         next_stage = get_next_stage("resurface_scheduling")
+    elif fab_dict.get("slab_smith_ag_needed") is False:
+        # Start at Sales CT and queue SlabSmith Request as next
+        current_stage = "sales_ct"
+        next_stage = "slab_smith_request"
     else:
         current_stage = "templating"
         next_stage = "pre_draft_review"
