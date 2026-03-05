@@ -22,6 +22,8 @@ from src.app.middleware.jwt_auth import get_current_user
 from src.app.utils.helpers import error_response, success_response
 from src.app.database.work_station import WorkStation
 from src.app.database.planning_section import PlanningSection
+from src.app.database.business_job import BusinessJob
+from src.app.database.account import Account
 
 router = APIRouter(
     prefix="/shop",
@@ -607,6 +609,10 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
     serialized_plans = []
     grouped = {}
 
+    fab_cache: Dict[int, Optional[Fab]] = {}
+    job_cache: Dict[int, Optional[BusinessJob]] = {}
+    account_cache: Dict[int, Optional[Account]] = {}
+
     for plan in plans:
         # Fetch related data
         ws_result = await db.execute(select(WorkStation).where(WorkStation.id == plan.workstation_id))
@@ -624,14 +630,48 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
         planning_section = ps_result.scalar_one_or_none()
         plan_name = planning_section.plan_name if planning_section else None
 
-        fab_result = await db.execute(select(Fab).where(Fab.id == plan.fab_id))
-        fab = fab_result.scalar_one_or_none()
+        if plan.fab_id not in fab_cache:
+            fab_result = await db.execute(select(Fab).where(Fab.id == plan.fab_id))
+            fab_cache[plan.fab_id] = fab_result.scalar_one_or_none()
+
+        fab = fab_cache.get(plan.fab_id)
         fab_type = fab.fab_type if fab else None
+
+        account_name = None
+        business_job_payload = None
+        job_name = None
+        job_number = None
+
+        if fab and getattr(fab, "job_id", None):
+            job_id = fab.job_id
+
+            if job_id not in job_cache:
+                job_result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
+                job_cache[job_id] = job_result.scalar_one_or_none()
+
+            job = job_cache.get(job_id)
+            if job:
+                job_name = job.name
+                job_number = job.job_number
+
+                if job.account_id:
+                    if job.account_id not in account_cache:
+                        account_result = await db.execute(select(Account).where(Account.id == job.account_id))
+                        account_cache[job.account_id] = account_result.scalar_one_or_none()
+
+                    account = account_cache.get(job.account_id)
+                    account_name = account.name if account else None
+
+                business_job_payload = _serialize_business_job(job, account_name=account_name)
 
         item = {
             "id": plan.id,
             "fab_id": plan.fab_id,
             "fab_type": fab_type,
+            "account_name": account_name,
+            "job_name": job_name,
+            "job_number": job_number,
+            "business_job": business_job_payload,  # full BusinessJob data
             "workstation_id": plan.workstation_id,
             "workstation_name": workstation_name,
             "planning_section_id": plan.planning_section_id,
@@ -1030,3 +1070,133 @@ def _build_candidate_ranges(
         cursor += step
 
     return out
+
+
+def _serialize_business_job(job: Optional[BusinessJob], account_name: Optional[str] = None) -> Optional[dict]:
+    if not job:
+        return None
+
+    return {
+        "id": job.id,
+        "name": job.name,
+        "job_number": job.job_number,
+        "account_id": job.account_id,
+        "account_name": account_name,
+        "description": job.description,
+        "priority": job.priority,
+        "start_date": job.start_date.isoformat() if job.start_date else None,
+        "due_date": job.due_date.isoformat() if job.due_date else None,
+        "project_value": str(job.project_value) if job.project_value is not None else None,
+        "status_id": job.status_id,
+        "created_by": job.created_by,
+        "sq_ft": job.sq_ft,
+        "sales_person_id": job.sales_person_id,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+        "updated_by": job.updated_by,
+        "need_to_invoice": job.need_to_invoice,
+        "invoice_note": job.invoice_note,
+        "invoiced_at": job.invoiced_at.isoformat() if job.invoiced_at else None,
+    }
+
+
+async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan]):
+    serialized_plans = []
+    grouped = {}
+
+    fab_cache: Dict[int, Optional[Fab]] = {}
+    job_cache: Dict[int, Optional[BusinessJob]] = {}
+    account_cache: Dict[int, Optional[Account]] = {}
+
+    for plan in plans:
+        # Fetch related data
+        ws_result = await db.execute(select(WorkStation).where(WorkStation.id == plan.workstation_id))
+        workstation = ws_result.scalar_one_or_none()
+        workstation_name = workstation.name if workstation else None
+
+        user_result = await db.execute(select(User).where(User.id == plan.user_id))
+        user = user_result.scalar_one_or_none()
+
+        operator_name = None
+        if user:
+            operator_name = f"{user.first_name} {user.last_name}".strip() or user.username
+
+        ps_result = await db.execute(select(PlanningSection).where(PlanningSection.id == plan.planning_section_id))
+        planning_section = ps_result.scalar_one_or_none()
+        plan_name = planning_section.plan_name if planning_section else None
+
+        if plan.fab_id not in fab_cache:
+            fab_result = await db.execute(select(Fab).where(Fab.id == plan.fab_id))
+            fab_cache[plan.fab_id] = fab_result.scalar_one_or_none()
+
+        fab = fab_cache.get(plan.fab_id)
+        fab_type = fab.fab_type if fab else None
+
+        account_name = None
+        business_job_payload = None
+        job_name = None
+        job_number = None
+
+        if fab and getattr(fab, "job_id", None):
+            job_id = fab.job_id
+
+            if job_id not in job_cache:
+                job_result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
+                job_cache[job_id] = job_result.scalar_one_or_none()
+
+            job = job_cache.get(job_id)
+            if job:
+                job_name = job.name
+                job_number = job.job_number
+
+                if job.account_id:
+                    if job.account_id not in account_cache:
+                        account_result = await db.execute(select(Account).where(Account.id == job.account_id))
+                        account_cache[job.account_id] = account_result.scalar_one_or_none()
+
+                    account = account_cache.get(job.account_id)
+                    account_name = account.name if account else None
+
+                business_job_payload = _serialize_business_job(job, account_name=account_name)
+
+        item = {
+            "id": plan.id,
+            "fab_id": plan.fab_id,
+            "fab_type": fab_type,
+            "account_name": account_name,
+            "job_name": job_name,
+            "job_number": job_number,
+            "business_job": business_job_payload,  # full BusinessJob data
+            "workstation_id": plan.workstation_id,
+            "workstation_name": workstation_name,
+            "planning_section_id": plan.planning_section_id,
+            "plan_name": plan_name,
+            "operator_id": plan.user_id,
+            "operator_name": operator_name,
+            "estimated_hours": plan.estimated_hours,
+            "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
+            "actual_start_date": plan.actual_start_date.isoformat() if plan.actual_start_date else None,
+            "actual_end_date": plan.actual_end_date.isoformat() if plan.actual_end_date else None,
+            "work_percentage": plan.work_percentage,
+            "notes": plan.notes,
+            "created_at": plan.created_at.isoformat(),
+            "updated_at": plan.updated_at.isoformat() if plan.updated_at else None
+        }
+        serialized_plans.append(item)
+
+        group_key = plan.scheduled_start_date.date().isoformat() if plan.scheduled_start_date else "unscheduled"
+        if group_key not in grouped:
+            grouped[group_key] = {
+                "date": None if group_key == "unscheduled" else group_key,
+                "label": "Unscheduled" if group_key == "unscheduled" else group_key,
+                "plans": []
+            }
+        grouped[group_key]["plans"].append(item)
+
+    grouped_plans = []
+    if "unscheduled" in grouped:
+        grouped_plans.append(grouped.pop("unscheduled"))
+    for key in sorted(grouped.keys()):
+        grouped_plans.append(grouped[key])
+
+    return serialized_plans, grouped_plans
