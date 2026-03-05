@@ -322,6 +322,8 @@ class FabUpdate(BaseModel):
     status_id: Optional[int] = None
     cost_of_stone_id: Optional[int] = Field(None, description="Cost of stone record ID")
     cost_of_stone: Optional[Decimal] = Field(None, description="Cost of stone amount")
+    saw_cut_lnft: Optional[float] = None
+
 
 class FabStageUpdate(BaseModel):
     current_stage: str
@@ -387,6 +389,8 @@ class FabResponse(BaseModel):
     edging_linft: Optional[float] = None  # Edging linear feet
     cnc_linft: Optional[float] = None  # CNC linear feet
     miter_linft: Optional[float] = None  # Miter linear feet
+    saw_cut_lnft: Optional[float] = None  # Saw cut linear feet
+
     installation_date: Optional[datetime] = None
     current_stage: Optional[str] = "templating"
     next_stage: Optional[str] = "pre_draft_review"

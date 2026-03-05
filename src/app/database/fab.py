@@ -70,6 +70,7 @@ class Fab(SQLModel, table=True):
     cnc_linft: Optional[float] = Field(default=None)  # CNC linear feet
     miter_linft: Optional[float] = Field(default=None)  # Miter linear feet
     installation_date: Optional[datetime] = None
+    saw_cut_lnft: Optional[float] = Field(default=None, description="Saw cut linear feet from cutlist")
     
     current_stage: Optional[str] = Field(max_length=255, default=None)
     next_stage: Optional[str] = Field(max_length=255, default=None)

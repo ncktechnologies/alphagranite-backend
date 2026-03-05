@@ -511,6 +511,7 @@ async def get_fabs(
             func.sum(Fab.edging_linft).label("edging_linft"),
             func.sum(Fab.cnc_linft).label("cnc_linft"),
             func.sum(Fab.miter_linft).label("miter_linft"),
+            func.sum(Fab.saw_cut_lnft).label("saw_cut_lnft"),
             func.sum(Fab.no_of_pieces).label("no_of_pieces")
         ).select_from(Fab).where(Fab.current_stage == current_stage)
         
@@ -567,7 +568,8 @@ async def get_fabs(
                 "edging_linft": float(totals_row[2]) if totals_row[2] else 0.0,
                 "cnc_linft": float(totals_row[3]) if totals_row[3] else 0.0,
                 "miter_linft": float(totals_row[4]) if totals_row[4] else 0.0,
-                "no_of_pieces": int(totals_row[5]) if totals_row[5] else 0
+                "saw_cut_lnft": float(totals_row[5]) if totals_row[5] else 0.0,
+                "no_of_pieces": int(totals_row[6]) if totals_row[6] else 0
             }
     
     # Step 9: Build response
@@ -1042,9 +1044,8 @@ async def get_fabs_by_job(
         fab_dict["draft_data"] = draft_data
         
         # Fetch Sales CT data
-       
         sales_ct_data = await get_sales_ct_data(db, fab_dict["id"])
-        fab_dict["sales_ct_data"] = sales_ct_data  # ← Add this if missing
+        fab_dict["sales_ct_data"] = sales_ct_data
     
     return success_response(fabs, f"Found {len(fabs)} FABs for job {job_id}")
 
