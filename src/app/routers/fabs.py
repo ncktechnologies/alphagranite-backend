@@ -58,24 +58,31 @@ FAB_STAGES = [
 
 BASE_URL = os.getenv("BASE_URL", "https://api.ag.easybusiness.ng")
 
-def get_next_stage(current_stage: str) -> Optional[str]:
+def get_next_stage(
+    current_stage: str,
+    slab_smith_ag_needed: Optional[bool] = None,
+    slab_smith_cust_needed: Optional[bool] = None,
+) -> Optional[str]:
     """
-    Get the next stage in the fab workflow.
-    Returns None if current stage is the last stage (shop_production).
+    Dynamic stage progression:
+    - Standard: templating -> pre_draft_review -> drafting -> sales_ct
+    - After sales_ct:
+        - go to slab_smith_request if AG or CUST slabsmith is needed
+        - otherwise skip slab_smith_request and go to final_programming
     """
     if not current_stage:
-        return "templating"  # Default to templating if no stage
-    
+        return "templating"
+
+    # Dynamic branch after sales_ct
+    if current_stage == "sales_ct":
+        needs_slabsmith = bool(slab_smith_ag_needed) or bool(slab_smith_cust_needed)
+        return "slab_smith_request" if needs_slabsmith else "final_programming"
+
     try:
         current_index = FAB_STAGES.index(current_stage)
         next_index = current_index + 1
-        
-        if next_index < len(FAB_STAGES):
-            return FAB_STAGES[next_index]
-        
-        return None  # Last stage, no next stage
+        return FAB_STAGES[next_index] if next_index < len(FAB_STAGES) else None
     except ValueError:
-        # Current stage not in list, default to templating
         return "templating"
 
 
@@ -308,11 +315,9 @@ async def create_fab(
     elif fab_type == "RESURFACE":
         current_stage = "resurface_scheduling"
         next_stage = get_next_stage("resurface_scheduling")
-    elif fab_dict.get("slab_smith_ag_needed") is False:
-        # Start at Sales CT and queue SlabSmith Request as next
-        current_stage = "sales_ct"
-        next_stage = "slab_smith_request"
     else:
+        # Always start normal FABs in linear flow
+        # templating -> pre_draft_review -> drafting -> sales_ct
         current_stage = "templating"
         next_stage = "pre_draft_review"
     
@@ -725,7 +730,11 @@ async def get_fab(
     fab_dict["drafter_assigned_by_name"] = f"{drafter_assigned_by_first_name} {drafter_assigned_by_last_name}" if drafter_assigned_by_first_name else None
     
     # Add next stage
-    fab_dict["next_stage"] = get_next_stage(fab_dict.get("current_stage"))
+    fab_dict["next_stage"] = get_next_stage(
+        fab_dict.get("current_stage"),
+        slab_smith_ag_needed=fab_dict.get("slab_smith_ag_needed"),
+        slab_smith_cust_needed=fab_dict.get("slab_smith_cust_needed"),
+    )
     
     # Fetch fab_notes
     fab_notes = await get_fab_notes(db, fab_id)
@@ -845,7 +854,11 @@ async def update_fab(
     
     # If current_stage was updated, automatically update next_stage
     if stage_changed and new_current_stage:
-        fab.next_stage = get_next_stage(new_current_stage)
+        fab.next_stage = get_next_stage(
+            new_current_stage,
+            slab_smith_ag_needed=update_data.get("slab_smith_ag_needed", fab.slab_smith_ag_needed),
+            slab_smith_cust_needed=update_data.get("slab_smith_cust_needed", getattr(fab, "slab_smith_cust_needed", None)),
+        )
     
     fab.updated_at = datetime.now()
     fab.updated_by = current_user.id
