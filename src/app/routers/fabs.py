@@ -58,6 +58,55 @@ FAB_STAGES = [
 
 BASE_URL = os.getenv("BASE_URL", "https://api.ag.easybusiness.ng")
 
+
+def _compute_fab_progress_fields(plans: List[dict]) -> tuple[Optional[str], float]:
+    """
+    Returns:
+    - estimated_completion_date: latest scheduled end across plan stages
+    - percentage_completion: average work_percentage across all plan stages
+      formula: total % / total stage count
+    """
+    if not plans:
+        return None, 0.0
+
+    total_percent = 0.0
+    stage_count = len(plans)
+    latest_end_dt: Optional[datetime] = None
+
+    for p in plans:
+        # percentage completion per stage (None treated as 0)
+        wp = p.get("work_percentage")
+        total_percent += float(wp) if wp is not None else 0.0
+
+        # scheduled end = scheduled_start_date + estimated_hours
+        candidate_end: Optional[datetime] = None
+        scheduled_start = p.get("scheduled_start_date")
+        estimated_hours = p.get("estimated_hours")
+
+        if scheduled_start:
+            try:
+                start_dt = datetime.fromisoformat(scheduled_start)
+                if estimated_hours is not None:
+                    candidate_end = start_dt + timedelta(hours=float(estimated_hours))
+                else:
+                    candidate_end = start_dt
+            except Exception:
+                candidate_end = None
+
+        # fallback to actual_end_date if needed
+        if candidate_end is None and p.get("actual_end_date"):
+            try:
+                candidate_end = datetime.fromisoformat(p["actual_end_date"])
+            except Exception:
+                candidate_end = None
+
+        if candidate_end and (latest_end_dt is None or candidate_end > latest_end_dt):
+            latest_end_dt = candidate_end
+
+    avg_percent = round((total_percent / stage_count), 2) if stage_count > 0 else 0.0
+    estimated_completion_date = latest_end_dt.isoformat() if latest_end_dt else None
+    return estimated_completion_date, avg_percent
+
 def get_next_stage(
     current_stage: str,
     slab_smith_ag_needed: Optional[bool] = None,
@@ -420,7 +469,13 @@ async def get_fabs(
     fab_ids = [f["id"] for f in fabs]
     plans_map = await get_plans_map_for_fabs(db, fab_ids)
     for f in fabs:
-        f["plans"] = plans_map.get(f["id"], [])
+        plans = plans_map.get(f["id"], [])
+        f["plans"] = plans
+
+        # NEW computed fields
+        estimated_completion_date, percentage_completion = _compute_fab_progress_fields(plans)
+        f["estimated_completion_date"] = estimated_completion_date
+        f["percentage_completion"] = percentage_completion
     
     # Step 7: Get total count with stage-specific date filtering
     count_query = select(func.count(Fab.id)).select_from(Fab)
