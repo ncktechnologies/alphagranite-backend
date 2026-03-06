@@ -58,6 +58,12 @@ FAB_STAGES = [
 
 BASE_URL = os.getenv("BASE_URL", "https://api.ag.easybusiness.ng")
 
+def _add_total_cut_lnft(fab_dict: dict) -> None:
+    # Uses wj_linft (existing model field), with fallback to wj_lnft if present.
+    saw_cut_lnft = float(fab_dict.get("saw_cut_lnft") or 0.0)
+    wj_lnft = float(fab_dict.get("wj_linft") or fab_dict.get("wj_lnft") or 0.0)
+    fab_dict["total_cut_lnft"] = saw_cut_lnft + wj_lnft
+
 
 def _compute_fab_progress_fields(plans: List[dict]) -> tuple[Optional[str], float]:
     """
@@ -791,6 +797,8 @@ async def get_fab(
         slab_smith_cust_needed=fab_dict.get("slab_smith_cust_needed"),
     )
     
+    _add_total_cut_lnft(fab_dict)
+
     # Fetch fab_notes
     fab_notes = await get_fab_notes(db, fab_id)
     fab_dict["fab_notes"] = fab_notes
@@ -2186,11 +2194,7 @@ def _convert_fab_row_to_dict(row: tuple) -> dict:
     fab_dict["final_programming_complete"] = fab.final_programming_complete
     fab_dict["final_programming_completed_date"] = fab.final_programming_completed_date
     
-    # NEW: computed field for GET /api/v1/fabs
-    # Uses wj_linft (existing model field), with fallback to wj_lnft if present.
-    saw_cut_lnft = float(fab_dict.get("saw_cut_lnft") or 0.0)
-    wj_lnft = float(fab_dict.get("wj_linft") or fab_dict.get("wj_lnft") or 0.0)
-    fab_dict["total_cut_lnft"] = saw_cut_lnft + wj_lnft
+    _add_total_cut_lnft(fab_dict)
 
     return fab_dict
 
