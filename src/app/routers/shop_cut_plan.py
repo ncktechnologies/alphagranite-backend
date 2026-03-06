@@ -16,7 +16,9 @@ from src.app.interface.business_schemas import (
     ShopCutPlanCreate,
     ShopCutPlanStageCreate,
     ShopCutPlanUpdate,
-    ShopPlanSuggestionsRequest
+    ShopPlanSuggestionsRequest,
+    EarliestAvailabilityRequest,
+    EarliestAvailabilityItem
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.utils.helpers import error_response, success_response
@@ -1047,6 +1049,9 @@ async def suggest_shop_plan_slots(
         )
 
 
+
+
+
 def _intervals_overlap(start_a: datetime, end_a: datetime, start_b: datetime, end_b: datetime) -> bool:
     return start_a < end_b and end_a > start_b
 
@@ -1200,3 +1205,166 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
         grouped_plans.append(grouped[key])
 
     return serialized_plans, grouped_plans
+
+
+#Auto Scheduler Endpoint - Dry Run for Available Slots
+@router.post("/plans/earliest-availability", response_model=dict)
+async def get_earliest_availability(
+    payload: EarliestAvailabilityRequest = Body(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        if not payload.requests:
+            raise HTTPException(status_code=400, detail="requests must not be empty")
+        if payload.slot_minutes <= 0:
+            raise HTTPException(status_code=400, detail="slot_minutes must be > 0")
+        if payload.search_horizon_days <= 0:
+            raise HTTPException(status_code=400, detail="search_horizon_days must be > 0")
+        if payload.max_proposals_per_request <= 0:
+            raise HTTPException(status_code=400, detail="max_proposals_per_request must be > 0")
+
+        start_from = _normalize_naive_dt(payload.start_from) if payload.start_from else datetime.now().replace(second=0, microsecond=0)
+        start_from = _align_to_slot(start_from, payload.slot_minutes)
+        search_end = start_from + timedelta(days=payload.search_horizon_days)
+        step = timedelta(minutes=payload.slot_minutes)
+
+        operator_ids = {r.operator_id for r in payload.requests}
+        workstation_ids = {r.workstation_id for r in payload.requests}
+
+        # Validate operators/workstations exist
+        user_rows = (await db.execute(select(User.id).where(User.id.in_(list(operator_ids))))).all()
+        ws_rows = (await db.execute(select(WorkStation.id).where(WorkStation.id.in_(list(workstation_ids))))).all()
+        valid_users = {r[0] for r in user_rows}
+        valid_ws = {r[0] for r in ws_rows}
+
+        missing_users = sorted(operator_ids - valid_users)
+        missing_ws = sorted(workstation_ids - valid_ws)
+        if missing_users:
+            raise HTTPException(status_code=404, detail=f"Operator(s) not found: {missing_users}")
+        if missing_ws:
+            raise HTTPException(status_code=404, detail=f"Workstation(s) not found: {missing_ws}")
+
+        # Pull relevant scheduled plans once
+        conflict_query = (
+            select(ShopCutPlan)
+            .where(
+                ShopCutPlan.scheduled_start_date.is_not(None),
+                ShopCutPlan.scheduled_start_date < search_end,
+                or_(
+                    ShopCutPlan.workstation_id.in_(list(workstation_ids)),
+                    ShopCutPlan.user_id.in_(list(operator_ids)),
+                ),
+            )
+        )
+        conflict_rows = (await db.execute(conflict_query)).scalars().all()
+
+        busy_by_ws: Dict[int, List[Tuple[datetime, datetime]]] = {}
+        busy_by_user: Dict[int, List[Tuple[datetime, datetime]]] = {}
+
+        for p in conflict_rows:
+            p_start = _normalize_naive_dt(p.scheduled_start_date)
+            dur_hours = float(p.estimated_hours or 0)
+            if not p_start or dur_hours <= 0:
+                continue
+            p_end = p_start + timedelta(hours=dur_hours)
+            busy_by_ws.setdefault(p.workstation_id, []).append((p_start, p_end))
+            busy_by_user.setdefault(p.user_id, []).append((p_start, p_end))
+
+        # Merge intervals per resource
+        for ws_id, intervals in busy_by_ws.items():
+            busy_by_ws[ws_id] = _merge_intervals(intervals)
+        for user_id, intervals in busy_by_user.items():
+            busy_by_user[user_id] = _merge_intervals(intervals)
+
+        results = []
+        for req in payload.requests:
+            if float(req.estimated_hours or 0) <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"estimated_hours must be > 0 for operator_id={req.operator_id}, workstation_id={req.workstation_id}"
+                )
+
+            duration = timedelta(hours=float(req.estimated_hours))
+            combined_busy = _merge_intervals(
+                (busy_by_ws.get(req.workstation_id, []) + busy_by_user.get(req.operator_id, []))
+            )
+
+            proposals = []
+            cursor = start_from
+
+            while cursor + duration <= search_end and len(proposals) < payload.max_proposals_per_request:
+                candidate_end = cursor + duration
+                overlap = _first_overlap(cursor, candidate_end, combined_busy)
+
+                if overlap is None:
+                    proposals.append({
+                        "start": cursor.isoformat(),
+                        "end": candidate_end.isoformat()
+                    })
+                    cursor = cursor + step
+                else:
+                    cursor = _align_to_slot(max(cursor + step, overlap[1]), payload.slot_minutes)
+
+            results.append({
+                "planning_section_id": req.planning_section_id,
+                "plan_name": ps_map.get(req.planning_section_id),
+                "operator_id": req.operator_id,
+                "workstation_id": req.workstation_id,
+                "estimated_hours": float(req.estimated_hours),
+                "proposed_ranges": proposals
+            })
+
+        return {
+            "success": True,
+            "message": "Earliest availability calculated",
+            "data": {
+                "start_from": start_from.isoformat(),
+                "search_end": search_end.isoformat(),
+                "slot_minutes": payload.slot_minutes,
+                "results": results
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to calculate earliest availability: {str(e)}"
+        )
+
+
+
+def _merge_intervals(intervals: List[Tuple[datetime, datetime]]) -> List[Tuple[datetime, datetime]]:
+    if not intervals:
+        return []
+    ordered = sorted(intervals, key=lambda x: x[0])
+    merged: List[Tuple[datetime, datetime]] = [ordered[0]]
+
+    for start, end in ordered[1:]:
+        last_start, last_end = merged[-1]
+        if start <= last_end:
+            merged[-1] = (last_start, max(last_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _first_overlap(
+    start: datetime,
+    end: datetime,
+    intervals: List[Tuple[datetime, datetime]]
+) -> Optional[Tuple[datetime, datetime]]:
+    for b_start, b_end in intervals:
+        if _intervals_overlap(start, end, b_start, b_end):
+            return (b_start, b_end)
+    return None
+
+
+def _align_to_slot(value: datetime, slot_minutes: int) -> datetime:
+    value = value.replace(second=0, microsecond=0)
+    remainder = value.minute % slot_minutes
+    if remainder == 0:
+        return value
+    return value + timedelta(minutes=(slot_minutes - remainder))

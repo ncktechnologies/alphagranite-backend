@@ -1290,3 +1290,17 @@ class ShopPlanSuggestionsRequest(BaseModel):
     window_end: datetime
     slot_minutes: int = Field(default=30, gt=0)
     max_suggestions_per_stage: int = Field(default=10, gt=0)
+
+class EarliestAvailabilityItem(BaseModel):
+    planning_section_id: int 
+    operator_id: int
+    workstation_id: int
+    estimated_hours: float
+
+
+class EarliestAvailabilityRequest(BaseModel):
+    requests: List[EarliestAvailabilityItem]
+    start_from: Optional[datetime] = None
+    slot_minutes: int = 30
+    search_horizon_days: int = 30
+    max_proposals_per_request: int = 3
