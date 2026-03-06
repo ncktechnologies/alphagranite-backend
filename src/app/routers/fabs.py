@@ -119,16 +119,20 @@ def get_next_stage(
     slab_smith_cust_needed: Optional[bool] = None,
 ) -> Optional[str]:
     """
-    Dynamic stage progression:
-    - Standard: templating -> pre_draft_review -> drafting -> sales_ct
-    - After sales_ct:
-        - go to slab_smith_request if AG or CUST slabsmith is needed
-        - otherwise skip slab_smith_request and go to final_programming
+    Workflow:
+    templating -> pre_draft_review -> drafting -> sales_ct
+    then:
+      - if slab_smith_ag_needed OR slab_smith_cust_needed: slab_smith_request
+      - else: final_programming
     """
     if not current_stage:
         return "templating"
 
-    # Dynamic branch after sales_ct
+    # From drafting, always move to sales_ct first
+    if current_stage == "drafting":
+        return "sales_ct"
+
+    # After sales_ct, branch by slabsmith flags
     if current_stage == "sales_ct":
         needs_slabsmith = bool(slab_smith_ag_needed) or bool(slab_smith_cust_needed)
         return "slab_smith_request" if needs_slabsmith else "final_programming"
@@ -371,10 +375,13 @@ async def create_fab(
         current_stage = "resurface_scheduling"
         next_stage = get_next_stage("resurface_scheduling")
     else:
-        # Always start normal FABs in linear flow
-        # templating -> pre_draft_review -> drafting -> sales_ct
+        # Always start in linear flow
         current_stage = "templating"
-        next_stage = "pre_draft_review"
+        next_stage = get_next_stage(
+            "templating",
+            slab_smith_ag_needed=fab_dict.get("slab_smith_ag_needed"),
+            slab_smith_cust_needed=fab_dict.get("slab_smith_cust_needed"),
+        )
     
     fab = Fab(
         **fab_dict,
