@@ -118,21 +118,12 @@ def get_next_stage(
     slab_smith_ag_needed: Optional[bool] = None,
     slab_smith_cust_needed: Optional[bool] = None,
 ) -> Optional[str]:
-    """
-    Workflow:
-    templating -> pre_draft_review -> drafting -> sales_ct
-    then:
-      - if slab_smith_ag_needed OR slab_smith_cust_needed: slab_smith_request
-      - else: final_programming
-    """
     if not current_stage:
         return "templating"
 
-    # From drafting, always move to sales_ct first
     if current_stage == "drafting":
         return "sales_ct"
 
-    # After sales_ct, branch by slabsmith flags
     if current_stage == "sales_ct":
         needs_slabsmith = bool(slab_smith_ag_needed) or bool(slab_smith_cust_needed)
         return "slab_smith_request" if needs_slabsmith else "final_programming"
@@ -909,7 +900,7 @@ async def update_fab(
     new_current_stage = None
     
     # Handle drafter assignment
-    if fab_data.drafter_id and fab_data.drafter_id != fab.drafter_id:
+    if fab_data.drafter_id and fab.data.drafter_id != fab.drafter_id:
         # New drafter assigned
         fab.drafter_id = fab_data.drafter_id
         fab.drafter_assigned_by = current_user.id
@@ -926,8 +917,8 @@ async def update_fab(
     if stage_changed and new_current_stage:
         fab.next_stage = get_next_stage(
             new_current_stage,
-            slab_smith_ag_needed=update_data.get("slab_smith_ag_needed", fab.slab_smith_ag_needed),
-            slab_smith_cust_needed=update_data.get("slab_smith_cust_needed", getattr(fab, "slab_smith_cust_needed", None)),
+            slab_smith_ag_needed=fab.slab_smith_ag_needed,
+            slab_smith_cust_needed=getattr(fab, "slab_smith_cust_needed", None),
         )
     
     fab.updated_at = datetime.now()
@@ -1113,8 +1104,11 @@ async def get_fabs_by_job(
         fab_dict["drafter_assigned_by_name"] = f"{drafter_assigned_by_first_name} {drafter_assigned_by_last_name}" if drafter_assigned_by_first_name else None
         
         # ALWAYS add current_stage and next_stage
-        fab_dict["next_stage"] = get_next_stage(fab_dict.get("current_stage"))
-        
+        fab_dict["next_stage"] = get_next_stage(
+            fab_dict.get("current_stage"),
+            slab_smith_ag_needed=fab_dict.get("slab_smith_ag_needed"),
+            slab_smith_cust_needed=fab_dict.get("slab_smith_cust_needed"),
+        )        
         fabs.append(fab_dict)
     
     # Fetch fab_notes for all FABs
@@ -1286,8 +1280,11 @@ async def get_fabs_by_stage(
         fab_dict["drafter_assigned_by_name"] = f"{drafter_assigned_by_first_name} {drafter_assigned_by_last_name}" if drafter_assigned_by_first_name else None
         
         # Add next_stage
-        fab_dict["next_stage"] = get_next_stage(fab_dict.get("current_stage"))
-        
+        fab_dict["next_stage"] = get_next_stage(
+            fab_dict.get("current_stage"),
+            slab_smith_ag_needed=fab_dict.get("slab_smith_ag_needed"),
+            slab_smith_cust_needed=fab_dict.get("slab_smith_cust_needed"),
+        )        
         fabs.append(fab_dict)
     
     # Fetch fab_notes for all FABs
@@ -1762,7 +1759,11 @@ async def update_fab_stage(
         return error_response("Fab not found", 404)
     
     fab.current_stage = stage_data.current_stage
-    fab.next_stage = get_next_stage(stage_data.current_stage)
+    fab.next_stage = get_next_stage(
+        stage_data.current_stage,
+        slab_smith_ag_needed=fab.slab_smith_ag_needed,
+        slab_smith_cust_needed=getattr(fab, "slab_smith_cust_needed", None),
+    )
     fab.updated_at = datetime.now()
     fab.updated_by = current_user.id
     
@@ -2196,8 +2197,11 @@ def _convert_fab_row_to_dict(row: tuple) -> dict:
     
     fab_dict["drafter_name"] = f"{drafter_first_name} {drafter_last_name}" if drafter_first_name else None
     fab_dict["drafter_assigned_by_name"] = f"{drafter_assigned_by_first_name} {drafter_assigned_by_last_name}" if drafter_assigned_by_first_name else None
-    fab_dict["next_stage"] = get_next_stage(fab_dict.get("current_stage"))
-    
+    fab_dict["next_stage"] = get_next_stage(
+        fab_dict.get("current_stage"),
+        slab_smith_ag_needed=fab_dict.get("slab_smith_ag_needed"),
+        slab_smith_cust_needed=fab_dict.get("slab_smith_cust_needed"),
+    )    
     fab_dict["final_programming_complete"] = fab.final_programming_complete
     fab_dict["final_programming_completed_date"] = fab.final_programming_completed_date
     
@@ -2758,7 +2762,7 @@ async def get_slabsmith_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
         UpdaterUser.last_name.label("updater_last_name")
     ).where(SlabSmith.fab_id == fab_id)\
      .join(UpdaterUser, SlabSmith.updated_by == UpdaterUser.id, isouter=True)\
-     .order_by(SlabSmith.id.desc())\
+     .order_by(SlabSmith.fab_id, SlabSmith.id.desc())\
      .limit(1)
     
     result = await db.execute(query)
