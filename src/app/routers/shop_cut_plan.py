@@ -1245,6 +1245,18 @@ async def get_earliest_availability(
         if missing_ws:
             raise HTTPException(status_code=404, detail=f"Workstation(s) not found: {missing_ws}")
 
+        # Validate planning sections and build id->name map
+        section_ids = {r.planning_section_id for r in payload.requests}
+        ps_rows = (await db.execute(
+            select(PlanningSection.id, PlanningSection.plan_name)
+            .where(PlanningSection.id.in_(list(section_ids)))
+        )).all()
+        ps_map = {row[0]: row[1] for row in ps_rows}
+
+        missing_sections = sorted(section_ids - set(ps_map.keys()))
+        if missing_sections:
+            raise HTTPException(status_code=404, detail=f"Planning section(s) not found: {missing_sections}")
+
         # Pull relevant scheduled plans once
         conflict_query = (
             select(ShopCutPlan)
