@@ -31,74 +31,81 @@ async def schedule_shop_date(
     """
     Production Coordinator: Schedule cut list shop date
     """
-    # Get FAB
-    result = await db.execute(select(Fab).where(Fab.id == fab_id))
-    fab = result.scalar_one_or_none()
-    
-    if not fab:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"FAB with ID {fab_id} not found"
+    try:
+        result = await db.execute(select(Fab).where(Fab.id == fab_id))
+        fab = result.scalar_one_or_none()
+
+        if not fab:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"FAB with ID {fab_id} not found"
+            )
+
+        # Normalize timezone-aware datetimes -> naive
+        fab.shop_date_schedule = _to_naive_dt(schedule_data.shop_date_schedule)
+        fab.updated_at = datetime.now()
+        fab.updated_by = current_user.id
+
+        if schedule_data.installation_date is not None:
+            fab.installation_date = _to_naive_dt(schedule_data.installation_date)
+
+        if schedule_data.no_of_pieces is not None:
+            fab.no_of_pieces = schedule_data.no_of_pieces
+
+        if schedule_data.total_sqft is not None:
+            fab.total_sqft = schedule_data.total_sqft
+
+        if schedule_data.wj_linft is not None:
+            fab.wj_linft = schedule_data.wj_linft
+
+        if schedule_data.edging_linft is not None:
+            fab.edging_linft = schedule_data.edging_linft
+
+        if schedule_data.cnc_linft is not None:
+            fab.cnc_linft = schedule_data.cnc_linft
+
+        if schedule_data.miter_linft is not None:
+            fab.miter_linft = schedule_data.miter_linft
+
+        if schedule_data.revision_complete is not None:
+            fab.revised = not schedule_data.revision_complete
+
+        fab.current_stage = "cut_list"
+        fab.next_stage = "final_programming"
+
+        fab_note = FabNotes(
+            fab_id=fab_id,
+            note=f"Shop date scheduled for {fab.shop_date_schedule.strftime('%Y-%m-%d')}",
+            stage="cut_list",
+            created_by=current_user.id,
+            created_at=datetime.now()
         )
-    
-    # Update shop date and related fields
-    fab.shop_date_schedule = schedule_data.shop_date_schedule
-    fab.updated_at = datetime.now()
-    fab.updated_by = current_user.id
-    
-    # Update optional fields if provided
-    if schedule_data.installation_date:
-        fab.installation_date = schedule_data.installation_date
-    
-    if schedule_data.no_of_pieces:
-        fab.no_of_pieces = schedule_data.no_of_pieces
-    
-    if schedule_data.total_sqft:
-        fab.total_sqft = schedule_data.total_sqft
-    
-    if schedule_data.wj_linft is not None:
-        fab.wj_linft = schedule_data.wj_linft
-    
-    if schedule_data.edging_linft is not None:
-        fab.edging_linft = schedule_data.edging_linft
-    
-    if schedule_data.cnc_linft is not None:
-        fab.cnc_linft = schedule_data.cnc_linft
-    
-    if schedule_data.miter_linft is not None:
-        fab.miter_linft = schedule_data.miter_linft
-    
-    if schedule_data.revision_complete is not None:
-        fab.revised = not schedule_data.revision_complete  # If revision complete, mark revised as False
-    
-    # Keep FAB in cut_list stage, but set next_stage to final_programming
-    fab.current_stage = "cut_list"  # ← Stay in cut_list
-    fab.next_stage = "final_programming"  # ← Next stage is final_programming
-    
-    # Add note about scheduling
-    fab_note = FabNotes(
-        fab_id=fab_id,
-        note=f"Shop date scheduled for {schedule_data.shop_date_schedule.strftime('%Y-%m-%d')}",
-        stage="cut_list",
-        created_by=current_user.id,
-        created_at=datetime.now()
-    )
-    db.add(fab_note)
-    
-    await db.commit()
-    await db.refresh(fab)
-    
-    return {
-        "success": True,
-        "message": "Shop date scheduled successfully",
-        "data": {
-            "fab_id": fab.id,
-            "shop_date_schedule": fab.shop_date_schedule.isoformat() if fab.shop_date_schedule else None,
-            "installation_date": fab.installation_date.isoformat() if fab.installation_date else None,
-            "current_stage": fab.current_stage,
-            "next_stage": fab.next_stage
+        db.add(fab_note)
+
+        await db.commit()
+        await db.refresh(fab)
+
+        return {
+            "success": True,
+            "message": "Shop date scheduled successfully",
+            "data": {
+                "fab_id": fab.id,
+                "shop_date_schedule": fab.shop_date_schedule.isoformat() if fab.shop_date_schedule else None,
+                "installation_date": fab.installation_date.isoformat() if fab.installation_date else None,
+                "current_stage": fab.current_stage,
+                "next_stage": fab.next_stage
+            }
         }
-    }
+
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to schedule shop date: {str(e)}"
+        )
 
 
 @router.patch("/{fab_id}/update", response_model=dict)
@@ -129,8 +136,8 @@ async def update_cut_list(
         if update_data.fp_not_needed is not None:
             fab.fp_not_needed = update_data.fp_not_needed
         
-        if update_data.shop_date_schedule:
-            fab.shop_date_schedule = update_data.shop_date_schedule
+        if update_data.shop_date_schedule is not None:
+            fab.shop_date_schedule = _to_naive_dt(update_data.shop_date_schedule)
         
         # Handle revision_complete
         if update_data.revision_complete is not None:
@@ -261,3 +268,8 @@ async def get_cut_list_details(
             "next_stage": fab.next_stage
         }
     }
+
+def _to_naive_dt(value):
+    if isinstance(value, datetime) and value.tzinfo is not None:
+        return value.replace(tzinfo=None)
+    return value
