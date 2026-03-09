@@ -172,6 +172,8 @@ async def mark_slabsmith_completed(
 async def add_file_to_slabsmith(
     slabsmith_id: int,
     file_id: int,
+    file_design: Optional[str] = None,
+    stage_name: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -196,7 +198,7 @@ async def add_file_to_slabsmith(
     slabsmith.updated_by = current_user.id
     
     await db.commit()
-    
+    await db.refresh(slabsmith)
     return success_response(None, "File added to slab smith successfully")
 
 

@@ -21,6 +21,8 @@ async def upload_file(
     request: Request,
     file: UploadFile = File(...),
     file_type: str = Form(None),
+    file_design: str = Form(...),
+    stage_name: str = Form(...),
     directory: str = Form("uploads"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -62,6 +64,8 @@ async def upload_file(
         user_id=current_user.id,
         directory=directory,
         file_type=file_type,
+        file_design=file_design,
+        stage_name=stage_name,
         request=request
     )
     

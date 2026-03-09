@@ -323,6 +323,7 @@ class FabUpdate(BaseModel):
     cost_of_stone_id: Optional[int] = Field(None, description="Cost of stone record ID")
     cost_of_stone: Optional[Decimal] = Field(None, description="Cost of stone amount")
     saw_cut_lnft: Optional[float] = None
+    shop_est_completion_date: Optional[datetime] = Field(None, description="Estimated completion date for shop")
 
 
 class FabStageUpdate(BaseModel):
@@ -414,6 +415,7 @@ class FabResponse(BaseModel):
     predraft_completed_date: Optional[datetime] = None
     template_review_complete: Optional[bool] = None
     template_completed_date: Optional[datetime] = None
+    shop_est_completion_date: Optional[datetime] = None
 
     plans: List[FabPlanResponse] = []
 

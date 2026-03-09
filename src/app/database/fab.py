@@ -89,3 +89,5 @@ class Fab(SQLModel, table=True):
     sct_completed_date: Optional[datetime] = Field(default=None, description="When sales CT was completed (legacy)")
     slab_smith_approved: Optional[bool] = Field(default=None, description="SlabSmith approval status")
     block_drawing_approved: Optional[bool] = Field(default=None, description="Block drawing approval status")
+
+    shop_est_completion_date: Optional[datetime] = Field(default=None, description="Estimated completion date for shop")

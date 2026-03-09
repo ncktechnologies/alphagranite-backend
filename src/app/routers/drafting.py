@@ -706,6 +706,8 @@ async def get_drafting_by_fab(
 async def add_file_to_drafting(
     drafting_id: int,
     file_id: int,
+    file_design: Optional[str] = Form(None, description="Design name or description for the file"),
+    stage_name: Optional[str] = Form(None, description="Stage name associated with the file"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -714,6 +716,8 @@ async def add_file_to_drafting(
     result = await db.execute(select(Drafting).where(Drafting.id == drafting_id))
     drafting = result.scalar_one_or_none()
     
+
+
     if not drafting:
         raise error_response("Drafting not found", 404)
     
@@ -728,10 +732,13 @@ async def add_file_to_drafting(
     
     drafting.updated_at = utc_now()
     drafting.updated_by = current_user.id
-    
+
     await db.commit()
     
-    return success_response(None, "File added to drafting successfully")
+    return success_response(
+        {"file_id": file_id, "file_design": file_design, "stage_name": stage_name},
+        "File added to drafting successfully"
+    )
 
 
 @router.delete("/drafting/{drafting_id}/file/{file_id}", response_model=SuccessResponse[None])

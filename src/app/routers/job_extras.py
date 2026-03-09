@@ -483,6 +483,8 @@ async def mark_slabsmith_completed(
 async def add_files_to_slabsmith(
     slabsmith_id: int, 
     files: List[UploadFile] = FastAPIFile(...), 
+    file_design: Optional[str] = Form(None),
+    stage_name: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db)
 ):
     """Upload files to SlabSmith, save to disk and database"""
@@ -518,6 +520,8 @@ async def add_files_to_slabsmith(
             file_type=file.content_type,
             file_size=str(len(contents)),
             stage="slabsmith",
+            file_design=file_design,
+            stage_name=stage_name,
             created_at=datetime.now(),
             updated_at=datetime.now()
         )
@@ -532,6 +536,8 @@ async def add_files_to_slabsmith(
             "file_url": file_url,
             "size": len(contents),
             "mime_type": file.content_type,
+            "file_design": file_design,
+            "stage_name": stage_name,
             "uploaded_at": datetime.now().isoformat()
         })
     
@@ -595,6 +601,8 @@ async def add_files_to_drafting(
     drafting_id: int, 
     files: List[UploadFile] = FastAPIFile(...), 
     stage: Optional[str] = Form(None),
+    file_design: Optional[str] = Form(None),
+    stage_name: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db)
 ):
     """Upload files to drafting, save to disk and database"""
@@ -629,6 +637,8 @@ async def add_files_to_drafting(
             name=file.filename,
             file_path=str(file_path),
             file_type=file.content_type,
+            file_design=file_design,
+            stage_name=stage_name,
             file_size=str(len(contents)),
             stage=stage,
             created_at=datetime.now(),
@@ -646,6 +656,8 @@ async def add_files_to_drafting(
             "file_type": file.content_type,
             "file_size": str(len(contents)),
             "stage": stage,
+            "file_design": file_design,
+            "stage_name": stage_name,
             "created_at": datetime.now().isoformat()
         })
     
@@ -660,7 +672,7 @@ async def add_files_to_drafting(
         "file_ids": uploaded_file_ids,
         "files": uploaded_files_info,
         "total_files": len(existing_file_ids),
-        "stage": stage
+        "stage": stage,
     }, "Files uploaded successfully")
 
 

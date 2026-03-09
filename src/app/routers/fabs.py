@@ -2220,6 +2220,7 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
             fab_dict["draft_data"] = None
             fab_dict["sales_ct_data"] = None
             fab_dict["slabsmith_data"] = None
+            fab_dict["resurface_details"] = None
             fab_dict["latest_revision"] = None
             fab_dict["drafting_session"] = None
             fab_dict["is_complete"] = False
@@ -2238,6 +2239,9 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
     # Load slabsmith data
     slabsmith_by_fab = await _batch_load_slabsmith_data(db, fab_ids)
     
+    # Load resurface scheduling data
+    resurface_by_fab = await _batch_load_resurface_data(db, fab_ids)
+    
     # Load stage data
     stage_data_by_fab = await _batch_load_stage_data(db, fab_ids)
     drafting_sessions_by_fab = await _batch_load_drafting_sessions(db, fab_ids)
@@ -2250,6 +2254,7 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
         fab_dict["draft_data"] = drafting_by_fab.get(fab_id)
         fab_dict["sales_ct_data"] = sales_ct_by_fab.get(fab_id)
         fab_dict["slabsmith_data"] = slabsmith_by_fab.get(fab_id)
+        fab_dict["resurface_details"] = resurface_by_fab.get(fab_id)
         fab_dict["latest_revision"] = latest_revisions_by_fab.get(fab_id)
         fab_dict["drafting_session"] = drafting_sessions_by_fab.get(fab_id)
 
@@ -2747,6 +2752,31 @@ async def get_sales_ct_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
         "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
     }
 
+async def _batch_load_resurface_data(db: AsyncSession, fab_ids: List[int]) -> dict:
+    """Load latest resurface scheduling data for each FAB."""
+    from src.app.interface.generated_schemas import ResurfaceScheduling
+
+    query = (
+        select(ResurfaceScheduling)
+        .where(ResurfaceScheduling.fab_id.in_(fab_ids))
+        .order_by(ResurfaceScheduling.fab_id, ResurfaceScheduling.id.desc())
+    )
+
+    result = await db.execute(query)
+    rows = result.scalars().all()
+
+    resurface_by_fab = {}
+    for r in rows:
+        if r.fab_id not in resurface_by_fab:
+            resurface_by_fab[r.fab_id] = {
+                "id": r.id,
+                "scheduled_start_date": r.scheduled_start_date.isoformat() if r.scheduled_start_date else None,
+                "scheduled_end_date": r.scheduled_end_date.isoformat() if r.scheduled_end_date else None,
+                "is_completed": r.is_completed,
+                "status_id": r.status_id,
+            }
+
+    return resurface_by_fab
 
 async def get_slabsmith_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
     """Get the latest slabsmith data for a FAB"""
@@ -3013,3 +3043,55 @@ async def _load_plans_for_fabs(db: AsyncSession, fab_ids: list[int]) -> dict[int
         })
 
     return by_fab
+
+@router.get("/resurface-schedule", response_model=SuccessResponse[dict])
+async def get_resurface_schedule(
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get all FABs where:
+    - fab_type is RESURFACE
+    - shop_date_schedule is set (not null)
+    """
+    base_query = (
+        select(Fab)
+        .where(
+            func.upper(sa.func.trim(Fab.fab_type)) == "RESURFACE",
+            Fab.shop_date_schedule.isnot(None)
+        )
+    )
+
+    total_result = await db.execute(
+        select(func.count()).select_from(base_query.subquery())
+    )
+    total = total_result.scalar() or 0
+
+    result = await db.execute(
+        base_query
+        .order_by(Fab.shop_date_schedule.asc(), Fab.id.desc())
+        .offset(skip)
+        .limit(limit)
+    )
+    rows = result.scalars().all()
+
+    data = []
+    for fab in rows:
+        fab_dict = {
+            k: (v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v))
+            for k, v in fab.__dict__.items()
+            if not k.startswith("_")
+        }
+        data.append(fab_dict)
+
+    return success_response(
+        {
+            "total": total,
+            "page": (skip // limit) + 1 if limit > 0 else 1,
+            "per_page": limit,
+            "data": data
+        },
+        "Resurface schedule fetched successfully"
+    )

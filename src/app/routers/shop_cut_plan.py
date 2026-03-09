@@ -71,10 +71,7 @@ async def create_shop_plans(
         if duplicate_sections_in_payload:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Duplicate planning_section_id in request for this FAB is not allowed. "
-                    f"Duplicate section(s): {duplicate_sections_in_payload}"
-                )
+                detail="This Planning Section has already been added. Please select a different Planning Section."
             )
 
         # Prevent duplicate planning against existing records
@@ -854,10 +851,7 @@ async def suggest_shop_plan_slots(
         if duplicate_sections_in_payload:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Duplicate planning_section_id in request for this FAB is not allowed. "
-                    f"Duplicate section(s): {duplicate_sections_in_payload}"
-                )
+                detail="This Planning Section has already been added. Please select a different Planning Section."
             )
 
         existing_result = await db.execute(

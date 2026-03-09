@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import List, Optional
 from decimal import Decimal
 import os
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File as FileUpload, status, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File as FileUpload, status, Request, Form
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func
@@ -231,6 +231,8 @@ async def delete_job(
 async def upload_job_media(
     job_id: int,
     files: List[UploadFile] = FileUpload(...),
+    stage_name: str = Form(...),
+    file_design: str = Form(...),
     request: Request = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -256,13 +258,20 @@ async def upload_job_media(
                 user_id=current_user.id,
                 directory="jobs",
                 file_type=file_type,
+                file_design=file_design,
+                stage=stage_name,
                 request=request
             )
 
             await db.execute(
                 File.__table__.update()
                 .where(File.id == file_data["id"])
-                .values(job_id=job_id, file_type=file_type)
+                .values(
+                    job_id=job_id,
+                    file_type=file_type,         # keep existing media classification
+                    file_design=file_design,
+                    stage=stage_name
+                )
             )
 
             # Add view URL
@@ -270,6 +279,8 @@ async def upload_job_media(
             file_data["url"] = view_url
             file_data["view_url"] = view_url
             file_data["file_type"] = file_type
+            file_data["file_design"] = file_design
+            file_data["stage"] = stage_name
 
             serialized = {
                 k: (v.isoformat() if isinstance(v, datetime) else v)

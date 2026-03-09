@@ -36,6 +36,8 @@ class FileService:
         user_id: int,
         directory: str = "uploads",
         file_type: str = None,
+        file_design: str = None,
+        stage_name: str = None,
         request: Request = None
     ) -> Dict[str, Any]:
         """
@@ -47,6 +49,8 @@ class FileService:
             user_id: The ID of the user uploading the file
             directory: The directory to save the file in (relative to UPLOADS_DIR)
             file_type: The type of file (defaults to derived from content-type)
+            file_design: The design of the file (defaults to derived from content-type)
+            stage_name: The stage name of the file (defaults to derived from content-type)
             request: The FastAPI request object to extract base URL
             
         Returns:
@@ -96,6 +100,8 @@ class FileService:
             file_path=file_path,
             file_type=file_type,
             file_size=file_size,
+            stage=stage_name,
+            file_design=file_design,
             created_at=datetime.now(),
             updated_at=datetime.now()
         )
@@ -114,6 +120,8 @@ class FileService:
             "file_path": db_file.file_path,
             "file_type": db_file.file_type,
             "file_size": db_file.file_size,
+            "stage_name": db_file.stage_name,
+            "file_design": db_file.file_design,
             "created_at": db_file.created_at,
             "url": f"{base_url}/static/{file_path}"
         }
