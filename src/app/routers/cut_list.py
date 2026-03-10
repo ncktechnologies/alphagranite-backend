@@ -73,7 +73,9 @@ async def schedule_shop_date(
         fab_type = (fab.fab_type or "").strip().lower()
         is_resurface = fab_type in {"resurface_scheduling", "resurface"}
 
-        if not is_resurface:
+        if is_resurface:
+            fab.next_stage = "install_scheduling"
+        else:
             fab.current_stage = "cut_list"
             fab.next_stage = "final_programming"
 

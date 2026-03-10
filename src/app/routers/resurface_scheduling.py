@@ -106,14 +106,15 @@ async def update_resurface_scheduling(
     resurface_scheduling.updated_at = datetime.now()
     resurface_scheduling.updated_by = current_user.id
     
-    # If is_completed is True, move FAB to cut_list stage
+    # If is_completed is True, move FAB to the next stage
     if resurface_scheduling.is_completed:
         fab_result = await db.execute(select(Fab).where(Fab.id == resurface_scheduling.fab_id))
         fab = fab_result.scalar_one_or_none()
         if fab:
             # If resurface is complete and shop date is scheduled, move to install_scheduling
             if fab.shop_date_schedule:
-                fab.next_stage = "install_scheduling"
+                fab.current_stage = "install_scheduling"
+                fab.next_stage = get_next_stage("install_scheduling")
             else:
                 # Otherwise move to cut_list
                 fab.current_stage = "cut_list"

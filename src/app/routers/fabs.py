@@ -1140,7 +1140,7 @@ async def get_fabs_by_stage(
     """Get paginated list of FABs in a specific stage"""
     
     from sqlalchemy.orm import aliased
-    from sqlalchemy import and_, func
+    from sqlalchemy import and_, func, or_
     
     # Aliases for different user roles
     TechnicianUser = aliased(User)
@@ -1194,7 +1194,18 @@ async def get_fabs_by_stage(
         .outerjoin(DrafterAssignedByUser, Fab.drafter_assigned_by == DrafterAssignedByUser.id)
     
     # Filter by stage (required)
-    query = query.where(Fab.current_stage == stage_name)
+    if stage_name == "install_scheduling":
+        query = query.where(
+            or_(
+                Fab.current_stage == "install_scheduling",
+                and_(
+                    Fab.current_stage == "resurface_scheduling",
+                    Fab.shop_date_schedule.isnot(None),
+                ),
+            )
+        )
+    else:
+        query = query.where(Fab.current_stage == stage_name)
     
     # Apply optional filters
     if job_id:
@@ -1203,7 +1214,18 @@ async def get_fabs_by_stage(
         query = query.where(Fab.status_id == status_id)
     
     # Get total count before pagination
-    count_query = select(func.count()).select_from(Fab).where(Fab.current_stage == stage_name)
+    if stage_name == "install_scheduling":
+        count_query = select(func.count()).select_from(Fab).where(
+            or_(
+                Fab.current_stage == "install_scheduling",
+                and_(
+                    Fab.current_stage == "resurface_scheduling",
+                    Fab.shop_date_schedule.isnot(None),
+                ),
+            )
+        )
+    else:
+        count_query = select(func.count()).select_from(Fab).where(Fab.current_stage == stage_name)
     if job_id:
         count_query = count_query.where(Fab.job_id == job_id)
     if status_id:
