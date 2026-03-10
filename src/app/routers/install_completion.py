@@ -61,7 +61,7 @@ async def create_install_completion(
     )
     
     # Update fab stage - mark as completed
-    fab.current_stage = "install_completions"
+    fab.current_stage = "install_completion"
     fab.updated_at = datetime.now()
     fab.updated_by = current_user.id
     

@@ -53,7 +53,7 @@ async def create_install_scheduling(
     )
     
     # Update fab stage
-    fab.current_stage = "install_schedulings"
+    fab.current_stage = "install_scheduling"
     fab.updated_at = datetime.now()
     fab.updated_by = current_user.id
     

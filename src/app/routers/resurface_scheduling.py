@@ -54,7 +54,7 @@ async def create_resurface_scheduling(
     )
     
     # Update fab stage
-    fab.current_stage = "resurface_schedulings"
+    fab.current_stage = "resurface_scheduling"
     fab.updated_at = datetime.now()
     fab.updated_by = current_user.id
     
