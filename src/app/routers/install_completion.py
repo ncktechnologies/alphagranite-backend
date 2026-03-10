@@ -69,6 +69,18 @@ async def create_install_completion(
     await db.commit()
     await db.refresh(install_completion)
     
+    # If install is marked complete, move FAB to install_completion stage
+    if install_completion.is_completed:
+        fab_result = await db.execute(
+            select(Fab).where(Fab.id == install_completion.fab_id)
+        )
+        fab = fab_result.scalar_one_or_none()
+        if fab:
+            fab.current_stage = "install_completion"
+            fab.next_stage = None  # final stage in workflow
+            fab.updated_at = datetime.now()
+            fab.updated_by = current_user.id
+    
     return success_response(
         InstallCompletionResponse(
             id=install_completion.id,
