@@ -113,12 +113,11 @@ async def update_resurface_scheduling(
         if fab:
             # If resurface is complete and shop date is scheduled, move to install_scheduling
             if fab.shop_date_schedule:
-                fab.current_stage = "install_scheduling"
-                fab.next_stage = get_next_stage("install_scheduling")
+                fab.next_stage = "install_scheduling"
             else:
                 # Otherwise move to cut_list
                 fab.current_stage = "cut_list"
-                fab.next_stage = "cut_list_review"
+                fab.next_stage = "final_programming"
             fab.updated_at = datetime.now()
             fab.updated_by = current_user.id
     
