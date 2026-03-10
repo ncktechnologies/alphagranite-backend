@@ -17,6 +17,7 @@ from src.app.interface.business_schemas import (
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import error_response, success_response
+from src.app.routers.fabs import get_next_stage
 
 router = APIRouter()
 
@@ -110,8 +111,14 @@ async def update_resurface_scheduling(
         fab_result = await db.execute(select(Fab).where(Fab.id == resurface_scheduling.fab_id))
         fab = fab_result.scalar_one_or_none()
         if fab:
-            fab.current_stage = "cut_list"
-            fab.next_stage = "cut_list_review"
+            # If resurface is complete and shop date is scheduled, move to install_scheduling
+            if fab.shop_date_schedule:
+                fab.current_stage = "install_scheduling"
+                fab.next_stage = get_next_stage("install_scheduling")
+            else:
+                # Otherwise move to cut_list
+                fab.current_stage = "cut_list"
+                fab.next_stage = "cut_list_review"
             fab.updated_at = datetime.now()
             fab.updated_by = current_user.id
     
