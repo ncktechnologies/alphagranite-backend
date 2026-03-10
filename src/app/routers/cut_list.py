@@ -70,8 +70,12 @@ async def schedule_shop_date(
         if schedule_data.revision_complete is not None:
             fab.revised = not schedule_data.revision_complete
 
-        fab.current_stage = "cut_list"
-        fab.next_stage = "final_programming"
+        fab_type = (fab.fab_type or "").strip().lower()
+        is_resurface = fab_type in {"resurface_scheduling", "resurface"}
+
+        if not is_resurface:
+            fab.current_stage = "cut_list"
+            fab.next_stage = "final_programming"
 
         fab_note = FabNotes(
             fab_id=fab_id,
