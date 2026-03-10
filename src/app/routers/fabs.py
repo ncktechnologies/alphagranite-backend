@@ -2243,6 +2243,7 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
             fab_dict["sales_ct_data"] = None
             fab_dict["slabsmith_data"] = None
             fab_dict["resurface_details"] = None
+            fab_dict["install_details"] = None
             fab_dict["latest_revision"] = None
             fab_dict["drafting_session"] = None
             fab_dict["is_complete"] = False
@@ -2263,6 +2264,9 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
     
     # Load resurface scheduling data
     resurface_by_fab = await _batch_load_resurface_data(db, fab_ids)
+
+    # Load install completion data
+    install_by_fab = await _batch_load_install_completion_data(db, fab_ids)
     
     # Load stage data
     stage_data_by_fab = await _batch_load_stage_data(db, fab_ids)
@@ -2277,6 +2281,7 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
         fab_dict["sales_ct_data"] = sales_ct_by_fab.get(fab_id)
         fab_dict["slabsmith_data"] = slabsmith_by_fab.get(fab_id)
         fab_dict["resurface_details"] = resurface_by_fab.get(fab_id)
+        fab_dict["install_details"] = install_by_fab.get(fab_id)
         fab_dict["latest_revision"] = latest_revisions_by_fab.get(fab_id)
         fab_dict["drafting_session"] = drafting_sessions_by_fab.get(fab_id)
 
@@ -2799,6 +2804,59 @@ async def _batch_load_resurface_data(db: AsyncSession, fab_ids: List[int]) -> di
             }
 
     return resurface_by_fab
+
+
+async def _batch_load_install_completion_data(db: AsyncSession, fab_ids: List[int]) -> dict:
+    """Load latest install completion data for each FAB."""
+    from sqlalchemy.orm import aliased
+    from src.app.interface.generated_schemas import InstallCompletion
+
+    InstallerUser = aliased(User)
+    UpdaterUser = aliased(User)
+
+    query = (
+        select(
+            InstallCompletion,
+            InstallerUser.first_name.label("installer_first_name"),
+            InstallerUser.last_name.label("installer_last_name"),
+            UpdaterUser.first_name.label("updater_first_name"),
+            UpdaterUser.last_name.label("updater_last_name"),
+            Status.name.label("status_name"),
+        )
+        .where(InstallCompletion.fab_id.in_(fab_ids))
+        .join(InstallerUser, InstallCompletion.installer_id == InstallerUser.id, isouter=True)
+        .join(UpdaterUser, InstallCompletion.updated_by == UpdaterUser.id, isouter=True)
+        .join(Status, InstallCompletion.status_id == Status.value_id, isouter=True)
+        .order_by(InstallCompletion.fab_id, InstallCompletion.id.desc())
+    )
+
+    result = await db.execute(query)
+    rows = result.all()
+
+    install_by_fab = {}
+    for row in rows:
+        install = row[0]
+        if install.fab_id not in install_by_fab:
+            install_by_fab[install.fab_id] = {
+                "id": install.id,
+                "fab_id": install.fab_id,
+                "installer_id": install.installer_id,
+                "installer_name": f"{row[1]} {row[2]}" if row[1] else None,
+                "install_date": install.install_date.isoformat() if install.install_date else None,
+                "completion_date": install.completion_date.isoformat() if install.completion_date else None,
+                "total_sqft_installed": install.total_sqft_installed,
+                "customer_signature": install.customer_signature,
+                "completion_notes": install.completion_notes,
+                "is_completed": install.is_completed,
+                "status_id": install.status_id,
+                "status_name": row[5],
+                "created_at": install.created_at.isoformat() if install.created_at else None,
+                "updated_at": install.updated_at.isoformat() if install.updated_at else None,
+                "updated_by": install.updated_by,
+                "updated_by_name": f"{row[3]} {row[4]}" if row[3] else None,
+            }
+
+    return install_by_fab
 
 async def get_slabsmith_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
     """Get the latest slabsmith data for a FAB"""
