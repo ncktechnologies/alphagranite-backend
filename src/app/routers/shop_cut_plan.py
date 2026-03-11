@@ -978,11 +978,16 @@ async def suggest_shop_plan_slots(
             if p.fab_id == plan_data.fab_id:
                 busy_by_fab.append((p_start, p_end))
 
-        # Build suggestions per stage
+        # Build suggestions per stage in request order.
+        # Each downstream stage is constrained to start at/after the previous stage's earliest feasible end.
         suggestions = []
+        chain_fab_busy: List[Tuple[datetime, datetime]] = list(busy_by_fab)
+        chain_cursor = _next_business_start(_align_to_slot(window_start, slot_minutes))
+
         for meta in stage_meta:
+            stage_window_start = max(window_start, chain_cursor)
             candidates = _build_candidate_ranges(
-                window_start=window_start,
+                window_start=stage_window_start,
                 window_end=window_end,
                 duration_hours=meta["estimated_hours"],
                 slot_minutes=slot_minutes
@@ -991,6 +996,7 @@ async def suggest_shop_plan_slots(
             available = []
             ws_busy = busy_by_ws.get(meta["workstation_id"], [])
             user_busy = busy_by_user.get(meta["operator_id"], [])
+            first_selected_interval: Optional[Tuple[datetime, datetime]] = None
 
             for c_start, c_end in candidates:
                 ws_conflict = any(_intervals_overlap(c_start, c_end, b_start, b_end) for b_start, b_end in ws_busy)
@@ -1001,7 +1007,7 @@ async def suggest_shop_plan_slots(
                 if user_conflict:
                     continue
 
-                fab_conflict = any(_intervals_overlap(c_start, c_end, b_start, b_end) for b_start, b_end in busy_by_fab)
+                fab_conflict = any(_intervals_overlap(c_start, c_end, b_start, b_end) for b_start, b_end in chain_fab_busy)
                 if fab_conflict:
                     continue
 
@@ -1010,8 +1016,16 @@ async def suggest_shop_plan_slots(
                     "end": c_end.isoformat()
                 })
 
+                if first_selected_interval is None:
+                    first_selected_interval = (c_start, c_end)
+
                 if len(available) >= max_suggestions_per_stage:
                     break
+
+            # Advance the chain with the earliest feasible slot for this stage.
+            if first_selected_interval is not None:
+                chain_fab_busy.append(first_selected_interval)
+                chain_cursor = first_selected_interval[1]
 
             suggestions.append({
                 "planning_section_id": meta["planning_section_id"],
