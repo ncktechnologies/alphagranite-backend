@@ -145,6 +145,7 @@ async def create_shop_plans(
             derived_stage_name = planning_section.plan_name.strip()
 
             scheduled_start = stage.scheduled_start.replace(tzinfo=None) if stage.scheduled_start.tzinfo else stage.scheduled_start
+            _validate_manual_schedule_interval(scheduled_start, stage.estimated_hours)
 
             for operator_id in stage.operator_ids:
                 user_result = await db.execute(select(User).where(User.id == operator_id))
@@ -415,6 +416,7 @@ async def update_shop_plan(
             if stage.scheduled_start and stage.scheduled_start.tzinfo
             else stage.scheduled_start
         )
+        _validate_manual_schedule_interval(scheduled_start, stage.estimated_hours)
 
         plan.workstation_id = stage.workstation_id
         plan.planning_section_id = stage.planning_section_id
@@ -575,6 +577,7 @@ async def reschedule_shop_plan(
             )
 
         scheduled_start = payload.scheduled_start.replace(tzinfo=None) if payload.scheduled_start.tzinfo else payload.scheduled_start
+        _validate_manual_schedule_interval(scheduled_start, plan.estimated_hours)
         plan.scheduled_start_date = scheduled_start
         plan.updated_at = datetime.now()
         plan.updated_by = current_user.id
@@ -1050,6 +1053,84 @@ def _intervals_overlap(start_a: datetime, end_a: datetime, start_b: datetime, en
     return start_a < end_b and end_a > start_b
 
 
+BUSINESS_START_HOUR = 7
+BUSINESS_END_HOUR = 16
+BUSINESS_WEEKDAYS = {0, 1, 2, 3, 4}  # Monday-Friday
+
+
+def _is_business_day(value: datetime) -> bool:
+    return value.weekday() in BUSINESS_WEEKDAYS
+
+
+def _business_window_for_day(value: datetime) -> Tuple[datetime, datetime]:
+    start = value.replace(hour=BUSINESS_START_HOUR, minute=0, second=0, microsecond=0)
+    end = value.replace(hour=BUSINESS_END_HOUR, minute=0, second=0, microsecond=0)
+    return start, end
+
+
+def _next_business_start(value: datetime) -> datetime:
+    cursor = value.replace(second=0, microsecond=0)
+
+    while not _is_business_day(cursor):
+        cursor = (cursor + timedelta(days=1)).replace(
+            hour=BUSINESS_START_HOUR,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+
+    day_start, day_end = _business_window_for_day(cursor)
+    if cursor < day_start:
+        return day_start
+    if cursor >= day_end:
+        next_day = (cursor + timedelta(days=1)).replace(
+            hour=BUSINESS_START_HOUR,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        return _next_business_start(next_day)
+    return cursor
+
+
+def _is_valid_business_interval(start: datetime, end: datetime) -> bool:
+    if end <= start:
+        return False
+    if not _is_business_day(start):
+        return False
+    if start.date() != end.date():
+        return False
+
+    day_start, day_end = _business_window_for_day(start)
+    return start >= day_start and end <= day_end
+
+
+def _validate_manual_schedule_interval(start: Optional[datetime], estimated_hours: Optional[float]) -> None:
+    if start is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="scheduled_start is required and must be within Monday-Friday, 7:00 AM to 4:00 PM",
+        )
+
+    try:
+        hours = float(estimated_hours) if estimated_hours is not None else 0.0
+    except (TypeError, ValueError):
+        hours = 0.0
+
+    if hours > 0:
+        end = start + timedelta(hours=hours)
+        is_valid = _is_valid_business_interval(start, end)
+    else:
+        day_start, day_end = _business_window_for_day(start)
+        is_valid = _is_business_day(start) and day_start <= start < day_end
+
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Scheduling must be Monday-Friday between 7:00 AM and 4:00 PM, and estimated duration must fit within business hours",
+        )
+
+
 def _build_candidate_ranges(
     window_start: datetime,
     window_end: datetime,
@@ -1061,12 +1142,29 @@ def _build_candidate_ranges(
         return []
 
     out: List[Tuple[datetime, datetime]] = []
-    cursor = window_start
+    cursor = _next_business_start(window_start)
+    cursor = _align_to_slot(cursor, slot_minutes)
+    cursor = _next_business_start(cursor)
     step = timedelta(minutes=slot_minutes)
 
     while cursor + duration <= window_end:
-        out.append((cursor, cursor + duration))
-        cursor += step
+        candidate_end = cursor + duration
+
+        if _is_valid_business_interval(cursor, candidate_end):
+            out.append((cursor, candidate_end))
+            cursor += step
+            continue
+
+        cursor = _next_business_start(
+            (cursor + timedelta(days=1)).replace(
+                hour=BUSINESS_START_HOUR,
+                minute=0,
+                second=0,
+                microsecond=0,
+            )
+        )
+        cursor = _align_to_slot(cursor, slot_minutes)
+        cursor = _next_business_start(cursor)
 
     return out
 
@@ -1220,6 +1318,9 @@ async def get_earliest_availability(
 
         start_from = _normalize_naive_dt(payload.start_from) if payload.start_from else datetime.now().replace(second=0, microsecond=0)
         start_from = _align_to_slot(start_from, payload.slot_minutes)
+        start_from = _next_business_start(start_from)
+        start_from = _align_to_slot(start_from, payload.slot_minutes)
+        start_from = _next_business_start(start_from)
         search_end = start_from + timedelta(days=payload.search_horizon_days)
         step = timedelta(minutes=payload.slot_minutes)
 
@@ -1301,6 +1402,20 @@ async def get_earliest_availability(
 
             while cursor + duration <= search_end and len(proposals) < payload.max_proposals_per_request:
                 candidate_end = cursor + duration
+
+                if not _is_valid_business_interval(cursor, candidate_end):
+                    cursor = _next_business_start(
+                        (cursor + timedelta(days=1)).replace(
+                            hour=BUSINESS_START_HOUR,
+                            minute=0,
+                            second=0,
+                            microsecond=0,
+                        )
+                    )
+                    cursor = _align_to_slot(cursor, payload.slot_minutes)
+                    cursor = _next_business_start(cursor)
+                    continue
+
                 overlap = _first_overlap(cursor, candidate_end, combined_busy)
 
                 if overlap is None:
@@ -1309,8 +1424,11 @@ async def get_earliest_availability(
                         "end": candidate_end.isoformat()
                     })
                     cursor = cursor + step
+                    cursor = _align_to_slot(cursor, payload.slot_minutes)
+                    cursor = _next_business_start(cursor)
                 else:
                     cursor = _align_to_slot(max(cursor + step, overlap[1]), payload.slot_minutes)
+                    cursor = _next_business_start(cursor)
 
             results.append({
                 "planning_section_id": req.planning_section_id,
