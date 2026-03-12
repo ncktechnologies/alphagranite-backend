@@ -3135,12 +3135,40 @@ async def get_resurface_schedule(
     Get all FABs where:
     - fab_type is RESURFACE
     - shop_date_schedule is set (not null)
+
+    Enriched with label fields for frontend display.
     """
+    from sqlalchemy.orm import aliased
+
+    SalesUser = aliased(User)
+
     base_query = (
-        select(Fab)
+        select(
+            Fab,
+            BusinessJob.name.label("job_name"),
+            BusinessJob.job_number.label("job_number"),
+            Account.name.label("account_name"),
+            Account.account_number.label("account_number"),
+            SalesUser.first_name.label("sales_first_name"),
+            SalesUser.last_name.label("sales_last_name"),
+            StoneType.name.label("stone_type_name"),
+            StoneColor.name.label("stone_color_name"),
+            StoneThickness.thickness.label("stone_thickness_value"),
+            Edge.name.label("edge_name"),
+            Status.name.label("status_name"),
+        )
+        .select_from(Fab)
+        .outerjoin(BusinessJob, Fab.job_id == BusinessJob.id)
+        .outerjoin(Account, BusinessJob.account_id == Account.id)
+        .outerjoin(SalesUser, Fab.sales_person_id == SalesUser.id)
+        .outerjoin(StoneType, Fab.stone_type_id == StoneType.id)
+        .outerjoin(StoneColor, Fab.stone_color_id == StoneColor.id)
+        .outerjoin(StoneThickness, Fab.stone_thickness_id == StoneThickness.id)
+        .outerjoin(Edge, Fab.edge_id == Edge.id)
+        .outerjoin(Status, Fab.status_id == Status.value_id)
         .where(
             func.upper(sa.func.trim(Fab.fab_type)) == "RESURFACE",
-            Fab.shop_date_schedule.isnot(None)
+            Fab.shop_date_schedule.isnot(None),
         )
     )
 
@@ -3155,15 +3183,35 @@ async def get_resurface_schedule(
         .offset(skip)
         .limit(limit)
     )
-    rows = result.scalars().all()
+    rows = result.all()
 
     data = []
-    for fab in rows:
+    for row in rows:
+        fab = row[0]
         fab_dict = {
-            k: (v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v))
+            k: (
+                v.isoformat() if isinstance(v, (datetime, date))
+                else (float(v) if isinstance(v, Decimal) else v)
+            )
             for k, v in fab.__dict__.items()
             if not k.startswith("_")
         }
+
+        sales_name = None
+        if row.sales_first_name:
+            sales_name = f"{row.sales_first_name} {row.sales_last_name}".strip()
+
+        fab_dict["job_name"] = row.job_name
+        fab_dict["job_number"] = row.job_number
+        fab_dict["account_name"] = row.account_name
+        fab_dict["account_number"] = row.account_number
+        fab_dict["sales_person_name"] = sales_name
+        fab_dict["stone_type_name"] = row.stone_type_name
+        fab_dict["stone_color_name"] = row.stone_color_name
+        fab_dict["stone_thickness_value"] = row.stone_thickness_value
+        fab_dict["edge_name"] = row.edge_name
+        fab_dict["status_name"] = row.status_name
+
         data.append(fab_dict)
 
     return success_response(
