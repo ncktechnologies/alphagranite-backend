@@ -198,6 +198,7 @@ async def create_shop_plans(
                         "operator_id": plan.user_id,
                         "estimated_hours": plan.estimated_hours,
                         "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
+                        "scheduled_end_date": _compute_schedule_end_time_iso(plan.scheduled_start_date, plan.estimated_hours),
                         "work_percentage": plan.work_percentage,
                         "notes": plan.notes
                     }
@@ -711,6 +712,17 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
 
 def _normalize_naive_dt(value: datetime) -> datetime:
     return value.replace(tzinfo=None) if value and value.tzinfo else value
+
+def _compute_schedule_end_time_iso(
+    scheduled_start: Optional[datetime],
+    estimated_hours: Optional[float]
+) -> Optional[str]:
+    if not scheduled_start or estimated_hours is None:
+        return None
+    try:
+        return (scheduled_start + timedelta(hours=float(estimated_hours))).isoformat()
+    except (TypeError, ValueError):
+        return None
 
 
 def _validate_month_year(month: int, year: int) -> None:
