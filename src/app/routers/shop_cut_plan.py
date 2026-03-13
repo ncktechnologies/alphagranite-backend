@@ -93,8 +93,8 @@ async def create_shop_plans(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
-                    f"Duplicate planning not allowed: FAB {plan_data.fab_id} already has plan(s) "
-                    f"for planning_section_id(s): {existing_sections}"
+                    "A plan already exists for this job in the selected planning section. "
+                    "Please choose a different planning section or update the existing plan."
                 )
             )
 
@@ -1289,8 +1289,8 @@ async def suggest_shop_plan_slots(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
-                    f"Duplicate planning not allowed: FAB {plan_data.fab_id} already has plan(s) "
-                    f"for planning_section_id(s): {existing_sections}"
+                    "A plan already exists for this job in the selected planning section. "
+                    "Please choose a different planning section or update the existing plan."
                 )
             )
 
@@ -1867,11 +1867,15 @@ async def _assert_no_shop_plan_conflicts(
         other_end = other_start + timedelta(hours=other_hours)
 
         if _intervals_overlap(scheduled_start, proposed_end, other_start, other_end):
+            readable_start_time = other_start.strftime("%I:%M %p").lstrip("0")
+            readable_end_time = other_end.strftime("%I:%M %p").lstrip("0")
+            readable_date = other_start.strftime("%b %d, %Y")
+        
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
-                    "Proposed schedule extension creates a conflict with an existing shop plan. "
-                    f"Conflicting plan_id={other_plan.id}, "
-                    f"start={other_start.isoformat()}, end={other_end.isoformat()}."
+                    "This schedule update conflicts with an existing plan scheduled "
+                    f"from {readable_start_time} to {readable_end_time} on {readable_date}. "
+                    "Please choose a different time slot."
                 ),
             )
