@@ -8,6 +8,9 @@ from src.app.database import get_db
 from src.app.database.planning_section import PlanningSection as PlanningSectionSchema
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import success_response, error_response
+from src.app.database.work_station import WorkStation
+from src.app.middleware.jwt_auth import get_current_user
+from src.app.database.user import User
 
 router = APIRouter()
 
@@ -99,3 +102,48 @@ async def get_active_planning_sections(db: AsyncSession = Depends(get_db)):
     )
     sections = result.scalars().all()
     return success_response(sections, "Active planning sections retrieved successfully")
+
+
+@router.get(
+    "/planning-section/{planning_section_id}/workstations",
+    response_model=SuccessResponse[dict],
+)
+async def get_workstations_by_planning_section(
+    planning_section_id: int,
+    status_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    section = await db.get(PlanningSectionSchema, planning_section_id)
+    if not section:
+        raise error_response("Planning section not found", 404)
+
+    query = select(WorkStation).where(WorkStation.planning_section_id == planning_section_id)
+
+    if status_id is not None:
+        query = query.where(WorkStation.status_id == status_id)
+
+    result = await db.execute(query.order_by(WorkStation.name))
+    workstations = result.scalars().all()
+
+    return success_response(
+        {
+            "planning_section_id": planning_section_id,
+            "plan_name": section.plan_name,
+            "total": len(workstations),
+            "workstations": [
+                {
+                    "id": ws.id,
+                    "name": ws.name,
+                    "status_id": ws.status_id,
+                    "operator_ids": ws.operator_ids,
+                    "created_at": ws.created_at.isoformat(),
+                    "created_by": ws.created_by,
+                    "updated_at": ws.updated_at.isoformat() if ws.updated_at else None,
+                    "updated_by": ws.updated_by,
+                }
+                for ws in workstations
+            ]
+        },
+        "Workstations retrieved successfully",
+    )

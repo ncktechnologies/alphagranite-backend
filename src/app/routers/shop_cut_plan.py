@@ -17,6 +17,7 @@ from src.app.interface.business_schemas import (
     ShopCutPlanStageCreate,
     ShopCutPlanUpdate,
     ShopPlanSuggestionsRequest,
+    ShopCutPlanTimerActionRequest,
     EarliestAvailabilityRequest,
     EarliestAvailabilityItem
 )
@@ -26,6 +27,10 @@ from src.app.database.work_station import WorkStation
 from src.app.database.planning_section import PlanningSection
 from src.app.database.business_job import BusinessJob
 from src.app.database.account import Account
+from src.app.database.shop_cut_plan_timer_session import ShopCutPlanTimerSession
+from src.app.database.shop_cut_plan_timer_event import ShopCutPlanTimerEvent
+from src.app.database.role import Role
+from src.app.database.user_role import UserRole
 
 router = APIRouter(
     prefix="/shop",
@@ -328,6 +333,12 @@ async def get_shop_plan(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Shop plan with ID {plan_id} not found"
         )
+
+    work_percentage, total_actual_hours, total_actual_seconds = await _recalculate_shop_plan_work_percentage(
+        db=db,
+        plan=plan,
+        as_of=datetime.now().replace(second=0, microsecond=0),
+    )
     
     return {
         "success": True,
@@ -339,10 +350,12 @@ async def get_shop_plan(
             "planning_section_id": plan.planning_section_id,
             "operator_id": plan.user_id,
             "estimated_hours": plan.estimated_hours,
+            "total_actual_seconds": total_actual_seconds,
+            "total_actual_hours": total_actual_hours,
             "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
             "actual_start_date": plan.actual_start_date.isoformat() if plan.actual_start_date else None,
             "actual_end_date": plan.actual_end_date.isoformat() if plan.actual_end_date else None,
-            "work_percentage": plan.work_percentage,
+            "work_percentage": work_percentage,
             "notes": plan.notes,
             "created_at": plan.created_at.isoformat(),
             "created_by": plan.created_by,
@@ -608,6 +621,373 @@ async def reschedule_shop_plan(
         )
 
 
+async def _can_manage_shop_cut_plan_timer(db: AsyncSession, current_user: User, plan: ShopCutPlan) -> bool:
+    if current_user.id == plan.user_id:
+        return True
+
+    if getattr(current_user, "is_super_admin", False):
+        return True
+
+    roles_result = await db.execute(
+        select(Role.name)
+        .join(UserRole, UserRole.role_id == Role.id)
+        .where(UserRole.user_id == current_user.id)
+    )
+    role_names = {str(r[0]).strip().lower() for r in roles_result.all() if r[0]}
+    return any(name in role_names for name in {"admin", "administrator", "supervisor"})
+
+
+async def _recalculate_shop_plan_work_percentage(
+    db: AsyncSession,
+    plan: ShopCutPlan,
+    as_of: datetime,
+) -> Tuple[int, float, int]:
+    totals_result = await db.execute(
+        select(func.coalesce(func.sum(ShopCutPlanTimerSession.total_work_seconds), 0))
+        .where(ShopCutPlanTimerSession.shop_cut_plan_id == plan.id)
+    )
+    stored_seconds = int(totals_result.scalar() or 0)
+
+    running_result = await db.execute(
+        select(ShopCutPlanTimerSession)
+        .where(
+            ShopCutPlanTimerSession.shop_cut_plan_id == plan.id,
+            ShopCutPlanTimerSession.status == "running",
+            ShopCutPlanTimerSession.current_run_start_at.is_not(None),
+        )
+    )
+    running_sessions = running_result.scalars().all()
+
+    in_progress_seconds = 0
+    for session in running_sessions:
+        run_start = _normalize_naive_dt(session.current_run_start_at)
+        if run_start and as_of > run_start:
+            in_progress_seconds += int((as_of - run_start).total_seconds())
+
+    total_actual_seconds = max(0, stored_seconds + in_progress_seconds)
+    total_actual_hours = total_actual_seconds / 3600.0
+
+    estimated_hours = float(plan.estimated_hours or 0)
+    if estimated_hours <= 0:
+        work_percentage = 0
+    else:
+        work_percentage = min(100, int((total_actual_hours / estimated_hours) * 100))
+
+    return work_percentage, total_actual_hours, total_actual_seconds
+
+
+@router.post("/plans/{plan_id}/timer/action", response_model=dict)
+async def manage_shop_cut_plan_timer(
+    plan_id: int,
+    payload: ShopCutPlanTimerActionRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        action = (payload.action or "").strip().lower()
+        if action not in {"start", "pause", "resume", "stop"}:
+            raise HTTPException(status_code=400, detail="action must be one of: start, pause, resume, stop")
+
+        action_ts = _normalize_naive_dt(payload.timestamp) if payload.timestamp else datetime.now().replace(second=0, microsecond=0)
+
+        plan_result = await db.execute(select(ShopCutPlan).where(ShopCutPlan.id == plan_id))
+        plan = plan_result.scalar_one_or_none()
+        if not plan:
+            raise HTTPException(status_code=404, detail=f"Shop plan with ID {plan_id} not found")
+
+        if not await _can_manage_shop_cut_plan_timer(db, current_user, plan):
+            raise HTTPException(status_code=403, detail="Not authorized to control this timer")
+
+        active_result = await db.execute(
+            select(ShopCutPlanTimerSession)
+            .where(
+                ShopCutPlanTimerSession.shop_cut_plan_id == plan_id,
+                ShopCutPlanTimerSession.operator_id == plan.user_id,
+                ShopCutPlanTimerSession.status.in_(["running", "paused"]),
+            )
+            .order_by(ShopCutPlanTimerSession.created_at.desc())
+            .limit(1)
+        )
+        active_session = active_result.scalars().first()
+
+        if action == "start":
+            if active_session:
+                raise HTTPException(status_code=400, detail="An active timer session already exists")
+
+            session = ShopCutPlanTimerSession(
+                shop_cut_plan_id=plan_id,
+                operator_id=plan.user_id,
+                status="running",
+                session_start_at=action_ts,
+                current_run_start_at=action_ts,
+                total_work_seconds=0,
+                total_pause_seconds=0,
+                created_at=datetime.now(),
+                created_by=current_user.id,
+            )
+            db.add(session)
+            await db.flush()
+
+            db.add(
+                ShopCutPlanTimerEvent(
+                    session_id=session.id,
+                    shop_cut_plan_id=plan_id,
+                    operator_id=plan.user_id,
+                    action="start",
+                    event_at=action_ts,
+                    note=payload.note,
+                )
+            )
+
+            if not plan.actual_start_date:
+                plan.actual_start_date = action_ts
+
+        elif action == "pause":
+            if not active_session or active_session.status != "running":
+                raise HTTPException(status_code=400, detail="No running timer session found to pause")
+
+            run_start = _normalize_naive_dt(active_session.current_run_start_at)
+            if not run_start:
+                raise HTTPException(status_code=400, detail="Timer session is missing current_run_start_at")
+
+            elapsed = int(max(0, (action_ts - run_start).total_seconds()))
+            active_session.total_work_seconds = int(active_session.total_work_seconds or 0) + elapsed
+            active_session.status = "paused"
+            active_session.current_run_start_at = None
+            active_session.current_pause_start_at = action_ts
+            active_session.updated_at = datetime.now()
+            active_session.updated_by = current_user.id
+
+            db.add(
+                ShopCutPlanTimerEvent(
+                    session_id=active_session.id,
+                    shop_cut_plan_id=plan_id,
+                    operator_id=plan.user_id,
+                    action="pause",
+                    event_at=action_ts,
+                    note=payload.note,
+                )
+            )
+
+        elif action == "resume":
+            if not active_session or active_session.status != "paused":
+                raise HTTPException(status_code=400, detail="No paused timer session found to resume")
+
+            pause_start = _normalize_naive_dt(active_session.current_pause_start_at)
+            if pause_start and action_ts > pause_start:
+                pause_elapsed = int((action_ts - pause_start).total_seconds())
+                active_session.total_pause_seconds = int(active_session.total_pause_seconds or 0) + max(0, pause_elapsed)
+
+            active_session.status = "running"
+            active_session.current_pause_start_at = None
+            active_session.current_run_start_at = action_ts
+            active_session.updated_at = datetime.now()
+            active_session.updated_by = current_user.id
+
+            db.add(
+                ShopCutPlanTimerEvent(
+                    session_id=active_session.id,
+                    shop_cut_plan_id=plan_id,
+                    operator_id=plan.user_id,
+                    action="resume",
+                    event_at=action_ts,
+                    note=payload.note,
+                )
+            )
+
+        else:
+            if not active_session or active_session.status not in {"running", "paused"}:
+                raise HTTPException(status_code=400, detail="No active timer session found to stop")
+
+            if active_session.status == "running":
+                run_start = _normalize_naive_dt(active_session.current_run_start_at)
+                if run_start and action_ts > run_start:
+                    elapsed = int((action_ts - run_start).total_seconds())
+                    active_session.total_work_seconds = int(active_session.total_work_seconds or 0) + max(0, elapsed)
+
+            if active_session.status == "paused":
+                pause_start = _normalize_naive_dt(active_session.current_pause_start_at)
+                if pause_start and action_ts > pause_start:
+                    pause_elapsed = int((action_ts - pause_start).total_seconds())
+                    active_session.total_pause_seconds = int(active_session.total_pause_seconds or 0) + max(0, pause_elapsed)
+
+            active_session.status = "stopped"
+            active_session.current_run_start_at = None
+            active_session.current_pause_start_at = None
+            active_session.stopped_at = action_ts
+            active_session.updated_at = datetime.now()
+            active_session.updated_by = current_user.id
+
+            db.add(
+                ShopCutPlanTimerEvent(
+                    session_id=active_session.id,
+                    shop_cut_plan_id=plan_id,
+                    operator_id=plan.user_id,
+                    action="stop",
+                    event_at=action_ts,
+                    note=payload.note,
+                )
+            )
+
+            plan.actual_end_date = action_ts
+
+        work_percentage, total_actual_hours, total_actual_seconds = await _recalculate_shop_plan_work_percentage(
+            db=db,
+            plan=plan,
+            as_of=action_ts,
+        )
+        plan.work_percentage = work_percentage
+        plan.updated_at = datetime.now()
+        plan.updated_by = current_user.id
+
+        await db.commit()
+
+        return {
+            "success": True,
+            "message": f"Timer {action} successful",
+            "data": {
+                "shop_cut_plan_id": plan.id,
+                "operator_id": plan.user_id,
+                "action": action,
+                "timestamp": action_ts.isoformat(),
+                "total_actual_seconds": total_actual_seconds,
+                "total_actual_hours": total_actual_hours,
+                "estimated_hours": float(plan.estimated_hours or 0),
+                "work_percentage": plan.work_percentage,
+            }
+        }
+
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to process timer action: {str(e)}")
+
+
+@router.get("/plans/{plan_id}/timer", response_model=dict)
+async def get_shop_cut_plan_timer_state(
+    plan_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    plan_result = await db.execute(select(ShopCutPlan).where(ShopCutPlan.id == plan_id))
+    plan = plan_result.scalar_one_or_none()
+    if not plan:
+        raise HTTPException(status_code=404, detail=f"Shop plan with ID {plan_id} not found")
+
+    if not await _can_manage_shop_cut_plan_timer(db, current_user, plan):
+        raise HTTPException(status_code=403, detail="Not authorized to view this timer")
+
+    latest_result = await db.execute(
+        select(ShopCutPlanTimerSession)
+        .where(
+            ShopCutPlanTimerSession.shop_cut_plan_id == plan_id,
+            ShopCutPlanTimerSession.operator_id == plan.user_id,
+        )
+        .order_by(ShopCutPlanTimerSession.created_at.desc())
+        .limit(1)
+    )
+    latest = latest_result.scalars().first()
+
+    now_ts = datetime.now().replace(second=0, microsecond=0)
+    work_percentage, total_actual_hours, total_actual_seconds = await _recalculate_shop_plan_work_percentage(
+        db=db,
+        plan=plan,
+        as_of=now_ts,
+    )
+
+    return {
+        "success": True,
+        "message": "Timer state retrieved successfully",
+        "data": {
+            "shop_cut_plan_id": plan.id,
+            "operator_id": plan.user_id,
+            "session": {
+                "id": latest.id,
+                "status": latest.status,
+                "session_start_at": latest.session_start_at.isoformat() if latest.session_start_at else None,
+                "current_run_start_at": latest.current_run_start_at.isoformat() if latest.current_run_start_at else None,
+                "current_pause_start_at": latest.current_pause_start_at.isoformat() if latest.current_pause_start_at else None,
+                "stopped_at": latest.stopped_at.isoformat() if latest.stopped_at else None,
+            } if latest else None,
+            "total_actual_seconds": total_actual_seconds,
+            "total_actual_hours": total_actual_hours,
+            "estimated_hours": float(plan.estimated_hours or 0),
+            "work_percentage": work_percentage,
+        }
+    }
+
+
+@router.get("/plans/{plan_id}/timer/history", response_model=dict)
+async def get_shop_cut_plan_timer_history(
+    plan_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    plan_result = await db.execute(select(ShopCutPlan).where(ShopCutPlan.id == plan_id))
+    plan = plan_result.scalar_one_or_none()
+    if not plan:
+        raise HTTPException(status_code=404, detail=f"Shop plan with ID {plan_id} not found")
+
+    if not await _can_manage_shop_cut_plan_timer(db, current_user, plan):
+        raise HTTPException(status_code=403, detail="Not authorized to view this timer history")
+
+    sessions_result = await db.execute(
+        select(ShopCutPlanTimerSession)
+        .where(
+            ShopCutPlanTimerSession.shop_cut_plan_id == plan_id,
+            ShopCutPlanTimerSession.operator_id == plan.user_id,
+        )
+        .order_by(ShopCutPlanTimerSession.created_at.asc())
+    )
+    sessions = sessions_result.scalars().all()
+
+    events_result = await db.execute(
+        select(ShopCutPlanTimerEvent)
+        .where(
+            ShopCutPlanTimerEvent.shop_cut_plan_id == plan_id,
+            ShopCutPlanTimerEvent.operator_id == plan.user_id,
+        )
+        .order_by(ShopCutPlanTimerEvent.event_at.asc())
+    )
+    events = events_result.scalars().all()
+
+    return {
+        "success": True,
+        "message": "Timer history retrieved successfully",
+        "data": {
+            "shop_cut_plan_id": plan_id,
+            "operator_id": plan.user_id,
+            "sessions": [
+                {
+                    "id": s.id,
+                    "status": s.status,
+                    "session_start_at": s.session_start_at.isoformat() if s.session_start_at else None,
+                    "current_run_start_at": s.current_run_start_at.isoformat() if s.current_run_start_at else None,
+                    "current_pause_start_at": s.current_pause_start_at.isoformat() if s.current_pause_start_at else None,
+                    "stopped_at": s.stopped_at.isoformat() if s.stopped_at else None,
+                    "total_work_seconds": int(s.total_work_seconds or 0),
+                    "total_pause_seconds": int(s.total_pause_seconds or 0),
+                    "created_at": s.created_at.isoformat() if s.created_at else None,
+                    "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+                }
+                for s in sessions
+            ],
+            "events": [
+                {
+                    "id": e.id,
+                    "session_id": e.session_id,
+                    "action": e.action,
+                    "event_at": e.event_at.isoformat() if e.event_at else None,
+                    "note": e.note,
+                }
+                for e in events
+            ],
+        }
+    }
+
+
 async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan]):
     serialized_plans = []
     grouped = {}
@@ -617,6 +997,12 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
     account_cache: Dict[int, Optional[Account]] = {}
 
     for plan in plans:
+        work_percentage, total_actual_hours, total_actual_seconds = await _recalculate_shop_plan_work_percentage(
+            db=db,
+            plan=plan,
+            as_of=datetime.now().replace(second=0, microsecond=0),
+        )
+
         # Fetch related data
         ws_result = await db.execute(select(WorkStation).where(WorkStation.id == plan.workstation_id))
         workstation = ws_result.scalar_one_or_none()
@@ -682,10 +1068,12 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
             "operator_id": plan.user_id,
             "operator_name": operator_name,
             "estimated_hours": plan.estimated_hours,
+            "total_actual_seconds": total_actual_seconds,
+            "total_actual_hours": total_actual_hours,
             "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
             "actual_start_date": plan.actual_start_date.isoformat() if plan.actual_start_date else None,
             "actual_end_date": plan.actual_end_date.isoformat() if plan.actual_end_date else None,
-            "work_percentage": plan.work_percentage,
+            "work_percentage": work_percentage,
             "notes": plan.notes,
             "created_at": plan.created_at.isoformat(),
             "updated_at": plan.updated_at.isoformat() if plan.updated_at else None
@@ -1228,108 +1616,6 @@ def _serialize_business_job(job: Optional[BusinessJob], account_name: Optional[s
         "invoice_note": job.invoice_note,
         "invoiced_at": job.invoiced_at.isoformat() if job.invoiced_at else None,
     }
-
-
-async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan]):
-    serialized_plans = []
-    grouped = {}
-
-    fab_cache: Dict[int, Optional[Fab]] = {}
-    job_cache: Dict[int, Optional[BusinessJob]] = {}
-    account_cache: Dict[int, Optional[Account]] = {}
-
-    for plan in plans:
-        # Fetch related data
-        ws_result = await db.execute(select(WorkStation).where(WorkStation.id == plan.workstation_id))
-        workstation = ws_result.scalar_one_or_none()
-        workstation_name = workstation.name if workstation else None
-
-        user_result = await db.execute(select(User).where(User.id == plan.user_id))
-        user = user_result.scalar_one_or_none()
-
-        operator_name = None
-        if user:
-            operator_name = f"{user.first_name} {user.last_name}".strip() or user.username
-
-        ps_result = await db.execute(select(PlanningSection).where(PlanningSection.id == plan.planning_section_id))
-        planning_section = ps_result.scalar_one_or_none()
-        plan_name = planning_section.plan_name if planning_section else None
-
-        if plan.fab_id not in fab_cache:
-            fab_result = await db.execute(select(Fab).where(Fab.id == plan.fab_id))
-            fab_cache[plan.fab_id] = fab_result.scalar_one_or_none()
-
-        fab = fab_cache.get(plan.fab_id)
-        fab_type = fab.fab_type if fab else None
-
-        account_name = None
-        business_job_payload = None
-        job_name = None
-        job_number = None
-
-        if fab and getattr(fab, "job_id", None):
-            job_id = fab.job_id
-
-            if job_id not in job_cache:
-                job_result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
-                job_cache[job_id] = job_result.scalar_one_or_none()
-
-            job = job_cache.get(job_id)
-            if job:
-                job_name = job.name
-                job_number = job.job_number
-
-                if job.account_id:
-                    if job.account_id not in account_cache:
-                        account_result = await db.execute(select(Account).where(Account.id == job.account_id))
-                        account_cache[job.account_id] = account_result.scalar_one_or_none()
-
-                    account = account_cache.get(job.account_id)
-                    account_name = account.name if account else None
-
-                business_job_payload = _serialize_business_job(job, account_name=account_name)
-
-        item = {
-            "id": plan.id,
-            "fab_id": plan.fab_id,
-            "fab_type": fab_type,
-            "account_name": account_name,
-            "job_name": job_name,
-            "job_number": job_number,
-            "business_job": business_job_payload,  # full BusinessJob data
-            "workstation_id": plan.workstation_id,
-            "workstation_name": workstation_name,
-            "planning_section_id": plan.planning_section_id,
-            "plan_name": plan_name,
-            "operator_id": plan.user_id,
-            "operator_name": operator_name,
-            "estimated_hours": plan.estimated_hours,
-            "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
-            "actual_start_date": plan.actual_start_date.isoformat() if plan.actual_start_date else None,
-            "actual_end_date": plan.actual_end_date.isoformat() if plan.actual_end_date else None,
-            "work_percentage": plan.work_percentage,
-            "notes": plan.notes,
-            "created_at": plan.created_at.isoformat(),
-            "updated_at": plan.updated_at.isoformat() if plan.updated_at else None
-        }
-        serialized_plans.append(item)
-
-        group_key = plan.scheduled_start_date.date().isoformat() if plan.scheduled_start_date else "unscheduled"
-        if group_key not in grouped:
-            grouped[group_key] = {
-                "date": None if group_key == "unscheduled" else group_key,
-                "label": "Unscheduled" if group_key == "unscheduled" else group_key,
-                "plans": []
-            }
-        grouped[group_key]["plans"].append(item)
-
-    grouped_plans = []
-    if "unscheduled" in grouped:
-        grouped_plans.append(grouped.pop("unscheduled"))
-    for key in sorted(grouped.keys()):
-        grouped_plans.append(grouped[key])
-
-    return serialized_plans, grouped_plans
 
 
 #Auto Scheduler Endpoint - Dry Run for Available Slots

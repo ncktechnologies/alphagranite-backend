@@ -1262,12 +1262,13 @@ class FabTypeResponse(BaseModel):
 
 class ShopCutPlanStageCreate(BaseModel):
     """Schema for a stage in shop cut plan creation"""
+    sequence: int = Field(ge=1, description="Execution order of this stage (1-based)")
     workstation_id: int
     planning_section_id: int
     operator_ids: List[int]
     estimated_hours: float = Field(gt=0)
     scheduled_start: Optional[datetime] = None
-    notes: Optional[str] = None  # add this
+    notes: Optional[str] = None
 
 
 class ShopCutPlanCreate(BaseModel):
@@ -1286,15 +1287,54 @@ class ShopCutPlanUpdate(BaseModel):
     stage: ShopCutPlanStageCreate
 
 
-class ShopCutPlanStageCreate(BaseModel):
-    """Schema for a stage in shop cut plan creation"""
-    sequence: int = Field(ge=1, description="Execution order of this stage (1-based)")
-    workstation_id: int
-    planning_section_id: int
-    operator_ids: List[int]
-    estimated_hours: float = Field(gt=0)
-    scheduled_start: Optional[datetime] = None
-    notes: Optional[str] = None
+class ShopPlanSuggestionsRequest(BaseModel):
+    plan_data: ShopCutPlanCreate
+    window_start: datetime
+    window_end: datetime
+    slot_minutes: int = Field(default=30, gt=0)
+    max_suggestions_per_stage: int = Field(default=10, gt=0)
+
+
+class ShopCutPlanTimerActionRequest(BaseModel):
+    action: str = Field(description="start, pause, resume, stop")
+    note: Optional[str] = None
+    timestamp: Optional[datetime] = None
+
+
+class ShopCutPlanTimerEventResponse(BaseModel):
+    id: int
+    session_id: int
+    action: str
+    event_at: datetime
+    note: Optional[str] = None
+
+
+class ShopCutPlanTimerSessionResponse(BaseModel):
+    id: int
+    status: str
+    session_start_at: datetime
+    current_run_start_at: Optional[datetime] = None
+    current_pause_start_at: Optional[datetime] = None
+    stopped_at: Optional[datetime] = None
+    total_work_seconds: int
+    total_pause_seconds: int
+
+
+class ShopCutPlanTimerStateResponse(BaseModel):
+    shop_cut_plan_id: int
+    operator_id: int
+    session: Optional[ShopCutPlanTimerSessionResponse] = None
+    total_actual_seconds: int
+    total_actual_hours: float
+    estimated_hours: float
+    work_percentage: int
+
+
+class ShopCutPlanTimerHistoryResponse(BaseModel):
+    shop_cut_plan_id: int
+    operator_id: int
+    sessions: List[ShopCutPlanTimerSessionResponse]
+    events: List[ShopCutPlanTimerEventResponse]
 
 class EarliestAvailabilityItem(BaseModel):
     planning_section_id: int 
