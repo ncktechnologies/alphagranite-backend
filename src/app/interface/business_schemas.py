@@ -1286,12 +1286,15 @@ class ShopCutPlanUpdate(BaseModel):
     stage: ShopCutPlanStageCreate
 
 
-class ShopPlanSuggestionsRequest(BaseModel):
-    plan_data: ShopCutPlanCreate
-    window_start: datetime
-    window_end: datetime
-    slot_minutes: int = Field(default=30, gt=0)
-    max_suggestions_per_stage: int = Field(default=10, gt=0)
+class ShopCutPlanStageCreate(BaseModel):
+    """Schema for a stage in shop cut plan creation"""
+    sequence: int = Field(ge=1, description="Execution order of this stage (1-based)")
+    workstation_id: int
+    planning_section_id: int
+    operator_ids: List[int]
+    estimated_hours: float = Field(gt=0)
+    scheduled_start: Optional[datetime] = None
+    notes: Optional[str] = None
 
 class EarliestAvailabilityItem(BaseModel):
     planning_section_id: int 

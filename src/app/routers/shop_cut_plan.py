@@ -893,7 +893,9 @@ async def suggest_shop_plan_slots(
         operator_ids = set()
         max_duration_hours = 0.0
 
-        for stage in plan_data.stages:
+        # Sort stages by declared sequence before building stage_meta
+        sorted_stages = sorted(plan_data.stages, key=lambda s: s.sequence)
+        for stage in sorted_stages:
             ws_result = await db.execute(select(WorkStation).where(WorkStation.id == stage.workstation_id))
             workstation = ws_result.scalar_one_or_none()
             if not workstation:
@@ -946,6 +948,7 @@ async def suggest_shop_plan_slots(
             operator_ids.add(operator_id)
 
             stage_meta.append({
+                "sequence": stage.sequence,
                 "planning_section_id": stage.planning_section_id,
                 "plan_name": planning_section.plan_name,
                 "workstation_id": stage.workstation_id,
@@ -1027,6 +1030,7 @@ async def suggest_shop_plan_slots(
                     break
 
                 sequence_stages.append({
+                    "sequence": meta["sequence"],
                     "planning_section_id": meta["planning_section_id"],
                     "plan_name": meta["plan_name"],
                     "workstation_id": meta["workstation_id"],
@@ -1075,7 +1079,6 @@ async def suggest_shop_plan_slots(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate plan suggestions: {str(e)}"
         )
-
 
 
 
