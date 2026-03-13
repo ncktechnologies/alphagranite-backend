@@ -113,6 +113,24 @@ def _compute_fab_progress_fields(plans: List[dict]) -> tuple[Optional[str], floa
     estimated_completion_date = latest_end_dt.isoformat() if latest_end_dt else None
     return estimated_completion_date, avg_percent
 
+def _stage_filter_condition(stage_name: str):
+    """
+    Stage visibility rule:
+    - install_completion includes:
+      1) FABs whose current_stage is install_completion
+      2) FABs still in cut_list but already having shop_est_completion_date
+    - all other stages use exact stage match
+    """
+    if stage_name == "install_completion":
+        return or_(
+            Fab.current_stage == "install_completion",
+            and_(
+                Fab.current_stage == "cut_list",
+                Fab.shop_est_completion_date.isnot(None),
+            ),
+        )
+    return Fab.current_stage == stage_name
+
 def get_next_stage(
     current_stage: str,
     slab_smith_ag_needed: Optional[bool] = None,
@@ -496,7 +514,7 @@ async def get_fabs(
     if status_id is not None:
         count_query = count_query.where(Fab.status_id == status_id)
     if current_stage:
-        count_query = count_query.where(Fab.current_stage == current_stage)
+        count_query = count_query.where(_stage_filter_condition(current_stage))
     if next_stage:
         count_query = count_query.where(Fab.next_stage == next_stage)
     
@@ -577,8 +595,8 @@ async def get_fabs(
             func.sum(Fab.miter_linft).label("miter_linft"),
             func.sum(Fab.saw_cut_lnft).label("saw_cut_lnft"),
             func.sum(Fab.no_of_pieces).label("no_of_pieces")
-        ).select_from(Fab).where(Fab.current_stage == current_stage)
-        
+        ).select_from(Fab).where(_stage_filter_condition(current_stage)) 
+               
         # Apply same basic filters
         if job_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.job_id == job_id)
@@ -1970,7 +1988,7 @@ def _build_fab_list_query(
     if status_id is not None:
         query = query.where(Fab.status_id == status_id)
     if current_stage:
-        query = query.where(Fab.current_stage == current_stage)
+        query = query.where(_stage_filter_condition(current_stage))
     if next_stage:
         query = query.where(Fab.next_stage == next_stage)
     
