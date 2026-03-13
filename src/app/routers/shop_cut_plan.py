@@ -990,65 +990,70 @@ async def suggest_shop_plan_slots(
             if p.fab_id == plan_data.fab_id:
                 busy_by_fab.append((p_start, p_end))
 
-        # Build suggestions per stage in request order.
-        # Each downstream stage is constrained to start at/after the previous stage's earliest feasible end.
-        suggestions = []
-        chain_fab_busy: List[Tuple[datetime, datetime]] = list(busy_by_fab)
-        chain_cursor = _next_business_start(_align_to_slot(window_start, slot_minutes))
+        # Build N complete sequences, each being a fully chained set of stages.
+        # Stage i+1 in a sequence is constrained to start at or after stage i ends.
+        sequences: List[dict] = []
+        first_stage_cursor = _next_business_start(_align_to_slot(window_start, slot_minutes))
+        _MAX_ATTEMPTS = max_suggestions_per_stage * 50  # safety cap
 
-        for meta in stage_meta:
-            stage_window_start = max(window_start, chain_cursor)
-            candidates = _build_candidate_ranges(
-                window_start=stage_window_start,
-                window_end=window_end,
-                duration_hours=meta["estimated_hours"],
-                slot_minutes=slot_minutes
-            )
+        attempts = 0
+        while len(sequences) < max_suggestions_per_stage and first_stage_cursor < window_end:
+            attempts += 1
+            if attempts > _MAX_ATTEMPTS:
+                break
 
-            available = []
-            ws_busy = busy_by_ws.get(meta["workstation_id"], [])
-            user_busy = busy_by_user.get(meta["operator_id"], [])
-            first_selected_interval: Optional[Tuple[datetime, datetime]] = None
+            sequence_stages: List[dict] = []
+            valid = True
+            stage_cursor = first_stage_cursor
 
-            for c_start, c_end in candidates:
-                ws_conflict = any(_intervals_overlap(c_start, c_end, b_start, b_end) for b_start, b_end in ws_busy)
-                if ws_conflict:
-                    continue
+            for meta in stage_meta:
+                stage_window = max(window_start, stage_cursor)
+                ws_busy = busy_by_ws.get(meta["workstation_id"], [])
+                user_busy = busy_by_user.get(meta["operator_id"], [])
 
-                user_conflict = any(_intervals_overlap(c_start, c_end, b_start, b_end) for b_start, b_end in user_busy)
-                if user_conflict:
-                    continue
-
-                fab_conflict = any(_intervals_overlap(c_start, c_end, b_start, b_end) for b_start, b_end in chain_fab_busy)
-                if fab_conflict:
-                    continue
-
-                available.append({
-                    "start": c_start.isoformat(),
-                    "end": c_end.isoformat()
-                })
-
-                if first_selected_interval is None:
-                    first_selected_interval = (c_start, c_end)
-
-                if len(available) >= max_suggestions_per_stage:
+                slot: Optional[Tuple[datetime, datetime]] = None
+                for c_start, c_end in _build_candidate_ranges(stage_window, window_end, meta["estimated_hours"], slot_minutes):
+                    if any(_intervals_overlap(c_start, c_end, b_s, b_e) for b_s, b_e in ws_busy):
+                        continue
+                    if any(_intervals_overlap(c_start, c_end, b_s, b_e) for b_s, b_e in user_busy):
+                        continue
+                    if any(_intervals_overlap(c_start, c_end, b_s, b_e) for b_s, b_e in busy_by_fab):
+                        continue
+                    slot = (c_start, c_end)
                     break
 
-            # Advance the chain with the earliest feasible slot for this stage.
-            if first_selected_interval is not None:
-                chain_fab_busy.append(first_selected_interval)
-                chain_cursor = first_selected_interval[1]
+                if slot is None:
+                    valid = False
+                    break
 
-            suggestions.append({
-                "planning_section_id": meta["planning_section_id"],
-                "plan_name": meta["plan_name"],
-                "workstation_id": meta["workstation_id"],
-                "workstation_name": meta["workstation_name"],
-                "operator_id": meta["operator_id"],
-                "operator_name": meta["operator_name"],
-                "estimated_hours": meta["estimated_hours"],
-                "available_ranges": available
-            })
+                sequence_stages.append({
+                    "planning_section_id": meta["planning_section_id"],
+                    "plan_name": meta["plan_name"],
+                    "workstation_id": meta["workstation_id"],
+                    "workstation_name": meta["workstation_name"],
+                    "operator_id": meta["operator_id"],
+                    "operator_name": meta["operator_name"],
+                    "estimated_hours": meta["estimated_hours"],
+                    "start": slot[0].isoformat(),
+                    "end": slot[1].isoformat(),
+                })
+                stage_cursor = slot[1]  # next stage starts exactly where this one ends
+
+            if valid and sequence_stages:
+                sequences.append({
+                    "sequence_index": len(sequences),
+                    "stages": sequence_stages,
+                })
+                # Advance stage-1 starting point by one slot for the next sequence
+                stage1_start = datetime.fromisoformat(sequence_stages[0]["start"])
+                first_stage_cursor = _next_business_start(
+                    _align_to_slot(stage1_start + timedelta(minutes=slot_minutes), slot_minutes)
+                )
+            else:
+                # No valid complete sequence from this cursor; skip ahead
+                first_stage_cursor = _next_business_start(
+                    _align_to_slot(first_stage_cursor + timedelta(minutes=slot_minutes), slot_minutes)
+                )
 
         return {
             "success": True,
@@ -1059,7 +1064,7 @@ async def suggest_shop_plan_slots(
                 "window_end": window_end.isoformat(),
                 "slot_minutes": slot_minutes,
                 "max_suggestions_per_stage": max_suggestions_per_stage,
-                "suggestions": suggestions
+                "suggestions": sequences,
             }
         }
 
@@ -1070,7 +1075,6 @@ async def suggest_shop_plan_slots(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate plan suggestions: {str(e)}"
         )
-
 
 
 
