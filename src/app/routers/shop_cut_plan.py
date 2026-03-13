@@ -152,6 +152,16 @@ async def create_shop_plans(
             scheduled_start = stage.scheduled_start.replace(tzinfo=None) if stage.scheduled_start.tzinfo else stage.scheduled_start
             _validate_manual_schedule_interval(scheduled_start, stage.estimated_hours)
 
+            await _assert_no_shop_plan_conflicts(
+                db,
+                plan_id=plan.id,
+                fab_id=plan.fab_id,
+                workstation_id=stage.workstation_id,
+                operator_id=stage.operator_ids[0],
+                scheduled_start=scheduled_start,
+                estimated_hours=stage.estimated_hours,
+            )
+
             for operator_id in stage.operator_ids:
                 user_result = await db.execute(select(User).where(User.id == operator_id))
                 user = user_result.scalar_one_or_none()
@@ -431,6 +441,15 @@ async def update_shop_plan(
             else stage.scheduled_start
         )
         _validate_manual_schedule_interval(scheduled_start, stage.estimated_hours)
+        await _assert_no_shop_plan_conflicts(
+            db,
+            plan_id=plan.id,
+            fab_id=plan.fab_id,
+            workstation_id=stage.workstation_id,
+            operator_id=stage.operator_ids[0],
+            scheduled_start=scheduled_start,
+            estimated_hours=stage.estimated_hours,
+        )
 
         plan.workstation_id = stage.workstation_id
         plan.planning_section_id = stage.planning_section_id
@@ -1811,3 +1830,48 @@ def _align_to_slot(value: datetime, slot_minutes: int) -> datetime:
     if remainder == 0:
         return value
     return value + timedelta(minutes=(slot_minutes - remainder))
+
+
+async def _assert_no_shop_plan_conflicts(
+    db: AsyncSession,
+    *,
+    plan_id: int,
+    fab_id: int,
+    workstation_id: int,
+    operator_id: int,
+    scheduled_start: datetime,
+    estimated_hours: float,
+) -> None:
+    proposed_end = scheduled_start + timedelta(hours=float(estimated_hours))
+
+    conflict_result = await db.execute(
+        select(ShopCutPlan).where(
+            ShopCutPlan.id != plan_id,
+            ShopCutPlan.scheduled_start_date.is_not(None),
+            ShopCutPlan.scheduled_start_date < proposed_end,
+            or_(
+                ShopCutPlan.workstation_id == workstation_id,
+                ShopCutPlan.user_id == operator_id,
+                ShopCutPlan.fab_id == fab_id,
+            ),
+        )
+    )
+    conflicting_plans = conflict_result.scalars().all()
+
+    for other_plan in conflicting_plans:
+        other_start = _normalize_naive_dt(other_plan.scheduled_start_date)
+        other_hours = float(other_plan.estimated_hours or 0)
+        if not other_start or other_hours <= 0:
+            continue
+
+        other_end = other_start + timedelta(hours=other_hours)
+
+        if _intervals_overlap(scheduled_start, proposed_end, other_start, other_end):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Proposed schedule extension creates a conflict with an existing shop plan. "
+                    f"Conflicting plan_id={other_plan.id}, "
+                    f"start={other_start.isoformat()}, end={other_end.isoformat()}."
+                ),
+            )
