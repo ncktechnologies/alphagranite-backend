@@ -434,12 +434,13 @@ async def get_fabs(
     draft_completed_end: Optional[date] = Query(None, description="Filter by draft_completed_date on or before this date (YYYY-MM-DD)"),
     sct_completed_start: Optional[date] = Query(None, description="Filter by sct_completed_date on or after this date (YYYY-MM-DD)"),  # NEW
     sct_completed_end: Optional[date] = Query(None, description="Filter by sct_completed_date on or before this date (YYYY-MM-DD)"),  # NEW
-    search: Optional[str] = Query(None, description="Search by FAB ID, Job Name, or Job Number"),
+    search: Optional[str] = Query(None, description="Search value"),
+    type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, job_name"),  # NEW
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Get list of fabs with optional filtering and pagination"""
-    
+
     # Step 1: Apply templating filters to get FAB IDs
     templating_fab_ids = await _apply_templating_filters(
         db,
@@ -449,14 +450,14 @@ async def get_fabs(
         schedule_status,
         date_filter if current_stage == "templating" else None
     )
-    
+
     if templating_fab_ids is not None and len(templating_fab_ids) == 0:
         return {
             "success": True,
             "message": "FABs retrieved successfully",
             "data": {"total": 0, "page": 1, "per_page": limit, "data": []}
         }
-    
+
     # Step 2: Build latest templating subquery
     latest_templating = (
         select(Templating)
@@ -465,25 +466,53 @@ async def get_fabs(
         .limit(1)
         .lateral("latest_templating")
     )
-    
+
     # Step 3: Build main query
+    # Build search filter based on type
+    search_filter = None
+    if search and type:
+        search_term = f"%{search}%"
+        if type == "fab_id":
+            search_filter = sa.cast(Fab.id, sa.String).ilike(search_term)
+        elif type == "job_number":
+            search_filter = BusinessJob.job_number.ilike(search_term)
+        elif type == "job_name":
+            search_filter = BusinessJob.name.ilike(search_term)
+    else:
+        search_filter = None
+
     query = _build_fab_list_query(
-        job_id, fab_type, sales_person_id, status_id, current_stage, next_stage, 
-        search, templating_fab_ids, latest_templating, shop_date_start, shop_date_end,
+        job_id, fab_type, sales_person_id, status_id, current_stage, next_stage,
+        None,  # search is handled below
+        templating_fab_ids, latest_templating, shop_date_start, shop_date_end,
         template_completed_start, template_completed_end, predraft_completed_start, predraft_completed_end,
         draft_completed_start, draft_completed_end, sct_completed_start, sct_completed_end,
-        date_filter  # Pass date_filter here
+        date_filter
     )
-    
+
+    # Apply search filter if present
+    if search_filter is not None:
+        query = query.where(search_filter)
+    elif search:
+        # Fallback: search all fields if type not specified
+        search_term = f"%{search}%"
+        query = query.where(
+            or_(
+                sa.cast(Fab.id, sa.String).ilike(search_term),
+                BusinessJob.name.ilike(search_term),
+                BusinessJob.job_number.ilike(search_term)
+            )
+        )
+
     # Step 4: Apply pagination and ordering
     query = _apply_pagination_and_ordering(query, skip, limit, current_stage, latest_templating)
-    
+
     result = await db.execute(query)
     rows = result.all()
-    
+
     # Step 5: Convert rows to dictionaries
     fabs = [_convert_fab_row_to_dict(row) for row in rows]
-    
+
     # Step 6: Batch load related data
     await _batch_load_fab_related_data(db, fabs)
 
@@ -498,12 +527,12 @@ async def get_fabs(
         estimated_completion_date, percentage_completion = _compute_fab_progress_fields(plans)
         f["estimated_completion_date"] = estimated_completion_date
         f["percentage_completion"] = percentage_completion
-    
+
     # Step 7: Get total count with stage-specific date filtering
     count_query = select(func.count(Fab.id)).select_from(Fab)
     count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
     count_query = count_query.outerjoin(latest_templating, sa.literal(True))
-    
+
     # Apply all basic filters to count query
     if job_id is not None:
         count_query = count_query.where(Fab.job_id == job_id)
@@ -517,7 +546,7 @@ async def get_fabs(
         count_query = count_query.where(_stage_filter_condition(current_stage))
     if next_stage:
         count_query = count_query.where(Fab.next_stage == next_stage)
-    
+
     # Apply stage-specific date filtering to count
     if current_stage:
         if current_stage == "pre_draft_review":
@@ -534,7 +563,7 @@ async def get_fabs(
             date_start, date_end = shop_date_start, shop_date_end
         else:
             date_start, date_end = None, None
-        
+
         count_query = _apply_stage_specific_date_filter(
             count_query, current_stage, date_filter, date_start, date_end
         )
@@ -560,8 +589,11 @@ async def get_fabs(
             count_query = count_query.where(Fab.sct_completed_date >= sct_completed_start)
         if sct_completed_end:
             count_query = count_query.where(Fab.sct_completed_date <= sct_completed_end)
-    
-    if search:
+
+    # Apply search filter to count query
+    if search_filter is not None:
+        count_query = count_query.where(search_filter)
+    elif search:
         search_term = f"%{search}%"
         count_query = count_query.where(
             or_(
@@ -570,7 +602,7 @@ async def get_fabs(
                 BusinessJob.job_number.ilike(search_term)
             )
         )
-    
+
     if templating_fab_ids is not None:
         count_query = count_query.where(Fab.id.in_(templating_fab_ids))
     elif schedule_status == "unscheduled":
@@ -580,10 +612,10 @@ async def get_fabs(
                 Fab.id.in_(select(Templating.fab_id).where(Templating.schedule_start_date.is_(None)))
             )
         )
-    
+
     total_result = await db.execute(count_query)
     total = total_result.scalar()
-    
+
     # Step 8: Calculate stage totals if needed
     stage_totals = None
     if current_stage:
@@ -595,8 +627,8 @@ async def get_fabs(
             func.sum(Fab.miter_linft).label("miter_linft"),
             func.sum(Fab.saw_cut_lnft).label("saw_cut_lnft"),
             func.sum(Fab.no_of_pieces).label("no_of_pieces")
-        ).select_from(Fab).where(_stage_filter_condition(current_stage)) 
-               
+        ).select_from(Fab).where(_stage_filter_condition(current_stage))
+
         # Apply same basic filters
         if job_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.job_id == job_id)
@@ -606,7 +638,7 @@ async def get_fabs(
             stage_totals_query = stage_totals_query.where(Fab.sales_person_id == sales_person_id)
         if status_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.status_id == status_id)
-        
+
         # Apply stage-specific date filters (same as count_query)
         if current_stage == "pre_draft_review":
             date_start, date_end = template_completed_start, template_completed_end
@@ -622,13 +654,16 @@ async def get_fabs(
             date_start, date_end = shop_date_start, shop_date_end
         else:
             date_start, date_end = None, None
-        
+
         # Apply the same stage-specific date filter
         stage_totals_query = _apply_stage_specific_date_filter(
             stage_totals_query, current_stage, date_filter, date_start, date_end
         )
-        
-        if search:
+
+        # Apply search filter to stage totals query
+        if search_filter is not None:
+            stage_totals_query = stage_totals_query.where(search_filter)
+        elif search:
             search_term = f"%{search}%"
             stage_totals_query = stage_totals_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
             stage_totals_query = stage_totals_query.where(
@@ -638,10 +673,10 @@ async def get_fabs(
                     BusinessJob.job_number.ilike(search_term)
                 )
             )
-        
+
         totals_result = await db.execute(stage_totals_query)
         totals_row = totals_result.first()
-        
+
         if totals_row:
             stage_totals = {
                 "stage": current_stage,
@@ -653,7 +688,7 @@ async def get_fabs(
                 "saw_cut_lnft": float(totals_row[5]) if totals_row[5] else 0.0,
                 "no_of_pieces": int(totals_row[6]) if totals_row[6] else 0
             }
-    
+
     # Step 9: Build response
     page = (skip // limit) + 1 if limit > 0 else 1
     response_data = {
@@ -662,10 +697,10 @@ async def get_fabs(
         "per_page": limit,
         "data": fabs
     }
-    
+
     if stage_totals:
         response_data["stage_totals"] = stage_totals
-    
+
     return {
         "success": True,
         "message": "FABs retrieved successfully",
