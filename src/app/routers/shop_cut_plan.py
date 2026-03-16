@@ -154,7 +154,7 @@ async def create_shop_plans(
 
             await _assert_no_shop_plan_conflicts(
                 db,
-                plan_id=plan.id,
+                plan_id=0,
                 fab_id=plan.fab_id,
                 workstation_id=stage.workstation_id,
                 operator_id=stage.operator_ids[0],
