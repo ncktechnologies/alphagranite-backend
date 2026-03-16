@@ -86,17 +86,7 @@ async def create_workstation(
     await db.commit()
     await db.refresh(ws)
     
-    return success_response({
-        "id": ws.id,
-        "name": ws.name,
-        "status_id": ws.status_id,
-        "created_at": ws.created_at.isoformat(),
-        "created_by": ws.created_by,
-        "planning_section_id": ws.planning_section_id,
-        "operator_ids": ws.operator_ids,
-        "updated_at": ws.updated_at.isoformat() if ws.updated_at else None,
-        "updated_by": ws.updated_by
-    }, "Workstation created successfully")
+    return success_response(_serialize_workstation(ws), "Workstation created successfully")
 
 
 @router.put("/{ws_id}", response_model=SuccessResponse[dict])
@@ -156,16 +146,7 @@ async def update_workstation(
     await db.commit()
     await db.refresh(ws)
 
-    return success_response({
-        "id": ws.id,
-        "name": ws.name,
-        "status_id": ws.status_id,
-        "planning_section_id": ws.planning_section_id,
-        "operator_ids": ws.operator_ids,
-        "created_at": ws.created_at.isoformat(),
-        "updated_at": ws.updated_at.isoformat() if ws.updated_at else None,
-        "updated_by": ws.updated_by
-    }, "Workstation updated successfully")
+    return success_response(_serialize_workstation(ws), "Workstation updated successfully")
 
 
 @router.delete("/{ws_id}", response_model=SuccessResponse[dict])
@@ -193,13 +174,7 @@ async def delete_workstation(
     await db.refresh(ws)
     
     return success_response(
-        {
-            "id": ws.id,
-            "name": ws.name,
-            "status_id": ws.status_id,
-            "updated_at": ws.updated_at.isoformat(),
-            "updated_by": ws.updated_by
-        },
+        _serialize_workstation(ws),
         "Workstation deactivated successfully"
     )
 
@@ -221,13 +196,7 @@ async def get_workstation_by_name(
             detail="Workstation not found"
         )
     
-    return success_response({
-        "id": ws.id,
-        "name": ws.name,
-        "status_id": ws.status_id,
-        "created_at": ws.created_at.isoformat(),
-        "created_by": ws.created_by
-    }, "Workstation retrieved successfully")
+    return success_response(_serialize_workstation(ws), "Workstation retrieved successfully")
 
 
 @router.get("", response_model=SuccessResponse[dict])
@@ -242,20 +211,26 @@ async def get_all_workstations(
     """Get all workstations with optional filters"""
     
     query = select(WorkStation)
-    
-    if status_id:
+
+    if status_id is not None:
         query = query.where(WorkStation.status_id == status_id)
-    
+
     if search:
         query = query.where(WorkStation.name.ilike(f"%{search}%"))
-    
+
     # Get total count
-    count_result = await db.execute(select(func.count(WorkStation.id)))
+    count_query = select(func.count(WorkStation.id))
+    if status_id is not None:
+        count_query = count_query.where(WorkStation.status_id == status_id)
+    if search:
+        count_query = count_query.where(WorkStation.name.ilike(f"%{search}%"))
+
+    count_result = await db.execute(count_query)
     total = count_result.scalar()
-    
+
     # Apply pagination
     query = query.offset(skip).limit(limit).order_by(WorkStation.name)
-    
+
     result = await db.execute(query)
     workstations = result.scalars().all()
     
@@ -263,18 +238,7 @@ async def get_all_workstations(
         "total": total,
         "page": (skip // limit) + 1 if limit > 0 else 1,
         "per_page": limit,
-        "data": [
-            {
-                "id": ws.id,
-                "name": ws.name,
-                "status_id": ws.status_id,
-                "created_at": ws.created_at.isoformat(),
-                "created_by": ws.created_by,
-                "updated_at": ws.updated_at.isoformat() if ws.updated_at else None,
-                "updated_by": ws.updated_by
-            }
-            for ws in workstations
-        ]
+        "data": [_serialize_workstation(ws) for ws in workstations]
     }, "Workstations retrieved successfully")
 
 
@@ -295,12 +259,17 @@ async def get_workstation(
             detail="Workstation not found"
         )
     
-    return success_response({
+    return success_response(_serialize_workstation(ws), "Workstation retrieved successfully")
+
+def _serialize_workstation(ws: WorkStation) -> dict:
+    return {
         "id": ws.id,
         "name": ws.name,
         "status_id": ws.status_id,
-        "created_at": ws.created_at.isoformat(),
+        "planning_section_id": ws.planning_section_id,
+        "operator_ids": ws.operator_ids or [],
+        "created_at": ws.created_at.isoformat() if ws.created_at else None,
         "created_by": ws.created_by,
         "updated_at": ws.updated_at.isoformat() if ws.updated_at else None,
-        "updated_by": ws.updated_by
-    }, "Workstation retrieved successfully")
+        "updated_by": ws.updated_by,
+    }
