@@ -90,12 +90,14 @@ async def create_shop_plans(
         )
         existing_sections = sorted([row[0] for row in existing_result.all()])
         if existing_sections:
+            conflict_detail = await _build_duplicate_section_conflict_detail(
+                db,
+                fab_id=plan_data.fab_id,
+                section_ids=section_ids,
+            )
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "A plan already exists for this job in the selected planning section. "
-                    "Please choose a different planning section or update the existing plan."
-                )
+                detail=conflict_detail,
             )
 
         created_plans = []
@@ -1286,12 +1288,14 @@ async def suggest_shop_plan_slots(
         )
         existing_sections = sorted([row[0] for row in existing_result.all()])
         if existing_sections:
+            conflict_detail = await _build_duplicate_section_conflict_detail(
+                db,
+                fab_id=plan_data.fab_id,
+                section_ids=section_ids,
+            )
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "A plan already exists for this job in the selected planning section. "
-                    "Please choose a different planning section or update the existing plan."
-                )
+                detail=conflict_detail,
             )
 
         # Stage-level validations and prep
@@ -1879,3 +1883,68 @@ async def _assert_no_shop_plan_conflicts(
                     "Please choose a different time slot."
                 ),
             )
+
+
+async def _build_duplicate_section_conflict_detail(
+    db: AsyncSession,
+    *,
+    fab_id: int,
+    section_ids: List[int],
+) -> dict:
+    rows = (
+        await db.execute(
+            select(
+                ShopCutPlan.id,
+                ShopCutPlan.planning_section_id,
+                PlanningSection.plan_name,
+                ShopCutPlan.scheduled_start_date,
+                ShopCutPlan.workstation_id,
+                WorkStation.name,
+                ShopCutPlan.user_id,
+                User.first_name,
+                User.last_name,
+                User.username,
+            )
+            .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
+            .join(WorkStation, WorkStation.id == ShopCutPlan.workstation_id)
+            .join(User, User.id == ShopCutPlan.user_id)
+            .where(
+                ShopCutPlan.fab_id == fab_id,
+                ShopCutPlan.planning_section_id.in_(section_ids),
+            )
+            .order_by(ShopCutPlan.planning_section_id.asc(), ShopCutPlan.id.asc())
+        )
+    ).all()
+
+    conflicting_plans = []
+    for row in rows:
+        first_name = (row[7] or "").strip()
+        last_name = (row[8] or "").strip()
+        username = (row[9] or "").strip()
+        operator_name = f"{first_name} {last_name}".strip() or username or None
+
+        conflicting_plans.append(
+            {
+                "plan_id": row[0],
+                "planning_section_id": row[1],
+                "planning_section_name": row[2],
+                "scheduled_start_date": row[3].isoformat() if row[3] else None,
+                "workstation_id": row[4],
+                "workstation_name": row[5],
+                "operator_id": row[6],
+                "operator_name": operator_name,
+            }
+        )
+
+    section_names = sorted({p["planning_section_name"] for p in conflicting_plans if p["planning_section_name"]})
+    section_label = ", ".join(section_names) if section_names else "selected planning section"
+
+    return {
+        "message": (
+            f"A plan already exists for this job in the {section_label} section. "
+            "Please choose a different planning section or update the existing plan."
+        ),
+        "conflict_type": "duplicate_planning_section_for_fab",
+        "fab_id": fab_id,
+        "conflicting_plans": conflicting_plans,
+    }
