@@ -10,6 +10,7 @@ class FabPlanResponse(BaseModel):
     id: int
     fab_id: int
     fab_type: Optional[str] = None
+    sequence: Optional[int] = None
     workstation_id: Optional[int] = None
     workstation_name: Optional[str] = None
     planning_section_id: Optional[int] = None
@@ -236,6 +237,7 @@ class StoneTypeResponse(BaseModel):
 # Fab Type Schemas (simple string list for now)
 class FabPlanItem(BaseModel):
     id: int
+    sequence: int
     workstation_id: int
     workstation_name: Optional[str] = None
     planning_section_id: int

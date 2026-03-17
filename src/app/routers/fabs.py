@@ -183,6 +183,7 @@ async def get_plans_map_for_fabs(db: AsyncSession, fab_ids: List[int]) -> dict[i
             "id": p.id,
             "fab_id": p.fab_id,
             "fab_type": row.fab_type,
+            "sequence": p.sequence,
             "workstation_id": p.workstation_id,
             "workstation_name": row.workstation_name,
             "planning_section_id": p.planning_section_id,
@@ -3161,6 +3162,7 @@ async def _load_plans_for_fabs(db: AsyncSession, fab_ids: list[int]) -> dict[int
 
         by_fab[p.fab_id].append({
             "id": p.id,
+            "sequence": p.sequence,
             "workstation_id": p.workstation_id,
             "workstation_name": getattr(ws, "name", None),
             "planning_section_id": p.planning_section_id,

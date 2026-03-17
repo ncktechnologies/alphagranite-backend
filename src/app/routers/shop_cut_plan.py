@@ -181,6 +181,7 @@ async def create_shop_plans(
                     estimated_hours=stage.estimated_hours,
                     scheduled_start_date=scheduled_start,
                     work_percentage=0,
+                    sequence=stage.sequence,
                     notes=stage.notes,
                     created_by=current_user.id,
                     created_at=datetime.now()
@@ -210,6 +211,7 @@ async def create_shop_plans(
                 "plans": [
                     {
                         "id": plan.id,
+                        "sequence": plan.sequence,
                         "workstation_id": plan.workstation_id,
                         "planning_section_id": plan.planning_section_id,
                         "operator_id": plan.user_id,
@@ -358,6 +360,7 @@ async def get_shop_plan(
         "data": {
             "id": plan.id,
             "fab_id": plan.fab_id,
+            "sequence": plan.sequence,
             "workstation_id": plan.workstation_id,
             "planning_section_id": plan.planning_section_id,
             "operator_id": plan.user_id,
@@ -456,6 +459,7 @@ async def update_shop_plan(
         plan.workstation_id = stage.workstation_id
         plan.planning_section_id = stage.planning_section_id
         plan.user_id = stage.operator_ids[0]
+        plan.sequence = stage.sequence
         plan.estimated_hours = stage.estimated_hours
         plan.scheduled_start_date = scheduled_start
         plan.notes = update_data.notes
@@ -479,6 +483,7 @@ async def update_shop_plan(
             "data": {
                 "id": plan.id,
                 "fab_id": plan.fab_id,
+                "sequence": plan.sequence,
                 "workstation_id": plan.workstation_id,
                 "planning_section_id": plan.planning_section_id,
                 "operator_id": plan.user_id,
@@ -1082,6 +1087,7 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
             "job_name": job_name,
             "job_number": job_number,
             "business_job": business_job_payload,  # full BusinessJob data
+            "sequence": plan.sequence,
             "workstation_id": plan.workstation_id,
             "workstation_name": workstation_name,
             "planning_section_id": plan.planning_section_id,

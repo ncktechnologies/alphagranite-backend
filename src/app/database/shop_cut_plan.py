@@ -11,6 +11,7 @@ class ShopCutPlan(SQLModel, table=True):
     workstation_id: int = Field(foreign_key="work_stations.id")
     planning_section_id: int = Field(foreign_key="planning_sections.id")
     user_id: int = Field(foreign_key="users.id")
+    sequence: int = Field(default=1, ge=1, description="Execution order of this stage (1-based)")
     estimated_hours: float = Field(gt=0, description="Estimated hours to complete")
     scheduled_start_date: Optional[datetime] = Field(
         default=None,
