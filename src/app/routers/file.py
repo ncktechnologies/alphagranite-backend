@@ -145,3 +145,23 @@ async def delete_file(
         data=None,
         message="File deleted successfully"
     )
+
+@router.get("")
+async def get_all_files(
+    request: Request,
+    job_id: int = None,
+    stage: str = None,
+    uploaded_by: int = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get all files, optionally filtered by job_id, stage, or uploaded_by"""
+    files = await call_service(
+        FileService.get_all_files,
+        db=db,
+        job_id=job_id,
+        stage=stage,
+        uploaded_by=uploaded_by,
+        request=request
+    )
+    return success_response(data=files, message="Files retrieved successfully")

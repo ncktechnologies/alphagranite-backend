@@ -4,7 +4,7 @@ import shutil
 from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import UploadFile, HTTPException, status, Request
 
@@ -102,6 +102,7 @@ class FileService:
             file_size=file_size,
             stage=stage_name,
             file_design=file_design,
+            uploaded_by=user_id,
             created_at=datetime.now(),
             updated_at=datetime.now()
         )
@@ -113,18 +114,7 @@ class FileService:
         
         # Get base URL from request or settings
         base_url = FileService.get_base_url(request)
-        
-        return {
-            "id": db_file.id,
-            "name": db_file.name,
-            "file_path": db_file.file_path,
-            "file_type": db_file.file_type,
-            "file_size": db_file.file_size,
-            "stage_name": db_file.stage_name,
-            "file_design": db_file.file_design,
-            "created_at": db_file.created_at,
-            "url": f"{base_url}/static/{file_path}"
-        }
+        return FileService._serialize_file(db_file, base_url)
         
     @staticmethod
     async def get_file(db: AsyncSession, file_id: int, request: Request = None) -> Dict[str, Any]:
@@ -153,15 +143,7 @@ class FileService:
         # Generate file URL
         file_url = f"{base_url}/static/{file.file_path}"
         
-        return {
-            "id": file.id,
-            "name": file.name,
-            "file_path": file.file_path,
-            "file_type": file.file_type,
-            "file_size": file.file_size,
-            "created_at": file.created_at,
-            "url": file_url
-        }
+        return FileService._serialize_file(file, base_url)
         
     @staticmethod
     async def delete_file(db: AsyncSession, file_id: int) -> bool:
@@ -201,3 +183,47 @@ class FileService:
         await db.commit()
         
         return True
+
+    @staticmethod
+    async def get_all_files(
+        db: AsyncSession,
+        job_id: int = None,
+        stage: str = None,
+        uploaded_by: int = None,
+        request: Request = None
+    ) -> List[Dict[str, Any]]:
+        query = select(File)
+        if job_id is not None:
+            query = query.where(File.job_id == job_id)
+        if stage is not None:
+            query = query.where(File.stage == stage)
+        if uploaded_by is not None:
+            query = query.where(File.uploaded_by == uploaded_by)
+        query = query.order_by(File.created_at.desc())
+
+        result = await db.execute(query)
+        files = result.scalars().all()
+
+        base_url = FileService.get_base_url(request)
+        return [
+            FileService._serialize_file(f, base_url)
+            for f in files
+        ]
+
+    @staticmethod
+    def _serialize_file(f: File, base_url: str) -> Dict[str, Any]:
+        return {
+            "id": f.id,
+            "name": f.name,
+            "file_path": f.file_path,
+            "file_type": f.file_type,
+            "file_size": f.file_size,
+            "file_design": f.file_design,
+            "stage": f.stage,
+            "stage_name": f.stage_name,
+            "job_id": f.job_id,
+            "uploaded_by": f.uploaded_by,
+            "created_at": f.created_at,
+            "updated_at": f.updated_at,
+            "url": f"{base_url}/static/{f.file_path}"
+        }
