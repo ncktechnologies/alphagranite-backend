@@ -38,6 +38,7 @@ class FileService:
         file_type: str = None,
         file_design: str = None,
         stage_name: str = None,
+        job_id: int = None,
         request: Request = None
     ) -> Dict[str, Any]:
         """
@@ -51,6 +52,7 @@ class FileService:
             file_type: The type of file (defaults to derived from content-type)
             file_design: The design of the file (defaults to derived from content-type)
             stage_name: The stage name of the file (defaults to derived from content-type)
+            job_id: The job ID to associate with the file
             request: The FastAPI request object to extract base URL
             
         Returns:
@@ -101,7 +103,9 @@ class FileService:
             file_type=file_type,
             file_size=file_size,
             stage=stage_name,
+            stage_name=stage_name,
             file_design=file_design,
+            job_id=job_id,
             uploaded_by=user_id,
             created_at=datetime.now(),
             updated_at=datetime.now()
