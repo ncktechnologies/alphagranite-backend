@@ -472,13 +472,12 @@ async def get_fabs(
     # Build search filter based on type
     search_filter = None
     if search and type:
-        search_term = f"%{search}%"
         if type == "fab_id":
-            search_filter = sa.cast(Fab.id, sa.String).ilike(search_term)
+            search_filter = sa.cast(Fab.id, sa.String) == search
         elif type == "job_number":
-            search_filter = BusinessJob.job_number.ilike(search_term)
+            search_filter = BusinessJob.job_number == search
         elif type == "job_name":
-            search_filter = BusinessJob.name.ilike(search_term)
+            search_filter = BusinessJob.name.ilike(f"%{search}%")
     else:
         search_filter = None
 
@@ -495,13 +494,12 @@ async def get_fabs(
     if search_filter is not None:
         query = query.where(search_filter)
     elif search:
-        # Fallback: search all fields if type not specified
         search_term = f"%{search}%"
         query = query.where(
             or_(
-                sa.cast(Fab.id, sa.String).ilike(search_term),
+                sa.cast(Fab.id, sa.String) == search,
                 BusinessJob.name.ilike(search_term),
-                BusinessJob.job_number.ilike(search_term)
+                BusinessJob.job_number == search
             )
         )
 
@@ -598,9 +596,9 @@ async def get_fabs(
         search_term = f"%{search}%"
         count_query = count_query.where(
             or_(
-                sa.cast(Fab.id, sa.String).ilike(search_term),
+                sa.cast(Fab.id, sa.String) == search,
                 BusinessJob.name.ilike(search_term),
-                BusinessJob.job_number.ilike(search_term)
+                BusinessJob.job_number == search
             )
         )
 
@@ -669,9 +667,9 @@ async def get_fabs(
             stage_totals_query = stage_totals_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
             stage_totals_query = stage_totals_query.where(
                 or_(
-                    sa.cast(Fab.id, sa.String).ilike(search_term),
+                    sa.cast(Fab.id, sa.String) == search,
                     BusinessJob.name.ilike(search_term),
-                    BusinessJob.job_number.ilike(search_term)
+                    BusinessJob.job_number == search
                 )
             )
 
@@ -770,13 +768,12 @@ async def get_fabs_with_shop_est_completion(
     # Step 3: Build main query
     search_filter = None
     if search and type:
-        search_term = f"%{search}%"
         if type == "fab_id":
-            search_filter = sa.cast(Fab.id, sa.String).ilike(search_term)
+            search_filter = sa.cast(Fab.id, sa.String) == search
         elif type == "job_number":
-            search_filter = BusinessJob.job_number.ilike(search_term)
+            search_filter = BusinessJob.job_number == search
         elif type == "job_name":
-            search_filter = BusinessJob.name.ilike(search_term)
+            search_filter = BusinessJob.name.ilike(f"%{search}%")
     else:
         search_filter = None
 
@@ -799,9 +796,9 @@ async def get_fabs_with_shop_est_completion(
         search_term = f"%{search}%"
         query = query.where(
             or_(
-                sa.cast(Fab.id, sa.String).ilike(search_term),
+                sa.cast(Fab.id, sa.String) == search,
                 BusinessJob.name.ilike(search_term),
-                BusinessJob.job_number.ilike(search_term)
+                BusinessJob.job_number == search
             )
         )
 
@@ -898,9 +895,9 @@ async def get_fabs_with_shop_est_completion(
         search_term = f"%{search}%"
         count_query = count_query.where(
             or_(
-                sa.cast(Fab.id, sa.String).ilike(search_term),
+                sa.cast(Fab.id, sa.String) == search,
                 BusinessJob.name.ilike(search_term),
-                BusinessJob.job_number.ilike(search_term)
+                BusinessJob.job_number == search
             )
         )
 
@@ -967,9 +964,9 @@ async def get_fabs_with_shop_est_completion(
             stage_totals_query = stage_totals_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
             stage_totals_query = stage_totals_query.where(
                 or_(
-                    sa.cast(Fab.id, sa.String).ilike(search_term),
+                    sa.cast(Fab.id, sa.String) == search,
                     BusinessJob.name.ilike(search_term),
-                    BusinessJob.job_number.ilike(search_term)
+                    BusinessJob.job_number == search
                 )
             )
 
