@@ -2724,9 +2724,17 @@ async def _batch_load_drafting_data(db: AsyncSession, fab_ids: List[int]) -> dic
     # Batch load files
     files_by_id = {}
     if all_file_ids:
-        files_query = select(File).where(File.id.in_(all_file_ids))
+        UploaderUser = aliased(User)
+        files_query = (
+            select(File, UploaderUser.first_name, UploaderUser.last_name)
+            .join(UploaderUser, File.uploaded_by == UploaderUser.id, isouter=True)
+            .where(File.id.in_(all_file_ids))
+        )
         files_result = await db.execute(files_query)
-        for file in files_result.scalars().all():
+        for row in files_result.all():
+            file = row[0]
+            uploader_first = row[1]
+            uploader_last = row[2]
             filename = os.path.basename(file.file_path)
             file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
             files_by_id[file.id] = {
@@ -2738,9 +2746,9 @@ async def _batch_load_drafting_data(db: AsyncSession, fab_ids: List[int]) -> dic
                 "stage": file.stage,
                 "file_design": file.file_design,
                 "stage_name": file.stage_name,
-                "uploaded_by": file.uploaded_by,     # ID
+                "uploaded_by": file.uploaded_by,
                 "uploaded_by_name": f"{uploader_first} {uploader_last}" if uploader_first else None,
-                "created_by": file.uploaded_by,      # optional alias for compatibility
+                "created_by": file.uploaded_by,
                 "created_by_name": f"{uploader_first} {uploader_last}" if uploader_first else None,
                 "created_at": file.created_at.isoformat() if file.created_at else None,
             }
@@ -2811,9 +2819,17 @@ async def _batch_load_sales_ct_data(db: AsyncSession, fab_ids: List[int]) -> dic
     # Batch load files
     files_by_id = {}
     if all_file_ids:
-        files_query = select(File).where(File.id.in_(all_file_ids))
+        UploaderUser = aliased(User)
+        files_query = (
+            select(File, UploaderUser.first_name, UploaderUser.last_name)
+            .join(UploaderUser, File.uploaded_by == UploaderUser.id, isouter=True)
+            .where(File.id.in_(all_file_ids))
+        )
         files_result = await db.execute(files_query)
-        for file in files_result.scalars().all():
+        for row in files_result.all():
+            file = row[0]
+            uploader_first = row[1]
+            uploader_last = row[2]
             filename = os.path.basename(file.file_path)
             file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
             files_by_id[file.id] = {
@@ -2822,6 +2838,12 @@ async def _batch_load_sales_ct_data(db: AsyncSession, fab_ids: List[int]) -> dic
                 "file_url": file_url,
                 "file_type": file.file_type,
                 "file_size": file.file_size,
+                "file_design": file.file_design,
+                "stage_name": file.stage_name,
+                "uploaded_by": file.uploaded_by,
+                "uploaded_by_name": f"{uploader_first} {uploader_last}" if uploader_first else None,
+                "created_by": file.uploaded_by,
+                "created_by_name": f"{uploader_first} {uploader_last}" if uploader_first else None,
                 "created_at": file.created_at.isoformat() if file.created_at else None
             }
     
@@ -2939,9 +2961,17 @@ async def _batch_load_slabsmith_data(db: AsyncSession, fab_ids: List[int]) -> di
     # Batch load files
     files_by_id = {}
     if all_file_ids:
-        files_query = select(File).where(File.id.in_(all_file_ids))
+        UploaderUser = aliased(User)
+        files_query = (
+            select(File, UploaderUser.first_name, UploaderUser.last_name)
+            .join(UploaderUser, File.uploaded_by == UploaderUser.id, isouter=True)
+            .where(File.id.in_(all_file_ids))
+        )
         files_result = await db.execute(files_query)
-        for file in files_result.scalars().all():
+        for row in files_result.all():
+            file = row[0]
+            uploader_first = row[1]
+            uploader_last = row[2]
             filename = os.path.basename(file.file_path)
             file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
             files_by_id[file.id] = {
@@ -2950,6 +2980,12 @@ async def _batch_load_slabsmith_data(db: AsyncSession, fab_ids: List[int]) -> di
                 "file_url": file_url,
                 "file_type": file.file_type,
                 "file_size": file.file_size,
+                "file_design": file.file_design,
+                "stage_name": file.stage_name,
+                "uploaded_by": file.uploaded_by,
+                "uploaded_by_name": f"{uploader_first} {uploader_last}" if uploader_first else None,
+                "created_by": file.uploaded_by,
+                "created_by_name": f"{uploader_first} {uploader_last}" if uploader_first else None,
                 "created_at": file.created_at.isoformat() if file.created_at else None
             }
     
