@@ -233,12 +233,28 @@ async def get_all_workstations(
 
     result = await db.execute(query)
     workstations = result.scalars().all()
-    
+
+    # Batch load operators
+    all_operator_ids = list({uid for ws in workstations for uid in (ws.operator_ids or [])})
+    operators_by_id: dict = {}
+    if all_operator_ids:
+        ops_result = await db.execute(select(User).where(User.id.in_(all_operator_ids)))
+        for u in ops_result.scalars().all():
+            operators_by_id[u.id] = u
+
+    # Batch load planning sections
+    all_ps_ids = list({ws.planning_section_id for ws in workstations if ws.planning_section_id is not None})
+    sections_by_id: dict = {}
+    if all_ps_ids:
+        ps_result = await db.execute(select(PlanningSection).where(PlanningSection.id.in_(all_ps_ids)))
+        for ps in ps_result.scalars().all():
+            sections_by_id[ps.id] = ps
+
     return success_response({
         "total": total,
         "page": (skip // limit) + 1 if limit > 0 else 1,
         "per_page": limit,
-        "data": [_serialize_workstation(ws) for ws in workstations]
+        "data": [_serialize_workstation(ws, operators_by_id, sections_by_id) for ws in workstations]
     }, "Workstations retrieved successfully")
 
 
@@ -261,13 +277,28 @@ async def get_workstation(
     
     return success_response(_serialize_workstation(ws), "Workstation retrieved successfully")
 
-def _serialize_workstation(ws: WorkStation) -> dict:
+def _serialize_workstation(ws: WorkStation, operators_by_id: dict = None, sections_by_id: dict = None) -> dict:
+    operators_by_id = operators_by_id or {}
+    sections_by_id = sections_by_id or {}
+
+    operators = [
+        {
+            "id": uid,
+            "name": f"{operators_by_id[uid].first_name} {operators_by_id[uid].last_name}".strip()
+            if uid in operators_by_id else None
+        }
+        for uid in (ws.operator_ids or [])
+    ]
+
+    ps = sections_by_id.get(ws.planning_section_id) if ws.planning_section_id else None
+
     return {
         "id": ws.id,
         "name": ws.name,
         "status_id": ws.status_id,
         "planning_section_id": ws.planning_section_id,
-        "operator_ids": ws.operator_ids or [],
+        "planning_section_name": ps.plan_name if ps else None,
+        "operators": operators,
         "created_at": ws.created_at.isoformat() if ws.created_at else None,
         "created_by": ws.created_by,
         "updated_at": ws.updated_at.isoformat() if ws.updated_at else None,
