@@ -178,12 +178,23 @@ async def add_file_to_slabsmith(
     current_user: User = Depends(get_current_user)
 ):
     """Add file to slab smith"""
+    from src.app.database.file import File
     
     result = await db.execute(select(SlabSmith).where(SlabSmith.id == slabsmith_id))
     slabsmith = result.scalar_one_or_none()
     
     if not slabsmith:
         raise error_response("Slab smith not found", 404)
+    
+    # Update file record with metadata and uploader
+    file_result = await db.execute(select(File).where(File.id == file_id))
+    file_obj = file_result.scalar_one_or_none()
+    if file_obj:
+        if file_design:
+            file_obj.file_design = file_design
+        if stage_name:
+            file_obj.stage_name = stage_name
+        file_obj.uploaded_by = current_user.id
     
     # Add file ID to comma-separated list
     if slabsmith.file_ids:

@@ -3016,9 +3016,16 @@ async def get_draft_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
     if draft.file_ids:
         file_id_list = [int(fid.strip()) for fid in draft.file_ids.split(",") if fid.strip()]
         if file_id_list:
-            files_query = select(File).where(File.id.in_(file_id_list))
+            # Join File with User to get uploader name
+            UploaderUser = aliased(User)
+            files_query = select(File, UploaderUser.first_name, UploaderUser.last_name).join(
+                UploaderUser, File.uploaded_by == UploaderUser.id, isouter=True
+            ).where(File.id.in_(file_id_list))
             files_result = await db.execute(files_query)
-            for file in files_result.scalars().all():
+            for row in files_result.all():
+                file = row[0]
+                uploader_first = row[1]
+                uploader_last = row[2]
                 filename = os.path.basename(file.file_path)
                 file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
                 files_data.append({
@@ -3028,6 +3035,9 @@ async def get_draft_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
                     "file_type": file.file_type,
                     "file_size": file.file_size,
                     "stage": file.stage,
+                    "file_design": file.file_design,
+                    "stage_name": file.stage_name,
+                    "uploaded_by": f"{uploader_first} {uploader_last}" if uploader_first else None,
                     "created_at": file.created_at.isoformat() if file.created_at else None
                 })
     
@@ -3090,9 +3100,16 @@ async def get_sales_ct_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
     if sct.file_ids:
         file_id_list = [int(fid.strip()) for fid in sct.file_ids.split(",") if fid.strip()]
         if file_id_list:
-            files_query = select(File).where(File.id.in_(file_id_list))
+            # Join File with User to get uploader name
+            UploaderUser = aliased(User)
+            files_query = select(File, UploaderUser.first_name, UploaderUser.last_name).join(
+                UploaderUser, File.uploaded_by == UploaderUser.id, isouter=True
+            ).where(File.id.in_(file_id_list))
             files_result = await db.execute(files_query)
-            for file in files_result.scalars().all():
+            for row in files_result.all():
+                file = row[0]
+                uploader_first = row[1]
+                uploader_last = row[2]
                 filename = os.path.basename(file.file_path)
                 file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
                 files_data.append({
@@ -3101,6 +3118,9 @@ async def get_sales_ct_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
                     "file_url": file_url,
                     "file_type": file.file_type,
                     "file_size": file.file_size,
+                    "file_design": file.file_design,
+                    "stage_name": file.stage_name,
+                    "uploaded_by": f"{uploader_first} {uploader_last}" if uploader_first else None,
                     "created_at": file.created_at.isoformat() if file.created_at else None
                 })
     
