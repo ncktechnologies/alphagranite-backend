@@ -1505,6 +1505,8 @@ def _intervals_overlap(start_a: datetime, end_a: datetime, start_b: datetime, en
 
 BUSINESS_START_HOUR = 7
 BUSINESS_END_HOUR = 16
+LUNCH_BREAK_START_HOUR = 12
+LUNCH_BREAK_END_HOUR = 13
 BUSINESS_WEEKDAYS = {0, 1, 2, 3, 4}  # Monday-Friday
 
 
@@ -1516,6 +1518,17 @@ def _business_window_for_day(value: datetime) -> Tuple[datetime, datetime]:
     start = value.replace(hour=BUSINESS_START_HOUR, minute=0, second=0, microsecond=0)
     end = value.replace(hour=BUSINESS_END_HOUR, minute=0, second=0, microsecond=0)
     return start, end
+
+
+def _lunch_window_for_day(value: datetime) -> Tuple[datetime, datetime]:
+    lunch_start = value.replace(hour=LUNCH_BREAK_START_HOUR, minute=0, second=0, microsecond=0)
+    lunch_end = value.replace(hour=LUNCH_BREAK_END_HOUR, minute=0, second=0, microsecond=0)
+    return lunch_start, lunch_end
+
+
+def _overlaps_lunch(start: datetime, end: datetime) -> bool:
+    lunch_start, lunch_end = _lunch_window_for_day(start)
+    return _intervals_overlap(start, end, lunch_start, lunch_end)
 
 
 def _next_business_start(value: datetime) -> datetime:
@@ -1540,6 +1553,11 @@ def _next_business_start(value: datetime) -> datetime:
             microsecond=0,
         )
         return _next_business_start(next_day)
+
+    lunch_start, lunch_end = _lunch_window_for_day(cursor)
+    if lunch_start <= cursor < lunch_end:
+        return lunch_end
+
     return cursor
 
 
@@ -1552,14 +1570,21 @@ def _is_valid_business_interval(start: datetime, end: datetime) -> bool:
         return False
 
     day_start, day_end = _business_window_for_day(start)
-    return start >= day_start and end <= day_end
+    if not (start >= day_start and end <= day_end):
+        return False
+
+    # Enforce lunch break: no scheduled work between 12:00 PM and 1:00 PM.
+    if _overlaps_lunch(start, end):
+        return False
+
+    return True
 
 
 def _validate_manual_schedule_interval(start: Optional[datetime], estimated_hours: Optional[float]) -> None:
     if start is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="scheduled_start is required and must be within Monday-Friday, 7:00 AM to 4:00 PM",
+            detail="scheduled_start is required and must be within Monday-Friday, 7:00 AM to 4:00 PM, excluding 12:00 PM to 1:00 PM lunch break",
         )
 
     try:
@@ -1572,13 +1597,40 @@ def _validate_manual_schedule_interval(start: Optional[datetime], estimated_hour
         is_valid = _is_valid_business_interval(start, end)
     else:
         day_start, day_end = _business_window_for_day(start)
-        is_valid = _is_business_day(start) and day_start <= start < day_end
+        lunch_start, lunch_end = _lunch_window_for_day(start)
+        is_valid = (
+            _is_business_day(start)
+            and day_start <= start < day_end
+            and not (lunch_start <= start < lunch_end)
+        )
 
     if not is_valid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Scheduling must be Monday-Friday between 7:00 AM and 4:00 PM, and estimated duration must fit within business hours",
+            detail="Scheduling must be Monday-Friday between 7:00 AM and 4:00 PM, exclude 12:00 PM to 1:00 PM lunch break, and estimated duration must fit within a valid business interval",
         )
+
+
+def _advance_after_invalid_interval(cursor: datetime, slot_minutes: int) -> datetime:
+    """
+    Advance cursor after an invalid candidate interval.
+    - If in/approaching lunch break, jump to lunch end (1:00 PM) same day.
+    - Otherwise, jump to next business day start.
+    """
+    lunch_start, lunch_end = _lunch_window_for_day(cursor)
+
+    if cursor < lunch_end:
+        next_cursor = lunch_end
+    else:
+        next_cursor = (cursor + timedelta(days=1)).replace(
+            hour=BUSINESS_START_HOUR,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+
+    next_cursor = _align_to_slot(next_cursor, slot_minutes)
+    return _next_business_start(next_cursor)
 
 
 def _build_candidate_ranges(
@@ -1605,16 +1657,7 @@ def _build_candidate_ranges(
             cursor += step
             continue
 
-        cursor = _next_business_start(
-            (cursor + timedelta(days=1)).replace(
-                hour=BUSINESS_START_HOUR,
-                minute=0,
-                second=0,
-                microsecond=0,
-            )
-        )
-        cursor = _align_to_slot(cursor, slot_minutes)
-        cursor = _next_business_start(cursor)
+        cursor = _advance_after_invalid_interval(cursor, slot_minutes)
 
     return out
 
@@ -1761,16 +1804,7 @@ async def get_earliest_availability(
                 candidate_end = cursor + duration
 
                 if not _is_valid_business_interval(cursor, candidate_end):
-                    cursor = _next_business_start(
-                        (cursor + timedelta(days=1)).replace(
-                            hour=BUSINESS_START_HOUR,
-                            minute=0,
-                            second=0,
-                            microsecond=0,
-                        )
-                    )
-                    cursor = _align_to_slot(cursor, payload.slot_minutes)
-                    cursor = _next_business_start(cursor)
+                    cursor = _advance_after_invalid_interval(cursor, payload.slot_minutes)
                     continue
 
                 overlap = _first_overlap(cursor, candidate_end, combined_busy)

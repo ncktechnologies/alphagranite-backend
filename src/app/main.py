@@ -8,6 +8,7 @@ import os
 from fastapi import FastAPI, Depends, Request
 # New routers for business logic
 from src.app.routers import dashboard, job_extras
+from src.app.routers import operators
 from src.app.routers import workstation
 from src.app.routers import shop_planning
 from fastapi.staticfiles import StaticFiles
@@ -266,6 +267,7 @@ app.include_router(install_completion.router, prefix="/api/v1", tags=["Install C
 
 # Existing business workflow routers
 app.include_router(job_extras.router, prefix="/api/v1", tags=["Job Extras"])
+app.include_router(operators.router, prefix="/api/v1", tags=["Operators"])
 app.include_router(planning_section.router, prefix="/api/v1", tags=["Planning Sections"])
 app.include_router(workstation.router, prefix="/api/v1", tags=["Workstations"])
 app.include_router(shop_planning.router, prefix="/api/v1", tags=["Shop Planning"])

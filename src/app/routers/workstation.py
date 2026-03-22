@@ -201,6 +201,7 @@ async def get_workstation_by_name(
 
 @router.get("", response_model=SuccessResponse[dict])
 async def get_all_workstations(
+    operator_id: Optional[int] = None,
     status_id: Optional[int] = None,
     search: Optional[str] = None,
     skip: int = 0,
@@ -212,6 +213,9 @@ async def get_all_workstations(
     
     query = select(WorkStation)
 
+    if operator_id is not None:
+        query = query.where(WorkStation.operator_ids.contains([operator_id]))
+
     if status_id is not None:
         query = query.where(WorkStation.status_id == status_id)
 
@@ -220,6 +224,8 @@ async def get_all_workstations(
 
     # Get total count
     count_query = select(func.count(WorkStation.id))
+    if operator_id is not None:
+        count_query = count_query.where(WorkStation.operator_ids.contains([operator_id]))
     if status_id is not None:
         count_query = count_query.where(WorkStation.status_id == status_id)
     if search:

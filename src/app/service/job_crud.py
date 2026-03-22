@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import List, Optional
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func
 from fastapi import HTTPException
 
 from src.app.database.business_job import BusinessJob
@@ -129,7 +130,7 @@ async def get_jobs(
     search: Optional[str] = None,
     is_invoiced: Optional[bool] = None
 
-) -> List[dict]:
+) -> tuple[List[dict], int]:
     """
     Get list of jobs with optional filtering and pagination.
     
@@ -145,7 +146,7 @@ async def get_jobs(
         is_invoiced: Filter by invoiced status (true/false)
         
     Returns:
-        List of Job dicts with account details
+        Tuple of (jobs list with account details, total count)
     """
     query = select(
         BusinessJob,
@@ -159,28 +160,41 @@ async def get_jobs(
     ).outerjoin(Account, BusinessJob.account_id == Account.id)\
      .outerjoin(User, BusinessJob.sales_person_id == User.id)
     
+    conditions = []
+
     # Apply filters
     if account_id is not None:
-        query = query.where(BusinessJob.account_id == account_id)
+        conditions.append(BusinessJob.account_id == account_id)
     if status_id is not None:
-        query = query.where(BusinessJob.status_id == status_id)
+        conditions.append(BusinessJob.status_id == status_id)
     if priority:
-        query = query.where(BusinessJob.priority == priority)
+        conditions.append(BusinessJob.priority == priority)
     if need_to_invoice is not None:
-        query = query.where(BusinessJob.need_to_invoice == need_to_invoice)
+        conditions.append(BusinessJob.need_to_invoice == need_to_invoice)
 
     if is_invoiced is not None:
         if is_invoiced:
-            query = query.where(BusinessJob.invoiced_at.is_not(None))
+            conditions.append(BusinessJob.invoiced_at.is_not(None))
         else:
-            query = query.where(BusinessJob.invoiced_at.is_(None))
+            conditions.append(BusinessJob.invoiced_at.is_(None))
 
     if search:
         search_term = f"%{search}%"
-        query = query.where(
+        conditions.append(
             (BusinessJob.name.ilike(search_term)) |
             (BusinessJob.job_number.ilike(search_term))
         )
+
+    if conditions:
+        query = query.where(*conditions)
+
+    count_query = select(func.count()).select_from(BusinessJob)
+    if conditions:
+        count_query = count_query.where(*conditions)
+
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
+
     # Apply pagination
     query = query.offset(skip).limit(limit).order_by(BusinessJob.created_at.desc())
     
@@ -219,7 +233,7 @@ async def get_jobs(
             "invoiced_at": job.invoiced_at.isoformat() if job.invoiced_at else None
         })
     
-    return jobs_list
+    return jobs_list, total
 
 async def get_job_by_id(
     db: AsyncSession,

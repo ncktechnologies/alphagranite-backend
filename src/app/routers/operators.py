@@ -1,0 +1,1116 @@
+import mimetypes
+import os
+from datetime import date, datetime, timedelta
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File as FileUpload, Form, status
+from fastapi.responses import FileResponse
+from sqlalchemy import func
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+
+from src.app.database import get_db
+from src.app.database.account import Account
+from src.app.database.business_job import BusinessJob
+from src.app.database.file import File
+from src.app.database.fab import Fab
+from src.app.database.operator_job_timer_event import OperatorJobTimerEvent
+from src.app.database.operator_job_timer_session import OperatorJobTimerSession
+from src.app.database.planning_section import PlanningSection
+from src.app.database.shop_cut_plan import ShopCutPlan
+from src.app.database.user import User
+from src.app.database.work_station import WorkStation
+from src.app.interface.business_schemas import OperatorJobTimerActionRequest
+from src.app.interface.response_wrappers import SuccessResponse
+from src.app.middleware.jwt_auth import get_current_user
+from src.app.service.file import FileService
+from src.app.utils.config import get_settings
+from src.app.utils.helpers import success_response
+
+
+router = APIRouter(
+    prefix="/operators",
+    tags=["Operators"],
+)
+
+
+def _serialize_workstation(ws: WorkStation, operators_by_id: dict = None, sections_by_id: dict = None) -> dict:
+    operators_by_id = operators_by_id or {}
+    sections_by_id = sections_by_id or {}
+
+    operators = [
+        {
+            "id": uid,
+            "name": f"{operators_by_id[uid].first_name} {operators_by_id[uid].last_name}".strip()
+            if uid in operators_by_id else None,
+        }
+        for uid in (ws.operator_ids or [])
+    ]
+
+    ps = sections_by_id.get(ws.planning_section_id) if ws.planning_section_id else None
+
+    return {
+        "id": ws.id,
+        "name": ws.name,
+        "status_id": ws.status_id,
+        "planning_section_id": ws.planning_section_id,
+        "planning_section_name": ps.plan_name if ps else None,
+        "operators": operators,
+        "created_at": ws.created_at.isoformat() if ws.created_at else None,
+        "created_by": ws.created_by,
+        "updated_at": ws.updated_at.isoformat() if ws.updated_at else None,
+        "updated_by": ws.updated_by,
+    }
+
+
+def _compute_schedule_end_time_iso(
+    scheduled_start: Optional[datetime],
+    estimated_hours: Optional[float],
+) -> Optional[str]:
+    if not scheduled_start or estimated_hours is None:
+        return None
+    try:
+        return (scheduled_start + timedelta(hours=float(estimated_hours))).isoformat()
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_calendar_window(view: str, reference_date: date) -> tuple[datetime, datetime]:
+    start_of_day = datetime.combine(reference_date, datetime.min.time())
+
+    if view == "day":
+        return start_of_day, start_of_day + timedelta(days=1)
+
+    if view == "week":
+        week_start = start_of_day - timedelta(days=reference_date.weekday())
+        return week_start, week_start + timedelta(days=7)
+
+    if view == "month":
+        month_start = start_of_day.replace(day=1)
+        if month_start.month == 12:
+            next_month = month_start.replace(year=month_start.year + 1, month=1)
+        else:
+            next_month = month_start.replace(month=month_start.month + 1)
+        return month_start, next_month
+
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="view must be one of: day, week, month")
+
+
+def _serialize_operator_task(row) -> dict:
+    plan = row[0]
+    fab = row[1]
+
+    return {
+        "task_id": plan.id,
+        "fab_id": plan.fab_id,
+        "job_id": fab.job_id,
+        "job_name": row[2],
+        "job_number": row[3],
+        "account_name": row[4],
+        "fab_type": fab.fab_type,
+        "current_stage": fab.current_stage,
+        "workstation_id": plan.workstation_id,
+        "workstation_name": row[5],
+        "planning_section_id": plan.planning_section_id,
+        "planning_section_name": row[6],
+        "sequence": plan.sequence,
+        "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
+        "scheduled_end_date": _compute_schedule_end_time_iso(plan.scheduled_start_date, plan.estimated_hours),
+        "actual_start_date": plan.actual_start_date.isoformat() if plan.actual_start_date else None,
+        "actual_end_date": plan.actual_end_date.isoformat() if plan.actual_end_date else None,
+        "estimated_hours": float(plan.estimated_hours) if plan.estimated_hours is not None else None,
+        "work_percentage": plan.work_percentage,
+        "notes": plan.notes,
+        "is_completed": bool(plan.actual_end_date) or plan.work_percentage == 100,
+        "created_at": plan.created_at.isoformat() if plan.created_at else None,
+        "updated_at": plan.updated_at.isoformat() if plan.updated_at else None,
+    }
+
+
+def _serialize_operator_workstation_task(
+    row,
+    *,
+    operator: User,
+    total_actual_hours: float,
+    total_actual_seconds: int,
+) -> dict:
+    plan = row[0]
+    fab = row[1]
+    job = row[2]
+    account_name = row[3]
+    workstation_name = row[4]
+    plan_name = row[5]
+    operator_name = f"{operator.first_name} {operator.last_name}".strip() or operator.username
+
+    return {
+        "id": plan.id,
+        "fab_id": plan.fab_id,
+        "fab_type": fab.fab_type,
+        "account_name": account_name,
+        "job_name": job.name,
+        "job_number": job.job_number,
+        "business_job": {
+            "id": job.id,
+            "name": job.name,
+            "job_number": job.job_number,
+            "account_id": job.account_id,
+            "account_name": account_name,
+            "description": job.description,
+            "priority": job.priority,
+            "start_date": job.start_date.isoformat() if job.start_date else None,
+            "due_date": job.due_date.isoformat() if job.due_date else None,
+            "project_value": str(job.project_value) if job.project_value is not None else None,
+            "status_id": job.status_id,
+        },
+        "sequence": plan.sequence,
+        "workstation_id": plan.workstation_id,
+        "workstation_name": workstation_name,
+        "planning_section_id": plan.planning_section_id,
+        "plan_name": plan_name,
+        "operator_id": operator.id,
+        "operator_name": operator_name,
+        "estimated_hours": float(plan.estimated_hours) if plan.estimated_hours is not None else None,
+        "total_actual_seconds": total_actual_seconds,
+        "total_actual_hours": total_actual_hours,
+        "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
+        "actual_start_date": plan.actual_start_date.isoformat() if plan.actual_start_date else None,
+        "actual_end_date": plan.actual_end_date.isoformat() if plan.actual_end_date else None,
+        "work_percentage": plan.work_percentage,
+        "notes": plan.notes,
+        "created_at": plan.created_at.isoformat() if plan.created_at else None,
+        "updated_at": plan.updated_at.isoformat() if plan.updated_at else None,
+    }
+
+
+def _task_overlaps_window(plan: ShopCutPlan, range_start: datetime, range_end: datetime) -> bool:
+    if not plan.scheduled_start_date:
+        return False
+
+    task_start = plan.scheduled_start_date
+    if plan.estimated_hours is None:
+        task_end = task_start
+    else:
+        try:
+            task_end = task_start + timedelta(hours=float(plan.estimated_hours))
+        except (TypeError, ValueError):
+            task_end = task_start
+
+    return task_start < range_end and task_end >= range_start
+
+
+def _task_is_active(plan: ShopCutPlan) -> bool:
+    return not bool(plan.actual_end_date) and int(plan.work_percentage or 0) < 100
+
+
+def _group_tasks_by_day(tasks: list[dict]) -> list[dict]:
+    grouped: dict[str, list[dict]] = {}
+    for task in tasks:
+        scheduled_start = task.get("scheduled_start_date")
+        key = scheduled_start[:10] if scheduled_start else "unscheduled"
+        grouped.setdefault(key, []).append(task)
+
+    grouped_days = []
+    for day in sorted(grouped.keys()):
+        grouped_days.append(
+            {
+                "date": day,
+                "total": len(grouped[day]),
+                "tasks": grouped[day],
+            }
+        )
+    return grouped_days
+
+
+def _normalize_naive_dt(value: Optional[datetime]) -> Optional[datetime]:
+    return value.replace(tzinfo=None) if value and value.tzinfo else value
+
+
+def _serialize_operator_job_timer_session(session: OperatorJobTimerSession) -> dict:
+    return {
+        "id": session.id,
+        "job_id": session.job_id,
+        "operator_id": session.operator_id,
+        "workstation_id": session.workstation_id,
+        "status": session.status,
+        "session_start_at": session.session_start_at.isoformat() if session.session_start_at else None,
+        "current_run_start_at": session.current_run_start_at.isoformat() if session.current_run_start_at else None,
+        "current_pause_start_at": session.current_pause_start_at.isoformat() if session.current_pause_start_at else None,
+        "stopped_at": session.stopped_at.isoformat() if session.stopped_at else None,
+        "total_work_seconds": int(session.total_work_seconds or 0),
+        "total_pause_seconds": int(session.total_pause_seconds or 0),
+    }
+
+
+def _serialize_operator_job_timer_event(event: OperatorJobTimerEvent) -> dict:
+    return {
+        "id": event.id,
+        "session_id": event.session_id,
+        "action": event.action,
+        "event_at": event.event_at.isoformat() if event.event_at else None,
+        "note": event.note,
+        "workstation_id": event.workstation_id,
+    }
+
+
+async def _recalculate_operator_job_work_totals(
+    db: AsyncSession,
+    *,
+    job_id: int,
+    operator_id: int,
+    as_of: datetime,
+    workstation_id: Optional[int] = None,
+) -> tuple[float, int]:
+    totals_query = select(func.coalesce(func.sum(OperatorJobTimerSession.total_work_seconds), 0)).where(
+            OperatorJobTimerSession.job_id == job_id,
+            OperatorJobTimerSession.operator_id == operator_id,
+        )
+    if workstation_id is not None:
+        totals_query = totals_query.where(OperatorJobTimerSession.workstation_id == workstation_id)
+
+    totals_result = await db.execute(totals_query)
+    stored_seconds = int(totals_result.scalar() or 0)
+
+    running_query = select(OperatorJobTimerSession).where(
+            OperatorJobTimerSession.job_id == job_id,
+            OperatorJobTimerSession.operator_id == operator_id,
+            OperatorJobTimerSession.status == "running",
+            OperatorJobTimerSession.current_run_start_at.is_not(None),
+        )
+    if workstation_id is not None:
+        running_query = running_query.where(OperatorJobTimerSession.workstation_id == workstation_id)
+
+    running_result = await db.execute(running_query)
+    running_sessions = running_result.scalars().all()
+
+    in_progress_seconds = 0
+    for session in running_sessions:
+        run_start = _normalize_naive_dt(session.current_run_start_at)
+        if run_start and as_of > run_start:
+            in_progress_seconds += int((as_of - run_start).total_seconds())
+
+    total_actual_seconds = max(0, stored_seconds + in_progress_seconds)
+    total_actual_hours = total_actual_seconds / 3600.0
+    return total_actual_hours, total_actual_seconds
+
+
+async def _get_active_operator_job_session(
+    db: AsyncSession,
+    *,
+    operator_id: int,
+    job_id: Optional[int] = None,
+    workstation_id: Optional[int] = None,
+) -> Optional[OperatorJobTimerSession]:
+    query = select(OperatorJobTimerSession).where(
+        OperatorJobTimerSession.operator_id == operator_id,
+        OperatorJobTimerSession.status.in_(["running", "paused"]),
+    )
+    if job_id is not None:
+        query = query.where(OperatorJobTimerSession.job_id == job_id)
+    if workstation_id is not None:
+        query = query.where(OperatorJobTimerSession.workstation_id == workstation_id)
+
+    query = query.order_by(OperatorJobTimerSession.created_at.desc()).limit(1)
+    result = await db.execute(query)
+    return result.scalars().first()
+
+
+@router.get("/{operator_id}/workstations", response_model=SuccessResponse[dict])
+async def get_workstations_by_operator(
+    operator_id: int,
+    status_id: Optional[int] = None,
+    search: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get all workstations assigned to a specific operator."""
+
+    operator_result = await db.execute(select(User).where(User.id == operator_id))
+    operator = operator_result.scalar_one_or_none()
+    if not operator:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Operator not found",
+        )
+
+    query = select(WorkStation).where(WorkStation.operator_ids.contains([operator_id]))
+
+    if status_id is not None:
+        query = query.where(WorkStation.status_id == status_id)
+
+    if search:
+        query = query.where(WorkStation.name.ilike(f"%{search}%"))
+
+    count_query = select(func.count(WorkStation.id)).where(WorkStation.operator_ids.contains([operator_id]))
+    if status_id is not None:
+        count_query = count_query.where(WorkStation.status_id == status_id)
+    if search:
+        count_query = count_query.where(WorkStation.name.ilike(f"%{search}%"))
+
+    count_result = await db.execute(count_query)
+    total = count_result.scalar()
+
+    query = query.offset(skip).limit(limit).order_by(WorkStation.name)
+    result = await db.execute(query)
+    workstations = result.scalars().all()
+
+    all_operator_ids = list({uid for ws in workstations for uid in (ws.operator_ids or [])})
+    operators_by_id: dict = {}
+    if all_operator_ids:
+        ops_result = await db.execute(select(User).where(User.id.in_(all_operator_ids)))
+        for u in ops_result.scalars().all():
+            operators_by_id[u.id] = u
+
+    all_ps_ids = list({ws.planning_section_id for ws in workstations if ws.planning_section_id is not None})
+    sections_by_id: dict = {}
+    if all_ps_ids:
+        ps_result = await db.execute(select(PlanningSection).where(PlanningSection.id.in_(all_ps_ids)))
+        for ps in ps_result.scalars().all():
+            sections_by_id[ps.id] = ps
+
+    operator_name = f"{operator.first_name} {operator.last_name}".strip()
+
+    return success_response(
+        {
+            "operator_id": operator_id,
+            "operator_name": operator_name or operator.username,
+            "total": total,
+            "page": (skip // limit) + 1 if limit > 0 else 1,
+            "per_page": limit,
+            "data": [_serialize_workstation(ws, operators_by_id, sections_by_id) for ws in workstations],
+        },
+        "Operator workstations retrieved successfully",
+    )
+
+
+@router.get("/{operator_id}/workstations/{workstation_id}/tasks")
+async def get_workstation_tasks_by_operator(
+    operator_id: int,
+    workstation_id: int,
+    view: str = Query("day"),
+    selected_date: Optional[date] = Query(None, alias="date"),
+    active_only: bool = Query(False),
+    group_by_day: bool = Query(False),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return all tasks assigned to an operator under a selected workstation, filtered by calendar window."""
+
+    operator = (await db.execute(select(User).where(User.id == operator_id))).scalar_one_or_none()
+    if not operator:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Operator not found")
+
+    if not getattr(current_user, "is_super_admin", False) and current_user.id != operator_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this operator's tasks")
+
+    workstation = (await db.execute(select(WorkStation).where(WorkStation.id == workstation_id))).scalar_one_or_none()
+    if not workstation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workstation not found")
+
+    if operator_id not in (workstation.operator_ids or []):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workstation is not assigned to this operator")
+
+    normalized_view = (view or "day").strip().lower()
+    target_date = selected_date or date.today()
+    range_start, range_end = _build_calendar_window(normalized_view, target_date)
+
+    query = (
+        select(
+            ShopCutPlan,
+            Fab,
+            BusinessJob,
+            Account.name.label("account_name"),
+            WorkStation.name.label("workstation_name"),
+            PlanningSection.plan_name.label("plan_name"),
+        )
+        .join(Fab, Fab.id == ShopCutPlan.fab_id)
+        .join(BusinessJob, BusinessJob.id == Fab.job_id)
+        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+        .join(WorkStation, WorkStation.id == ShopCutPlan.workstation_id, isouter=True)
+        .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id, isouter=True)
+        .where(
+            ShopCutPlan.user_id == operator_id,
+            ShopCutPlan.workstation_id == workstation_id,
+            ShopCutPlan.scheduled_start_date.is_not(None),
+            ShopCutPlan.scheduled_start_date < range_end,
+        )
+        .order_by(ShopCutPlan.scheduled_start_date.asc(), ShopCutPlan.sequence.asc(), ShopCutPlan.id.asc())
+    )
+
+    rows = (await db.execute(query)).all()
+    filtered_rows = [row for row in rows if _task_overlaps_window(row[0], range_start, range_end)]
+    if active_only:
+        filtered_rows = [row for row in filtered_rows if _task_is_active(row[0])]
+
+    total = len(filtered_rows)
+    paginated_rows = filtered_rows[skip:skip + limit]
+    page = (skip // limit) + 1 if limit > 0 else 1
+
+    tasks = []
+    totals_cache: dict[int, tuple[float, int]] = {}
+    for row in paginated_rows:
+        job_id = row[2].id
+        if job_id not in totals_cache:
+            totals_cache[job_id] = await _recalculate_operator_job_work_totals(
+                db=db,
+                job_id=job_id,
+                operator_id=operator_id,
+                workstation_id=workstation_id,
+                as_of=datetime.now().replace(second=0, microsecond=0),
+            )
+        total_actual_hours, total_actual_seconds = totals_cache[job_id]
+        tasks.append(
+            _serialize_operator_workstation_task(
+                row,
+                operator=operator,
+                total_actual_hours=total_actual_hours,
+                total_actual_seconds=total_actual_seconds,
+            )
+        )
+
+    operator_name = f"{operator.first_name} {operator.last_name}".strip() or operator.username
+
+    return {
+        "success": True,
+        "message": "Tasks retrieved successfully",
+        "operator_id": operator_id,
+        "operator_name": operator_name,
+        "view": normalized_view,
+        "date": target_date.isoformat(),
+        "data": {
+            "total": total,
+            "page": page,
+            "per_page": limit,
+            "tasks": tasks,
+            **({"grouped_tasks": _group_tasks_by_day(tasks)} if group_by_day else {}),
+        },
+    }
+
+
+@router.get("/{operator_id}/workstations/{workstation_id}/tasks/active")
+async def get_active_workstation_task_by_operator(
+    operator_id: int,
+    workstation_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return the operator's currently active task for the selected workstation."""
+
+    operator = (await db.execute(select(User).where(User.id == operator_id))).scalar_one_or_none()
+    if not operator:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Operator not found")
+
+    if not getattr(current_user, "is_super_admin", False) and current_user.id != operator_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this operator's tasks")
+
+    workstation = (await db.execute(select(WorkStation).where(WorkStation.id == workstation_id))).scalar_one_or_none()
+    if not workstation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workstation not found")
+
+    if operator_id not in (workstation.operator_ids or []):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workstation is not assigned to this operator")
+
+    active_session = await _get_active_operator_job_session(
+        db,
+        operator_id=operator_id,
+        workstation_id=workstation_id,
+    )
+
+    if not active_session:
+        return success_response(
+            {
+                "operator_id": operator_id,
+                "workstation_id": workstation_id,
+                "task": None,
+            },
+            "No active task found",
+        )
+
+    task_query = (
+        select(
+            ShopCutPlan,
+            Fab,
+            BusinessJob,
+            Account.name.label("account_name"),
+            WorkStation.name.label("workstation_name"),
+            PlanningSection.plan_name.label("plan_name"),
+        )
+        .join(Fab, Fab.id == ShopCutPlan.fab_id)
+        .join(BusinessJob, BusinessJob.id == Fab.job_id)
+        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+        .join(WorkStation, WorkStation.id == ShopCutPlan.workstation_id, isouter=True)
+        .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id, isouter=True)
+        .where(
+            ShopCutPlan.user_id == operator_id,
+            ShopCutPlan.workstation_id == workstation_id,
+            Fab.job_id == active_session.job_id,
+        )
+        .order_by(ShopCutPlan.scheduled_start_date.desc(), ShopCutPlan.id.desc())
+        .limit(1)
+    )
+
+    task_row = (await db.execute(task_query)).first()
+    if not task_row:
+        return success_response(
+            {
+                "operator_id": operator_id,
+                "workstation_id": workstation_id,
+                "task": None,
+                "timer_session": _serialize_operator_job_timer_session(active_session),
+            },
+            "No active task found",
+        )
+
+    total_actual_hours, total_actual_seconds = await _recalculate_operator_job_work_totals(
+        db=db,
+        job_id=active_session.job_id,
+        operator_id=operator_id,
+        workstation_id=workstation_id,
+        as_of=datetime.now().replace(second=0, microsecond=0),
+    )
+
+    task = _serialize_operator_workstation_task(
+        task_row,
+        operator=operator,
+        total_actual_hours=total_actual_hours,
+        total_actual_seconds=total_actual_seconds,
+    )
+
+    return success_response(
+        {
+            "operator_id": operator_id,
+            "operator_name": f"{operator.first_name} {operator.last_name}".strip() or operator.username,
+            "workstation_id": workstation_id,
+            "workstation_name": task.get("workstation_name"),
+            "task": task,
+            "timer_session": _serialize_operator_job_timer_session(active_session),
+        },
+        "Active task retrieved successfully",
+    )
+
+
+@router.get("/me/tasks", response_model=SuccessResponse[dict])
+async def get_current_operator_tasks(
+    view: str = "day",
+    reference_date: Optional[date] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return tasks assigned to the currently logged-in operator for day/week/month calendar views."""
+
+    normalized_view = (view or "day").strip().lower()
+    target_date = reference_date or date.today()
+    range_start, range_end = _build_calendar_window(normalized_view, target_date)
+
+    query = (
+        select(
+            ShopCutPlan,
+            Fab,
+            BusinessJob.name.label("job_name"),
+            BusinessJob.job_number.label("job_number"),
+            Account.name.label("account_name"),
+            WorkStation.name.label("workstation_name"),
+            PlanningSection.plan_name.label("planning_section_name"),
+        )
+        .join(Fab, Fab.id == ShopCutPlan.fab_id)
+        .join(BusinessJob, BusinessJob.id == Fab.job_id)
+        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+        .join(WorkStation, WorkStation.id == ShopCutPlan.workstation_id, isouter=True)
+        .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id, isouter=True)
+        .where(
+            ShopCutPlan.user_id == current_user.id,
+            ShopCutPlan.scheduled_start_date.is_not(None),
+            ShopCutPlan.scheduled_start_date < range_end,
+        )
+        .order_by(ShopCutPlan.scheduled_start_date.asc(), ShopCutPlan.sequence.asc(), ShopCutPlan.id.asc())
+    )
+
+    result = await db.execute(query)
+    rows = [row for row in result.all() if _task_overlaps_window(row[0], range_start, range_end)]
+    total = len(rows)
+    paginated_rows = rows[skip:skip + limit]
+    tasks = [_serialize_operator_task(row) for row in paginated_rows]
+    page = (skip // limit) + 1 if limit > 0 else 1
+
+    return success_response(
+        {
+            "operator_id": current_user.id,
+            "view": normalized_view,
+            "reference_date": target_date.isoformat(),
+            "range_start": range_start.isoformat(),
+            "range_end": range_end.isoformat(),
+            "total": total,
+            "page": page,
+            "per_page": limit,
+            "data": tasks,
+        },
+        "Operator tasks retrieved successfully",
+    )
+
+
+@router.post("/me/jobs/{job_id}/timer/action", response_model=SuccessResponse[dict])
+async def manage_current_operator_job_timer(
+    job_id: int,
+    payload: OperatorJobTimerActionRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Start, pause, resume, or stop a timer for the current operator on a job."""
+
+    try:
+        operator_id = current_user.id
+        if operator_id is None:
+            raise HTTPException(status_code=403, detail="Invalid operator context")
+
+        action = (payload.action or "").strip().lower()
+        if action not in {"start", "pause", "resume", "stop"}:
+            raise HTTPException(status_code=400, detail="action must be one of: start, pause, resume, stop")
+
+        normalized_timestamp = _normalize_naive_dt(payload.timestamp) if payload.timestamp else None
+        action_ts: datetime = normalized_timestamp or datetime.now().replace(second=0, microsecond=0)
+
+        job_result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
+        job = job_result.scalar_one_or_none()
+        if not job:
+            raise HTTPException(status_code=404, detail=f"Job with ID {job_id} not found")
+
+        workstation = None
+        if payload.workstation_id is not None:
+            workstation_result = await db.execute(select(WorkStation).where(WorkStation.id == payload.workstation_id))
+            workstation = workstation_result.scalar_one_or_none()
+            if not workstation:
+                raise HTTPException(status_code=404, detail=f"Workstation with ID {payload.workstation_id} not found")
+
+        active_session = await _get_active_operator_job_session(db, operator_id=operator_id, job_id=job_id)
+        active_any_session = await _get_active_operator_job_session(db, operator_id=operator_id)
+
+        if action == "start":
+            if active_session:
+                raise HTTPException(status_code=400, detail="An active timer session already exists for this job")
+            if active_any_session and active_any_session.job_id != job_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Operator already has an active timer on job {active_any_session.job_id}",
+                )
+
+            session = OperatorJobTimerSession(
+                job_id=job_id,
+                operator_id=operator_id,
+                workstation_id=payload.workstation_id,
+                status="running",
+                session_start_at=action_ts,
+                current_run_start_at=action_ts,
+                total_work_seconds=0,
+                total_pause_seconds=0,
+                created_at=datetime.now(),
+                created_by=operator_id,
+            )
+            db.add(session)
+            await db.flush()
+
+            db.add(
+                OperatorJobTimerEvent(
+                    session_id=session.id,
+                    job_id=job_id,
+                    operator_id=operator_id,
+                    workstation_id=payload.workstation_id,
+                    action="start",
+                    event_at=action_ts,
+                    note=payload.note,
+                )
+            )
+
+            target_session = session
+
+        elif action == "pause":
+            if not active_session or active_session.status != "running":
+                raise HTTPException(status_code=400, detail="No running timer session found to pause")
+
+            run_start = _normalize_naive_dt(active_session.current_run_start_at)
+            if not run_start:
+                raise HTTPException(status_code=400, detail="Timer session is missing current_run_start_at")
+
+            elapsed = int(max(0, (action_ts - run_start).total_seconds()))
+            active_session.total_work_seconds = int(active_session.total_work_seconds or 0) + elapsed
+            active_session.status = "paused"
+            active_session.current_run_start_at = None
+            active_session.current_pause_start_at = action_ts
+            active_session.updated_at = datetime.now()
+            active_session.updated_by = operator_id
+            if payload.workstation_id is not None:
+                active_session.workstation_id = payload.workstation_id
+
+            db.add(
+                OperatorJobTimerEvent(
+                    session_id=active_session.id,
+                    job_id=job_id,
+                    operator_id=operator_id,
+                    workstation_id=payload.workstation_id or active_session.workstation_id,
+                    action="pause",
+                    event_at=action_ts,
+                    note=payload.note,
+                )
+            )
+
+            target_session = active_session
+
+        elif action == "resume":
+            if not active_session or active_session.status != "paused":
+                raise HTTPException(status_code=400, detail="No paused timer session found to resume")
+
+            pause_start = _normalize_naive_dt(active_session.current_pause_start_at)
+            if pause_start and action_ts > pause_start:
+                pause_elapsed = int((action_ts - pause_start).total_seconds())
+                active_session.total_pause_seconds = int(active_session.total_pause_seconds or 0) + max(0, pause_elapsed)
+
+            active_session.status = "running"
+            active_session.current_pause_start_at = None
+            active_session.current_run_start_at = action_ts
+            active_session.updated_at = datetime.now()
+            active_session.updated_by = operator_id
+            if payload.workstation_id is not None:
+                active_session.workstation_id = payload.workstation_id
+
+            db.add(
+                OperatorJobTimerEvent(
+                    session_id=active_session.id,
+                    job_id=job_id,
+                    operator_id=operator_id,
+                    workstation_id=payload.workstation_id or active_session.workstation_id,
+                    action="resume",
+                    event_at=action_ts,
+                    note=payload.note,
+                )
+            )
+
+            target_session = active_session
+
+        else:
+            if not active_session or active_session.status not in {"running", "paused"}:
+                raise HTTPException(status_code=400, detail="No active timer session found to stop")
+
+            if active_session.status == "running":
+                run_start = _normalize_naive_dt(active_session.current_run_start_at)
+                if run_start and action_ts > run_start:
+                    elapsed = int((action_ts - run_start).total_seconds())
+                    active_session.total_work_seconds = int(active_session.total_work_seconds or 0) + max(0, elapsed)
+
+            if active_session.status == "paused":
+                pause_start = _normalize_naive_dt(active_session.current_pause_start_at)
+                if pause_start and action_ts > pause_start:
+                    pause_elapsed = int((action_ts - pause_start).total_seconds())
+                    active_session.total_pause_seconds = int(active_session.total_pause_seconds or 0) + max(0, pause_elapsed)
+
+            if payload.workstation_id is not None:
+                active_session.workstation_id = payload.workstation_id
+            active_session.status = "stopped"
+            active_session.current_run_start_at = None
+            active_session.current_pause_start_at = None
+            active_session.stopped_at = action_ts
+            active_session.updated_at = datetime.now()
+            active_session.updated_by = operator_id
+
+            db.add(
+                OperatorJobTimerEvent(
+                    session_id=active_session.id,
+                    job_id=job_id,
+                    operator_id=operator_id,
+                    workstation_id=payload.workstation_id or active_session.workstation_id,
+                    action="stop",
+                    event_at=action_ts,
+                    note=payload.note,
+                )
+            )
+
+            target_session = active_session
+
+        total_actual_hours, total_actual_seconds = await _recalculate_operator_job_work_totals(
+            db=db,
+            job_id=job_id,
+            operator_id=operator_id,
+            as_of=action_ts,
+        )
+
+        await db.commit()
+        if target_session.id:
+            await db.refresh(target_session)
+
+        return success_response(
+            {
+                "job_id": job_id,
+                "operator_id": operator_id,
+                "workstation_id": target_session.workstation_id,
+                "action": action,
+                "timestamp": action_ts.isoformat(),
+                "session": _serialize_operator_job_timer_session(target_session),
+                "total_actual_seconds": total_actual_seconds,
+                "total_actual_hours": total_actual_hours,
+            },
+            f"Timer {action} successful",
+        )
+
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as exc:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to process timer action: {str(exc)}")
+
+
+@router.get("/me/jobs/{job_id}/timer", response_model=SuccessResponse[dict])
+async def get_current_operator_job_timer_state(
+    job_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get current timer state for the logged-in operator on a job."""
+
+    operator_id = current_user.id
+    if operator_id is None:
+        raise HTTPException(status_code=403, detail="Invalid operator context")
+
+    job_result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
+    job = job_result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job with ID {job_id} not found")
+
+    latest_result = await db.execute(
+        select(OperatorJobTimerSession)
+        .where(
+            OperatorJobTimerSession.job_id == job_id,
+            OperatorJobTimerSession.operator_id == operator_id,
+        )
+        .order_by(OperatorJobTimerSession.created_at.desc())
+        .limit(1)
+    )
+    latest = latest_result.scalars().first()
+
+    now_ts = datetime.now().replace(second=0, microsecond=0)
+    total_actual_hours, total_actual_seconds = await _recalculate_operator_job_work_totals(
+        db=db,
+        job_id=job_id,
+        operator_id=operator_id,
+        as_of=now_ts,
+    )
+
+    return success_response(
+        {
+            "job_id": job_id,
+            "operator_id": operator_id,
+            "workstation_id": latest.workstation_id if latest else None,
+            "session": _serialize_operator_job_timer_session(latest) if latest else None,
+            "total_actual_seconds": total_actual_seconds,
+            "total_actual_hours": total_actual_hours,
+        },
+        "Operator job timer state retrieved successfully",
+    )
+
+
+@router.get("/me/jobs/{job_id}/timer/history", response_model=SuccessResponse[dict])
+async def get_current_operator_job_timer_history(
+    job_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get timer session and event history for the logged-in operator on a job."""
+
+    operator_id = current_user.id
+    if operator_id is None:
+        raise HTTPException(status_code=403, detail="Invalid operator context")
+
+    job_result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
+    job = job_result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job with ID {job_id} not found")
+
+    sessions_result = await db.execute(
+        select(OperatorJobTimerSession)
+        .where(
+            OperatorJobTimerSession.job_id == job_id,
+            OperatorJobTimerSession.operator_id == operator_id,
+        )
+        .order_by(OperatorJobTimerSession.created_at.asc())
+    )
+    sessions = sessions_result.scalars().all()
+
+    events_result = await db.execute(
+        select(OperatorJobTimerEvent)
+        .where(
+            OperatorJobTimerEvent.job_id == job_id,
+            OperatorJobTimerEvent.operator_id == operator_id,
+        )
+        .order_by(OperatorJobTimerEvent.event_at.asc())
+    )
+    events = events_result.scalars().all()
+
+    return success_response(
+        {
+            "job_id": job_id,
+            "operator_id": operator_id,
+            "sessions": [_serialize_operator_job_timer_session(session) for session in sessions],
+            "events": [_serialize_operator_job_timer_event(event) for event in events],
+        },
+        "Operator job timer history retrieved successfully",
+    )
+
+
+@router.post("/{operator_id}/jobs/{job_id}/upload", response_model=SuccessResponse[dict])
+async def upload_operator_job_qa_file(
+    operator_id: int,
+    job_id: int,
+    request: Request,
+    file: UploadFile = FileUpload(...),
+    file_design: str = Form("qa"),
+    stage_name: str = Form("qa"),
+    file_type: Optional[str] = Form(None),
+    directory: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Upload a QA file for a specific operator and job."""
+
+    operator_result = await db.execute(select(User).where(User.id == operator_id))
+    operator = operator_result.scalar_one_or_none()
+    if not operator:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Operator not found")
+
+    job_result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
+    job = job_result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    # Prevent spoofed uploads for another operator unless super admin.
+    if not getattr(current_user, "is_super_admin", False) and current_user.id != operator_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to upload files for this operator",
+        )
+
+    settings = get_settings()
+
+    # Check file size in chunks, then rewind.
+    file_size = 0
+    chunk_size = 1024 * 1024
+    while True:
+        chunk = await file.read(chunk_size)
+        if not chunk:
+            break
+        file_size += len(chunk)
+        if file_size > settings.MAX_UPLOAD_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File too large. Maximum size is {settings.MAX_UPLOAD_SIZE} bytes",
+            )
+    await file.seek(0)
+
+    # Validate extension against configured allow-list.
+    if file.filename:
+        ext = file.filename.split(".")[-1].lower() if "." in file.filename else None
+        if ext and ext not in settings.ALLOWED_EXTENSIONS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File extension not allowed. Allowed extensions: {', '.join(settings.ALLOWED_EXTENSIONS)}",
+            )
+
+    upload_directory = directory or f"uploads/jobs/{job_id}/qa"
+
+    resolved_file_type = file_type or "qa"
+
+    file_data = await FileService.upload_file(
+        db=db,
+        file=file,
+        user_id=operator_id,
+        directory=upload_directory,
+        file_type=resolved_file_type,
+        file_design=file_design,
+        stage_name=stage_name,
+        job_id=job_id,
+        request=request,
+    )
+
+    return success_response(
+        {
+            **file_data,
+            "job_id": job_id,
+            "operator_id": operator_id,
+        },
+        "QA file uploaded successfully",
+    )
+
+
+@router.get("/{operator_id}/jobs/{job_id}/files/{file_id}/view")
+async def view_operator_job_document(
+    operator_id: int,
+    job_id: int,
+    file_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Securely stream PDF/image files for operator in-browser viewing."""
+
+    operator_result = await db.execute(select(User).where(User.id == operator_id))
+    operator = operator_result.scalar_one_or_none()
+    if not operator:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Operator not found")
+
+    if not getattr(current_user, "is_super_admin", False) and current_user.id != operator_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to access files for this operator",
+        )
+
+    file_result = await db.execute(
+        select(File).where(
+            File.id == file_id,
+            File.job_id == job_id,
+            File.uploaded_by == operator_id,
+        )
+    )
+    db_file = file_result.scalar_one_or_none()
+    if not db_file:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
+
+    allowed_image_exts = {"jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff"}
+    allowed_mime_prefixes = ("image/",)
+    allowed_mime_exact = {"application/pdf"}
+
+    filename = db_file.name or ""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    guessed_mime, _ = mimetypes.guess_type(filename)
+    mime_type = guessed_mime or db_file.file_type or "application/octet-stream"
+
+    is_allowed = (
+        ext == "pdf"
+        or ext in allowed_image_exts
+        or mime_type in allowed_mime_exact
+        or any(mime_type.startswith(prefix) for prefix in allowed_mime_prefixes)
+    )
+    if not is_allowed:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Only PDF and image files are supported for browser viewing",
+        )
+
+    settings = get_settings()
+    file_path = db_file.file_path
+    static_root = os.path.realpath(settings.STATIC_DIR)
+    absolute_path = file_path if os.path.isabs(file_path) else os.path.join(settings.STATIC_DIR, file_path)
+    resolved_path = os.path.realpath(absolute_path)
+
+    if not resolved_path.startswith(static_root + os.sep) and resolved_path != static_root:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid file path")
+
+    if not os.path.exists(resolved_path):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found on server")
+
+    safe_media_type = "application/pdf" if ext == "pdf" else mime_type
+    return FileResponse(
+        path=resolved_path,
+        media_type=safe_media_type,
+        headers={"Content-Disposition": f'inline; filename="{db_file.name}"'},
+    )

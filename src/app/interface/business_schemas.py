@@ -1338,6 +1338,52 @@ class ShopCutPlanTimerHistoryResponse(BaseModel):
     sessions: List[ShopCutPlanTimerSessionResponse]
     events: List[ShopCutPlanTimerEventResponse]
 
+
+class OperatorJobTimerActionRequest(BaseModel):
+    action: str = Field(description="start, pause, resume, stop")
+    note: Optional[str] = None
+    timestamp: Optional[datetime] = None
+    workstation_id: Optional[int] = None
+
+
+class OperatorJobTimerEventResponse(BaseModel):
+    id: int
+    session_id: int
+    action: str
+    event_at: datetime
+    note: Optional[str] = None
+    workstation_id: Optional[int] = None
+
+
+class OperatorJobTimerSessionResponse(BaseModel):
+    id: int
+    job_id: int
+    operator_id: int
+    workstation_id: Optional[int] = None
+    status: str
+    session_start_at: datetime
+    current_run_start_at: Optional[datetime] = None
+    current_pause_start_at: Optional[datetime] = None
+    stopped_at: Optional[datetime] = None
+    total_work_seconds: int
+    total_pause_seconds: int
+
+
+class OperatorJobTimerStateResponse(BaseModel):
+    job_id: int
+    operator_id: int
+    workstation_id: Optional[int] = None
+    session: Optional[OperatorJobTimerSessionResponse] = None
+    total_actual_seconds: int
+    total_actual_hours: float
+
+
+class OperatorJobTimerHistoryResponse(BaseModel):
+    job_id: int
+    operator_id: int
+    sessions: List[OperatorJobTimerSessionResponse]
+    events: List[OperatorJobTimerEventResponse]
+
 class EarliestAvailabilityItem(BaseModel):
     planning_section_id: int 
     operator_id: int

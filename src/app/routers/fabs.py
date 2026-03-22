@@ -133,11 +133,16 @@ def _stage_filter_condition(stage_name: str):
 
 def get_next_stage(
     current_stage: str,
+    drafting_needed: Optional[bool] = None,
     slab_smith_ag_needed: Optional[bool] = None,
     slab_smith_cust_needed: Optional[bool] = None,
 ) -> Optional[str]:
     if not current_stage:
         return "templating"
+
+    if current_stage == "pre_draft_review":
+        # Skip drafting when it is explicitly not needed.
+        return "sales_ct" if drafting_needed is False else "drafting"
 
     if current_stage == "drafting":
         return "sales_ct"
@@ -385,13 +390,39 @@ async def create_fab(
         current_stage = "resurface_scheduling"
         next_stage = get_next_stage("resurface_scheduling")
     else:
-        # Always start in linear flow
-        current_stage = "templating"
-        next_stage = get_next_stage(
-            "templating",
-            slab_smith_ag_needed=fab_dict.get("slab_smith_ag_needed"),
-            slab_smith_cust_needed=fab_dict.get("slab_smith_cust_needed"),
-        )
+        # If all workflow-required flags are false, skip directly to Cut List.
+        if (
+            fab_dict.get("template_needed") is False
+            and fab_dict.get("drafting_needed") is False
+            and fab_dict.get("sct_needed") is False
+            and fab_dict.get("slab_smith_ag_needed") is False
+            and fab_dict.get("slab_smith_cust_needed") is False
+            and fab_dict.get("final_programming_needed") is False
+        ):
+            current_stage = "cut_list"
+            next_stage = get_next_stage(
+                "cut_list",
+                drafting_needed=fab_dict.get("drafting_needed"),
+                slab_smith_ag_needed=fab_dict.get("slab_smith_ag_needed"),
+                slab_smith_cust_needed=fab_dict.get("slab_smith_cust_needed"),
+            )
+        # Skip templating when template is not needed
+        elif fab_dict.get("template_needed") is False:
+            current_stage = "pre_draft_review"
+            next_stage = get_next_stage(
+                "pre_draft_review",
+                drafting_needed=fab_dict.get("drafting_needed"),
+                slab_smith_ag_needed=fab_dict.get("slab_smith_ag_needed"),
+                slab_smith_cust_needed=fab_dict.get("slab_smith_cust_needed"),
+            )
+        else:
+            current_stage = "templating"
+            next_stage = get_next_stage(
+                "templating",
+                drafting_needed=fab_dict.get("drafting_needed"),
+                slab_smith_ag_needed=fab_dict.get("slab_smith_ag_needed"),
+                slab_smith_cust_needed=fab_dict.get("slab_smith_cust_needed"),
+            )
     
     fab = Fab(
         **fab_dict,
@@ -1140,6 +1171,7 @@ async def get_fab(
     # Add next stage
     fab_dict["next_stage"] = get_next_stage(
         fab_dict.get("current_stage"),
+        drafting_needed=fab_dict.get("drafting_needed"),
         slab_smith_ag_needed=fab_dict.get("slab_smith_ag_needed"),
         slab_smith_cust_needed=fab_dict.get("slab_smith_cust_needed"),
     )
@@ -1266,6 +1298,7 @@ async def update_fab(
     if stage_changed and new_current_stage:
         fab.next_stage = get_next_stage(
             new_current_stage,
+            drafting_needed=fab.drafting_needed,
             slab_smith_ag_needed=fab.slab_smith_ag_needed,
             slab_smith_cust_needed=getattr(fab, "slab_smith_cust_needed", None),
         )
@@ -1455,6 +1488,7 @@ async def get_fabs_by_job(
         # ALWAYS add current_stage and next_stage
         fab_dict["next_stage"] = get_next_stage(
             fab_dict.get("current_stage"),
+            drafting_needed=fab_dict.get("drafting_needed"),
             slab_smith_ag_needed=fab_dict.get("slab_smith_ag_needed"),
             slab_smith_cust_needed=fab_dict.get("slab_smith_cust_needed"),
         )        
@@ -1653,6 +1687,7 @@ async def get_fabs_by_stage(
         # Add next_stage
         fab_dict["next_stage"] = get_next_stage(
             fab_dict.get("current_stage"),
+            drafting_needed=fab_dict.get("drafting_needed"),
             slab_smith_ag_needed=fab_dict.get("slab_smith_ag_needed"),
             slab_smith_cust_needed=fab_dict.get("slab_smith_cust_needed"),
         )        
@@ -2132,6 +2167,7 @@ async def update_fab_stage(
     fab.current_stage = stage_data.current_stage
     fab.next_stage = get_next_stage(
         stage_data.current_stage,
+        drafting_needed=fab.drafting_needed,
         slab_smith_ag_needed=fab.slab_smith_ag_needed,
         slab_smith_cust_needed=getattr(fab, "slab_smith_cust_needed", None),
     )
@@ -2570,6 +2606,7 @@ def _convert_fab_row_to_dict(row: tuple) -> dict:
     fab_dict["drafter_assigned_by_name"] = f"{drafter_assigned_by_first_name} {drafter_assigned_by_last_name}" if drafter_assigned_by_first_name else None
     fab_dict["next_stage"] = get_next_stage(
         fab_dict.get("current_stage"),
+        drafting_needed=fab_dict.get("drafting_needed"),
         slab_smith_ag_needed=fab_dict.get("slab_smith_ag_needed"),
         slab_smith_cust_needed=fab_dict.get("slab_smith_cust_needed"),
     )    

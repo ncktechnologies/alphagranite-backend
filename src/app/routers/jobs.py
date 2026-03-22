@@ -108,7 +108,7 @@ async def create_job(
         )
 
 
-@router.get("/jobs", response_model=List[JobResponse])
+@router.get("/jobs", response_model=SuccessResponse[dict])
 async def get_jobs(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
@@ -122,12 +122,12 @@ async def get_jobs(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(PermissionChecker("jobs", "read"))
 ):
-    """Get list of jobs with optional filtering"""
-    jobs = await job_crud.get_jobs(db, skip, limit, account_id, status_id, priority, need_to_invoice, search, is_invoiced)
+    """Get list of jobs with optional filtering and pagination metadata"""
+    jobs, total = await job_crud.get_jobs(db, skip, limit, account_id, status_id, priority, need_to_invoice, search, is_invoiced)
     
     # If include_notes is True, fetch notes for each job
     if include_notes:
-        job_ids = [job.id for job in jobs]
+        job_ids = [job.get("id") for job in jobs if job.get("id") is not None]
         
         # Fetch all notes for these jobs in one query
         notes_query = select(
@@ -158,9 +158,17 @@ async def get_jobs(
         
         # Attach notes to jobs
         for job in jobs:
-            job.notes = notes_by_job.get(job.id, [])
+            job["notes"] = notes_by_job.get(job.get("id"), [])
     
-    return jobs
+    page = (skip // limit) + 1 if limit > 0 else 1
+    response_data = {
+        "total": total,
+        "page": page,
+        "per_page": limit,
+        "data": jobs,
+    }
+
+    return success_response(response_data, "Jobs retrieved successfully")
 
 
 @router.get("/jobs/{job_id}", response_model=JobResponse)
