@@ -131,6 +131,13 @@ def _stage_filter_condition(stage_name: str):
         )
     return Fab.current_stage == stage_name
 
+
+def _needs_slabsmith(
+    slab_smith_ag_needed: Optional[bool] = None,
+    slab_smith_cust_needed: Optional[bool] = None,
+) -> bool:
+    return bool(slab_smith_ag_needed) or bool(slab_smith_cust_needed)
+
 def get_next_stage(
     current_stage: str,
     drafting_needed: Optional[bool] = None,
@@ -148,7 +155,7 @@ def get_next_stage(
         return "sales_ct"
 
     if current_stage == "sales_ct":
-        needs_slabsmith = bool(slab_smith_ag_needed) or bool(slab_smith_cust_needed)
+        needs_slabsmith = _needs_slabsmith(slab_smith_ag_needed, slab_smith_cust_needed)
         return "slab_smith_request" if needs_slabsmith else "final_programming"
 
     try:
@@ -379,7 +386,7 @@ async def create_fab(
     if "total_sqft" not in fab_dict or fab_dict["total_sqft"] is None:
         fab_dict["total_sqft"] = 1.0
     
-    # Determine initial stage based on fab_type / slab_smith_ag_needed
+    # Determine initial stage based on fab_type and workflow flags.
     fab_type = (fab_dict.get("fab_type") or "").strip().upper()
     fab_dict["fab_type"] = fab_type  # persist uppercase globally
 
@@ -395,8 +402,6 @@ async def create_fab(
             fab_dict.get("template_needed") is False
             and fab_dict.get("drafting_needed") is False
             and fab_dict.get("sct_needed") is False
-            and fab_dict.get("slab_smith_ag_needed") is False
-            and fab_dict.get("slab_smith_cust_needed") is False
             and fab_dict.get("final_programming_needed") is False
         ):
             current_stage = "cut_list"
@@ -2004,7 +2009,7 @@ async def get_all_stages(
     # NEW: slab_smith_request count should mirror /stages/slabsmith/pending
     slabsmith_pending_filters = [
         or_(Fab.current_stage == "sales_ct", Fab.current_stage == "revision"),
-        Fab.slab_smith_ag_needed.is_(True),
+        or_(Fab.slab_smith_ag_needed.is_(True), Fab.slab_smith_cust_needed.is_(True)),
         Fab.slabsmith_completed_date.is_(None),
     ]
     slabsmith_count_result = await db.execute(

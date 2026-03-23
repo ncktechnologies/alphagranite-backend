@@ -188,8 +188,8 @@ async def approve_and_send_to_slabsmith(
     if approval_data.slab_smith_used is not None:
         fab.slab_smith_used = approval_data.slab_smith_used
     
-    # Check if SlabSmith is needed to determine next stage
-    if fab.slab_smith_ag_needed:  # ← Check if SlabSmith is needed
+    # Check if either SlabSmith workflow is needed to determine next stage.
+    if fab.slab_smith_ag_needed or fab.slab_smith_cust_needed:
         fab.current_stage = "slab_smith_request"
         fab.next_stage = "cut_list"
         message_suffix = "sent to SlabSmith"

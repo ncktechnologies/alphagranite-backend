@@ -496,13 +496,13 @@ async def get_pending_slabsmith_fab_ids(
     """
     Get FABs where:
     - current_stage is sales_ct (SCT)
-    - slab_smith_ag_needed is true
+    - slab_smith_ag_needed or slab_smith_cust_needed is true
     - slabsmith_completed_date is null
     Optional search by FAB ID or Job Number.
     """
     filters = [
         (Fab.current_stage == "sales_ct") | (Fab.current_stage == "revision"),
-        Fab.slab_smith_ag_needed.is_(True),
+        (Fab.slab_smith_ag_needed.is_(True)) | (Fab.slab_smith_cust_needed.is_(True)),
         Fab.slabsmith_completed_date.is_(None),
     ]
 
