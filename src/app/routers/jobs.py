@@ -235,7 +235,30 @@ async def delete_job(
     return None
 
 
-@router.post("/jobs/{job_id}/upload-media")
+@router.post(
+    "/jobs/{job_id}/upload-media",
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["files", "stage_name", "file_design"],
+                        "properties": {
+                            "files": {
+                                "type": "array",
+                                "items": {"type": "string", "format": "binary"},
+                            },
+                            "stage_name": {"type": "string"},
+                            "file_design": {"type": "string"},
+                        },
+                    }
+                }
+            },
+            "required": True,
+        }
+    },
+)
 async def upload_job_media(
     job_id: int,
     files: List[UploadFile] = FileUpload(...),
@@ -305,7 +328,7 @@ async def upload_job_media(
             {"uploaded": uploaded_files, "errors": errors or None},
             f"Successfully uploaded {len(uploaded_files)} file(s)" + (f" with {len(errors)} error(s)" if errors else "")
         )
-    return error_response({"errors": errors}, 400)
+    return error_response("; ".join(errors) if errors else "Upload failed", 400)
 
 
 @router.get("/jobs/{job_id}/media")
