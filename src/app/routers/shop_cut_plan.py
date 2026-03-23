@@ -79,26 +79,19 @@ async def create_shop_plans(
                 detail="This Planning Section has already been added. Please select a different Planning Section."
             )
 
-        # Prevent duplicate planning against existing records
-        existing_result = await db.execute(
-            select(ShopCutPlan.planning_section_id)
-            .where(
-                ShopCutPlan.fab_id == plan_data.fab_id,
-                ShopCutPlan.planning_section_id.in_(section_ids)
-            )
-            .distinct()
-        )
-        existing_sections = sorted([row[0] for row in existing_result.all()])
-        if existing_sections:
-            conflict_detail = await _build_duplicate_section_conflict_detail(
-                db,
-                fab_id=plan_data.fab_id,
-                section_ids=section_ids,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=conflict_detail,
-            )
+        # Validate that stages are ordered by sequence chronologically
+        if len(plan_data.stages) > 1:
+            stages_by_seq = sorted(plan_data.stages, key=lambda s: s.sequence)
+            for i in range(len(stages_by_seq) - 1):
+                curr = stages_by_seq[i]
+                nxt = stages_by_seq[i + 1]
+                curr_start = curr.scheduled_start.replace(tzinfo=None) if curr.scheduled_start.tzinfo else curr.scheduled_start
+                nxt_start = nxt.scheduled_start.replace(tzinfo=None) if nxt.scheduled_start.tzinfo else nxt.scheduled_start
+                if curr_start > nxt_start:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Sequence {curr.sequence} must be scheduled before Sequence {nxt.sequence}",
+                    )
 
         created_plans = []
 
@@ -1128,6 +1121,16 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
 def _normalize_naive_dt(value: datetime) -> datetime:
     return value.replace(tzinfo=None) if value and value.tzinfo else value
 
+def _compute_lunch_adjusted_end(start: datetime, hours: float) -> datetime:
+    """Return the real end time, automatically adding the 1-hour lunch gap when
+    the job interval crosses the 12:00 PM – 1:00 PM break."""
+    naive_end = start + timedelta(hours=hours)
+    lunch_start, lunch_end = _lunch_window_for_day(start)
+    if start < lunch_start < naive_end:
+        naive_end += (lunch_end - lunch_start)
+    return naive_end
+
+
 def _compute_schedule_end_time_iso(
     scheduled_start: Optional[datetime],
     estimated_hours: Optional[float]
@@ -1135,7 +1138,7 @@ def _compute_schedule_end_time_iso(
     if not scheduled_start or estimated_hours is None:
         return None
     try:
-        return (scheduled_start + timedelta(hours=float(estimated_hours))).isoformat()
+        return _compute_lunch_adjusted_end(scheduled_start, float(estimated_hours)).isoformat()
     except (TypeError, ValueError):
         return None
 
@@ -1282,26 +1285,6 @@ async def suggest_shop_plan_slots(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="This Planning Section has already been added. Please select a different Planning Section."
-            )
-
-        existing_result = await db.execute(
-            select(ShopCutPlan.planning_section_id)
-            .where(
-                ShopCutPlan.fab_id == plan_data.fab_id,
-                ShopCutPlan.planning_section_id.in_(section_ids)
-            )
-            .distinct()
-        )
-        existing_sections = sorted([row[0] for row in existing_result.all()])
-        if existing_sections:
-            conflict_detail = await _build_duplicate_section_conflict_detail(
-                db,
-                fab_id=plan_data.fab_id,
-                section_ids=section_ids,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=conflict_detail,
             )
 
         # Stage-level validations and prep
@@ -1581,10 +1564,42 @@ def _is_valid_business_interval(start: datetime, end: datetime) -> bool:
 
 
 def _validate_manual_schedule_interval(start: Optional[datetime], estimated_hours: Optional[float]) -> None:
+    """Validate a manually supplied schedule start time.
+
+    Rules:
+    - Must be a weekday (Mon–Fri)
+    - Must fall within 7:00 AM – 4:00 PM
+    - Must NOT start during the 12:00 PM – 1:00 PM lunch break
+    - If estimated_hours > 0, the lunch-adjusted end time must not exceed 4:00 PM
+
+    Lunch-crossing jobs are allowed: the lunch hour is automatically added to
+    the end time so the planner is never blocked.
+    """
     if start is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="scheduled_start is required and must be within Monday-Friday, 7:00 AM to 4:00 PM, excluding 12:00 PM to 1:00 PM lunch break",
+            detail="scheduled_start is required",
+        )
+
+    if not _is_business_day(start):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="scheduled_start must be on a weekday (Monday–Friday)",
+        )
+
+    day_start, day_end = _business_window_for_day(start)
+    lunch_start, lunch_end = _lunch_window_for_day(start)
+
+    if not (day_start <= start < day_end):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="scheduled_start must be between 7:00 AM and 4:00 PM",
+        )
+
+    if lunch_start <= start < lunch_end:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="scheduled_start cannot be during the lunch break (12:00 PM – 1:00 PM)",
         )
 
     try:
@@ -1593,22 +1608,15 @@ def _validate_manual_schedule_interval(start: Optional[datetime], estimated_hour
         hours = 0.0
 
     if hours > 0:
-        end = start + timedelta(hours=hours)
-        is_valid = _is_valid_business_interval(start, end)
-    else:
-        day_start, day_end = _business_window_for_day(start)
-        lunch_start, lunch_end = _lunch_window_for_day(start)
-        is_valid = (
-            _is_business_day(start)
-            and day_start <= start < day_end
-            and not (lunch_start <= start < lunch_end)
-        )
-
-    if not is_valid:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Scheduling must be Monday-Friday between 7:00 AM and 4:00 PM, exclude 12:00 PM to 1:00 PM lunch break, and estimated duration must fit within a valid business interval",
-        )
+        adjusted_end = _compute_lunch_adjusted_end(start, hours)
+        if adjusted_end > day_end:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"The scheduled duration ({hours}h) starting at {start.strftime('%I:%M %p')} "
+                    f"exceeds the business day end (4:00 PM) even after accounting for the lunch break"
+                ),
+            )
 
 
 def _advance_after_invalid_interval(cursor: datetime, slot_minutes: int) -> datetime:

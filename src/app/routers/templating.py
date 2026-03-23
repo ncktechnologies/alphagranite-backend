@@ -320,13 +320,25 @@ async def complete_templating(
     templating.updated_at = utc_now()
     templating.updated_by = current_user.id
 
-    # Update FAB stage: Move to next stage based on current stage
+    # Update FAB stage: Move to next stage based on current stage.
+    # Pass drafting_needed so that when the FAB lands on pre_draft_review the
+    # correct downstream stage (sales_ct vs drafting) is reflected in next_stage.
     from src.app.routers.fabs import get_next_stage
     if fab.current_stage:
-        fab.next_stage = get_next_stage(fab.current_stage)
+        fab.next_stage = get_next_stage(
+            fab.current_stage,
+            drafting_needed=fab.drafting_needed,
+            slab_smith_ag_needed=fab.slab_smith_ag_needed,
+            slab_smith_cust_needed=fab.slab_smith_cust_needed,
+        )
         if fab.next_stage:
             fab.current_stage = fab.next_stage
-            fab.next_stage = get_next_stage(fab.current_stage)
+            fab.next_stage = get_next_stage(
+                fab.current_stage,
+                drafting_needed=fab.drafting_needed,
+                slab_smith_ag_needed=fab.slab_smith_ag_needed,
+                slab_smith_cust_needed=fab.slab_smith_cust_needed,
+            )
         fab.updated_at = utc_now()
         fab.updated_by = current_user.id
 
@@ -402,9 +414,15 @@ async def mark_templating_received(
     # ✅ Set template_received to True
     fab.template_received = True
     
-    # Move fab to predraft review stage and set next stage to drafting
+    # Move fab to predraft review stage; next stage respects drafting_needed flag.
+    from src.app.routers.fabs import get_next_stage
     fab.current_stage = "pre_draft_review"
-    fab.next_stage = "drafting"
+    fab.next_stage = get_next_stage(
+        "pre_draft_review",
+        drafting_needed=fab.drafting_needed,
+        slab_smith_ag_needed=fab.slab_smith_ag_needed,
+        slab_smith_cust_needed=fab.slab_smith_cust_needed,
+    )
     fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     

@@ -5,7 +5,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File as FileUpload, Form, status
 from fastapi.responses import FileResponse
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -594,8 +594,9 @@ async def get_active_workstation_task_by_operator(
 
 @router.get("/me/tasks", response_model=SuccessResponse[dict])
 async def get_current_operator_tasks(
-    view: str = "day",
+    view: str = "week",
     reference_date: Optional[date] = None,
+    active_only: bool = Query(False),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
@@ -603,9 +604,20 @@ async def get_current_operator_tasks(
 ):
     """Return tasks assigned to the currently logged-in operator for day/week/month calendar views."""
 
-    normalized_view = (view or "day").strip().lower()
+    normalized_view = (view or "week").strip().lower()
     target_date = reference_date or date.today()
     range_start, range_end = _build_calendar_window(normalized_view, target_date)
+
+    # Collect workstation IDs this operator is assigned to (via the operator_ids JSON array)
+    ws_rows = (await db.execute(select(WorkStation.id, WorkStation.operator_ids))).all()
+    assigned_ws_ids = [row[0] for row in ws_rows if current_user.id in (row[1] or [])]
+
+    # Match tasks directly assigned to this operator OR at any workstation they belong to
+    assignment_filter = (
+        or_(ShopCutPlan.user_id == current_user.id, ShopCutPlan.workstation_id.in_(assigned_ws_ids))
+        if assigned_ws_ids
+        else ShopCutPlan.user_id == current_user.id
+    )
 
     query = (
         select(
@@ -623,7 +635,7 @@ async def get_current_operator_tasks(
         .join(WorkStation, WorkStation.id == ShopCutPlan.workstation_id, isouter=True)
         .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id, isouter=True)
         .where(
-            ShopCutPlan.user_id == current_user.id,
+            assignment_filter,
             ShopCutPlan.scheduled_start_date.is_not(None),
             ShopCutPlan.scheduled_start_date < range_end,
         )
@@ -632,6 +644,8 @@ async def get_current_operator_tasks(
 
     result = await db.execute(query)
     rows = [row for row in result.all() if _task_overlaps_window(row[0], range_start, range_end)]
+    if active_only:
+        rows = [row for row in rows if _task_is_active(row[0])]
     total = len(rows)
     paginated_rows = rows[skip:skip + limit]
     tasks = [_serialize_operator_task(row) for row in paginated_rows]
@@ -671,8 +685,10 @@ async def manage_current_operator_job_timer(
         if action not in {"start", "pause", "resume", "stop"}:
             raise HTTPException(status_code=400, detail="action must be one of: start, pause, resume, stop")
 
-        normalized_timestamp = _normalize_naive_dt(payload.timestamp) if payload.timestamp else None
-        action_ts: datetime = normalized_timestamp or datetime.now().replace(second=0, microsecond=0)
+        # Always use server-generated time — never trust client-supplied timestamps
+        # for duration calculations, as timezone mismatches or stale values produce
+        # incorrect elapsed-time results.
+        action_ts: datetime = datetime.utcnow()
 
         job_result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
         job = job_result.scalar_one_or_none()
@@ -828,6 +844,10 @@ async def manage_current_operator_job_timer(
             )
 
             target_session = active_session
+
+        # Flush pending ORM changes so the subsequent sum query reads the
+        # updated total_work_seconds written above, not the stale DB value.
+        await db.flush()
 
         total_actual_hours, total_actual_seconds = await _recalculate_operator_job_work_totals(
             db=db,

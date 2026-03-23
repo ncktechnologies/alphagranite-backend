@@ -809,11 +809,20 @@ async def create_pre_draft_review(
     
     db.add(review)
     
-    # If review is completed, move fab to next stage
+    # If review is completed, advance fab — skip drafting when not needed.
     if review_data.is_completed:
+        from src.app.routers.fabs import get_next_stage
         db.add(fab)
-        fab.current_stage = "drafting"
-        fab.next_stage = "sales_ct"
+        if fab.drafting_needed is False:
+            fab.current_stage = "sales_ct"
+            fab.next_stage = get_next_stage(
+                "sales_ct",
+                slab_smith_ag_needed=fab.slab_smith_ag_needed,
+                slab_smith_cust_needed=fab.slab_smith_cust_needed,
+            )
+        else:
+            fab.current_stage = "drafting"
+            fab.next_stage = "sales_ct"
         fab.updated_at = utc_now()
         fab.updated_by = current_user.id
     
@@ -850,12 +859,21 @@ async def mark_predraft_review_completed(
         raise error_response("Associated fab not found", 404)
     
     if is_completed:
+        from src.app.routers.fabs import get_next_stage
         review.is_redrafting_needed = 0
         review.status_id = 2  # Completed status
-        
-        # Move fab to drafting stage
-        fab.current_stage = "drafting"
-        fab.next_stage = "sales_check"
+
+        # Skip drafting when not needed — go straight to sales_ct.
+        if fab.drafting_needed is False:
+            fab.current_stage = "sales_ct"
+            fab.next_stage = get_next_stage(
+                "sales_ct",
+                slab_smith_ag_needed=fab.slab_smith_ag_needed,
+                slab_smith_cust_needed=fab.slab_smith_cust_needed,
+            )
+        else:
+            fab.current_stage = "drafting"
+            fab.next_stage = "sales_ct"
         fab.updated_at = utc_now()
         fab.updated_by = current_user.id
         fab.predraft_completed_date = utc_now()
