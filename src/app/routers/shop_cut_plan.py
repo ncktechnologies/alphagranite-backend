@@ -194,6 +194,29 @@ async def create_shop_plans(
         for plan in created_plans:
             await db.refresh(plan)
 
+        plans_payload = []
+        for plan in created_plans:
+            ws_result = await db.execute(select(WorkStation).where(WorkStation.id == plan.workstation_id))
+            plan_workstation = ws_result.scalar_one_or_none()
+
+            user_result = await db.execute(select(User).where(User.id == plan.user_id))
+            plan_operator = user_result.scalar_one_or_none()
+
+            plans_payload.append({
+                "id": plan.id,
+                "sequence": plan.sequence,
+                "workstation_id": plan.workstation_id,
+                "workstation_name": plan_workstation.name if plan_workstation else None,
+                "planning_section_id": plan.planning_section_id,
+                "operator_id": plan.user_id,
+                "operator_name": (f"{plan_operator.first_name} {plan_operator.last_name}".strip() or plan_operator.username) if plan_operator else None,
+                "estimated_hours": plan.estimated_hours,
+                "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
+                "scheduled_end_date": _compute_schedule_end_time_iso(plan.scheduled_start_date, plan.estimated_hours),
+                "work_percentage": plan.work_percentage,
+                "notes": plan.notes,
+            })
+
         return {
             "success": True,
             "message": f"Shop plans created successfully with {len(created_plans)} plan(s)",
@@ -201,21 +224,7 @@ async def create_shop_plans(
                 "fab_id": plan_data.fab_id,
                 "status_id": plan_data.status_id,
                 "plans_created": len(created_plans),
-                "plans": [
-                    {
-                        "id": plan.id,
-                        "sequence": plan.sequence,
-                        "workstation_id": plan.workstation_id,
-                        "planning_section_id": plan.planning_section_id,
-                        "operator_id": plan.user_id,
-                        "estimated_hours": plan.estimated_hours,
-                        "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
-                        "scheduled_end_date": _compute_schedule_end_time_iso(plan.scheduled_start_date, plan.estimated_hours),
-                        "work_percentage": plan.work_percentage,
-                        "notes": plan.notes
-                    }
-                    for plan in created_plans
-                ]
+                "plans": plans_payload
             }
         }
 
@@ -347,6 +356,11 @@ async def get_shop_plan(
         as_of=datetime.now().replace(second=0, microsecond=0),
     )
     
+    ws_result = await db.execute(select(WorkStation).where(WorkStation.id == plan.workstation_id))
+    workstation = ws_result.scalar_one_or_none()
+    
+    user_result = await db.execute(select(User).where(User.id == plan.user_id))
+    operator = user_result.scalar_one_or_none()
     return {
         "success": True,
         "message": "Shop plan retrieved successfully",
@@ -355,8 +369,10 @@ async def get_shop_plan(
             "fab_id": plan.fab_id,
             "sequence": plan.sequence,
             "workstation_id": plan.workstation_id,
+            "workstation_name": workstation.name if workstation else None,
             "planning_section_id": plan.planning_section_id,
             "operator_id": plan.user_id,
+            "operator_name": (f"{operator.first_name} {operator.last_name}".strip() or operator.username) if operator else None,
             "estimated_hours": plan.estimated_hours,
             "total_actual_seconds": total_actual_seconds,
             "total_actual_hours": total_actual_hours,
@@ -480,7 +496,9 @@ async def update_shop_plan(
                 "workstation_id": plan.workstation_id,
                 "planning_section_id": plan.planning_section_id,
                 "operator_id": plan.user_id,
+                "operator_name": (f"{user.first_name} {user.last_name}".strip() or user.username) if user else None,
                 "estimated_hours": plan.estimated_hours,
+                "workstation_name": workstation.name if workstation else None,
                 "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
                 "work_percentage": plan.work_percentage,
                 "notes": plan.notes,
@@ -692,7 +710,7 @@ async def _recalculate_shop_plan_work_percentage(
     else:
         work_percentage = min(100, int((total_actual_hours / estimated_hours) * 100))
 
-    return work_percentage, total_actual_hours, total_actual_seconds
+    return work_percentage, round(total_actual_hours, 4), total_actual_seconds
 
 
 @router.post("/plans/{plan_id}/timer/action", response_model=dict)
@@ -855,6 +873,13 @@ async def manage_shop_cut_plan_timer(
             plan=plan,
             as_of=action_ts,
         )
+
+        ws_result = await db.execute(select(WorkStation).where(WorkStation.id == plan.workstation_id))
+        workstation = ws_result.scalar_one_or_none()
+
+        operator_result = await db.execute(select(User).where(User.id == plan.user_id))
+        operator = operator_result.scalar_one_or_none()
+
         plan.work_percentage = work_percentage
         plan.updated_at = datetime.now()
         plan.updated_by = current_user.id
@@ -867,7 +892,11 @@ async def manage_shop_cut_plan_timer(
             "data": {
                 "shop_cut_plan_id": plan.id,
                 "operator_id": plan.user_id,
+                "operator_name": (f"{operator.first_name} {operator.last_name}".strip() or operator.username) if operator else None,
+                "workstation_id": plan.workstation_id,
+                "workstation_name": workstation.name if workstation else None,
                 "action": action,
+                "note": payload.note,
                 "timestamp": action_ts.isoformat(),
                 "total_actual_seconds": total_actual_seconds,
                 "total_actual_hours": total_actual_hours,
@@ -916,12 +945,21 @@ async def get_shop_cut_plan_timer_state(
         as_of=now_ts,
     )
 
+    ws_result = await db.execute(select(WorkStation).where(WorkStation.id == plan.workstation_id))
+    workstation = ws_result.scalar_one_or_none()
+
+    operator_result = await db.execute(select(User).where(User.id == plan.user_id))
+    operator = operator_result.scalar_one_or_none()
+
     return {
         "success": True,
         "message": "Timer state retrieved successfully",
         "data": {
             "shop_cut_plan_id": plan.id,
             "operator_id": plan.user_id,
+            "operator_name": (f"{operator.first_name} {operator.last_name}".strip() or operator.username) if operator else None,
+            "workstation_id": plan.workstation_id,
+            "workstation_name": workstation.name if workstation else None,
             "session": {
                 "id": latest.id,
                 "status": latest.status,
@@ -972,12 +1010,21 @@ async def get_shop_cut_plan_timer_history(
     )
     events = events_result.scalars().all()
 
+    ws_result = await db.execute(select(WorkStation).where(WorkStation.id == plan.workstation_id))
+    workstation = ws_result.scalar_one_or_none()
+
+    operator_result = await db.execute(select(User).where(User.id == plan.user_id))
+    operator = operator_result.scalar_one_or_none()
+
     return {
         "success": True,
         "message": "Timer history retrieved successfully",
         "data": {
             "shop_cut_plan_id": plan_id,
             "operator_id": plan.user_id,
+            "operator_name": (f"{operator.first_name} {operator.last_name}".strip() or operator.username) if operator else None,
+            "workstation_id": plan.workstation_id,
+            "workstation_name": workstation.name if workstation else None,
             "sessions": [
                 {
                     "id": s.id,
@@ -1726,11 +1773,26 @@ async def get_earliest_availability(
         operator_ids = {r.operator_id for r in payload.requests}
         workstation_ids = {r.workstation_id for r in payload.requests}
 
-        # Validate operators/workstations exist
-        user_rows = (await db.execute(select(User.id).where(User.id.in_(list(operator_ids))))).all()
-        ws_rows = (await db.execute(select(WorkStation.id).where(WorkStation.id.in_(list(workstation_ids))))).all()
+        # Validate operators/workstations exist and build id->name maps
+        user_rows = (
+            await db.execute(
+                select(User.id, User.first_name, User.last_name, User.username)
+                .where(User.id.in_(list(operator_ids)))
+            )
+        ).all()
+        ws_rows = (
+            await db.execute(
+                select(WorkStation.id, WorkStation.name)
+                .where(WorkStation.id.in_(list(workstation_ids)))
+            )
+        ).all()
         valid_users = {r[0] for r in user_rows}
         valid_ws = {r[0] for r in ws_rows}
+        user_name_map = {
+            row[0]: (f"{(row[1] or '').strip()} {(row[2] or '').strip()}".strip() or (row[3] or None))
+            for row in user_rows
+        }
+        ws_name_map = {row[0]: row[1] for row in ws_rows}
 
         missing_users = sorted(operator_ids - valid_users)
         missing_ws = sorted(workstation_ids - valid_ws)
@@ -1838,7 +1900,9 @@ async def get_earliest_availability(
                 "planning_section_id": req.planning_section_id,
                 "plan_name": ps_map.get(req.planning_section_id),
                 "operator_id": req.operator_id,
+                "operator_name": user_name_map.get(req.operator_id),
                 "workstation_id": req.workstation_id,
+                "workstation_name": ws_name_map.get(req.workstation_id),
                 "estimated_hours": float(req.estimated_hours),
                 "proposed_ranges": proposals
             })
