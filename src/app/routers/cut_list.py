@@ -21,6 +21,26 @@ router = APIRouter(
 )
 
 
+def _transition_to_cutting_if_revision_complete(fab: Fab, user_id: Optional[int]) -> bool:
+    if not fab:
+        return False
+
+    if fab.current_stage != "cut_list":
+        return False
+
+    if fab.revised:
+        return False
+
+    if fab.revision_completed_date is None:
+        return False
+
+    fab.current_stage = "cutting"
+    fab.next_stage = None
+    fab.updated_at = datetime.now()
+    fab.updated_by = user_id
+    return True
+
+
 @router.patch("/{fab_id}/schedule", response_model=dict)
 async def schedule_shop_date(
     fab_id: int,
@@ -70,10 +90,14 @@ async def schedule_shop_date(
         if schedule_data.revision_complete is not None:
             fab.revised = not schedule_data.revision_complete
 
+        _transition_to_cutting_if_revision_complete(fab, current_user.id)
+
         fab_type = (fab.fab_type or "").strip().lower()
         is_resurface = fab_type in {"resurface_scheduling", "resurface"}
 
-        if is_resurface:
+        if fab.current_stage == "cutting":
+            fab.next_stage = None
+        elif is_resurface:
             fab.next_stage = "install_scheduling"
         else:
             fab.current_stage = "cut_list"
@@ -148,6 +172,8 @@ async def update_cut_list(
         # Handle revision_complete
         if update_data.revision_complete is not None:
             fab.revised = not update_data.revision_complete  # If revision complete, mark revised as False
+
+        _transition_to_cutting_if_revision_complete(fab, current_user.id)
         
         fab.updated_at = datetime.now()
         fab.updated_by = current_user.id
@@ -228,6 +254,10 @@ async def get_cut_list_details(
         )
     
     fab, job, account, sales_person, stone_type, stone_color, stone_thickness, edge = row
+
+    if _transition_to_cutting_if_revision_complete(fab, current_user.id):
+        await db.commit()
+        await db.refresh(fab)
     
     # Get drafting notes
     drafting_notes_result = await db.execute(
