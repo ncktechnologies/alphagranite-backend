@@ -290,7 +290,7 @@ async def upload_job_media(
                 directory="jobs",
                 file_type=file_type,
                 file_design=file_design,
-                stage=stage_name,
+                stage_name=stage_name,
                 request=request
             )
 
@@ -318,6 +318,13 @@ async def upload_job_media(
                 for k, v in file_data.items()
             }
             uploaded_files.append(serialized)
+        except HTTPException as e:
+            detail = e.detail
+            if isinstance(detail, dict):
+                detail_message = detail.get("message") or str(detail)
+            else:
+                detail_message = str(detail)
+            errors.append(f"{file.filename}: {detail_message}")
         except Exception as e:
             errors.append(f"{file.filename}: {str(e)}")
 
