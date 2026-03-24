@@ -18,8 +18,12 @@ from src.app.database.operator_job_timer_event import OperatorJobTimerEvent
 from src.app.database.operator_job_timer_session import OperatorJobTimerSession
 from src.app.database.planning_section import PlanningSection
 from src.app.database.shop_cut_plan import ShopCutPlan
+from src.app.database.stone_color import StoneColor
+from src.app.database.stone_thickness import StoneThickness
+from src.app.database.stone_type import StoneType
 from src.app.database.user import User
 from src.app.database.work_station import WorkStation
+from src.app.database.edge import Edge
 from src.app.interface.business_schemas import OperatorJobTimerActionRequest
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.middleware.jwt_auth import get_current_user
@@ -133,6 +137,7 @@ def _serialize_operator_workstation_task(
     operator: User,
     total_actual_hours: float,
     total_actual_seconds: int,
+    run_time: Optional[str] = None,
 ) -> dict:
     plan = row[0]
     fab = row[1]
@@ -140,7 +145,15 @@ def _serialize_operator_workstation_task(
     account_name = row[3]
     workstation_name = row[4]
     plan_name = row[5]
+    stone_type_name = row[6]
+    stone_color_name = row[7]
+    stone_thickness_value = row[8]
+    edge_name = row[9]
     operator_name = f"{operator.first_name} {operator.last_name}".strip() or operator.username
+    estimated_hours = float(plan.estimated_hours) if plan.estimated_hours is not None else None
+    computed_work_percentage = 0.0
+    if estimated_hours and estimated_hours > 0:
+        computed_work_percentage = round(min(100.0, (float(total_actual_hours or 0.0) / estimated_hours) * 100.0), 1)
 
     return {
         "id": plan.id,
@@ -169,17 +182,44 @@ def _serialize_operator_workstation_task(
         "plan_name": plan_name,
         "operator_id": operator.id,
         "operator_name": operator_name,
-        "estimated_hours": float(plan.estimated_hours) if plan.estimated_hours is not None else None,
+        "estimated_hours": estimated_hours,
         "total_actual_seconds": total_actual_seconds,
         "total_actual_hours": total_actual_hours,
         "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
+        "est_workstation_comp_date": _compute_schedule_end_time_iso(plan.scheduled_start_date, plan.estimated_hours),
+        "est_job_comp_date": fab.shop_est_completion_date.date().isoformat() if fab.shop_est_completion_date else None,
         "actual_start_date": plan.actual_start_date.isoformat() if plan.actual_start_date else None,
         "actual_end_date": plan.actual_end_date.isoformat() if plan.actual_end_date else None,
-        "work_percentage": plan.work_percentage,
+        "work_percentage": computed_work_percentage,
         "notes": plan.notes,
+        "area": fab.input_area,
+        "stone_type": stone_type_name,
+        "stone_color": stone_color_name,
+        "stone_thickness": stone_thickness_value,
+        "edge": edge_name,
+        "no_of_pieces": fab.no_of_pieces,
+        "total_sqft": fab.total_sqft,
+        "run_time": run_time,
         "created_at": plan.created_at.isoformat() if plan.created_at else None,
         "updated_at": plan.updated_at.isoformat() if plan.updated_at else None,
     }
+
+
+def _format_seconds_to_hms(total_seconds: int) -> str:
+    seconds = max(0, int(total_seconds or 0))
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _current_session_run_time(active_session: OperatorJobTimerSession, as_of: datetime) -> str:
+    total_seconds = int(active_session.total_work_seconds or 0)
+    if active_session.status == "running":
+        run_start = _normalize_naive_dt(active_session.current_run_start_at)
+        if run_start and as_of > run_start:
+            total_seconds += int((as_of - run_start).total_seconds())
+    return _format_seconds_to_hms(total_seconds)
 
 
 def _task_overlaps_window(plan: ShopCutPlan, range_start: datetime, range_end: datetime) -> bool:
@@ -425,12 +465,20 @@ async def get_workstation_tasks_by_operator(
             Account.name.label("account_name"),
             WorkStation.name.label("workstation_name"),
             PlanningSection.plan_name.label("plan_name"),
+            StoneType.name.label("stone_type_name"),
+            StoneColor.name.label("stone_color_name"),
+            StoneThickness.thickness.label("stone_thickness_value"),
+            Edge.name.label("edge_name"),
         )
         .join(Fab, Fab.id == ShopCutPlan.fab_id)
         .join(BusinessJob, BusinessJob.id == Fab.job_id)
         .join(Account, Account.id == BusinessJob.account_id, isouter=True)
         .join(WorkStation, WorkStation.id == ShopCutPlan.workstation_id, isouter=True)
         .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id, isouter=True)
+        .join(StoneType, StoneType.id == Fab.stone_type_id, isouter=True)
+        .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
+        .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
+        .join(Edge, Edge.id == Fab.edge_id, isouter=True)
         .where(
             ShopCutPlan.user_id == operator_id,
             ShopCutPlan.workstation_id == workstation_id,
@@ -468,6 +516,7 @@ async def get_workstation_tasks_by_operator(
                 operator=operator,
                 total_actual_hours=total_actual_hours,
                 total_actual_seconds=total_actual_seconds,
+                run_time=None,
             )
         )
 
@@ -537,12 +586,20 @@ async def get_active_workstation_task_by_operator(
             Account.name.label("account_name"),
             WorkStation.name.label("workstation_name"),
             PlanningSection.plan_name.label("plan_name"),
+            StoneType.name.label("stone_type_name"),
+            StoneColor.name.label("stone_color_name"),
+            StoneThickness.thickness.label("stone_thickness_value"),
+            Edge.name.label("edge_name"),
         )
         .join(Fab, Fab.id == ShopCutPlan.fab_id)
         .join(BusinessJob, BusinessJob.id == Fab.job_id)
         .join(Account, Account.id == BusinessJob.account_id, isouter=True)
         .join(WorkStation, WorkStation.id == ShopCutPlan.workstation_id, isouter=True)
         .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id, isouter=True)
+        .join(StoneType, StoneType.id == Fab.stone_type_id, isouter=True)
+        .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
+        .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
+        .join(Edge, Edge.id == Fab.edge_id, isouter=True)
         .where(
             ShopCutPlan.user_id == operator_id,
             ShopCutPlan.workstation_id == workstation_id,
@@ -577,6 +634,7 @@ async def get_active_workstation_task_by_operator(
         operator=operator,
         total_actual_hours=total_actual_hours,
         total_actual_seconds=total_actual_seconds,
+        run_time=_current_session_run_time(active_session, datetime.now().replace(second=0, microsecond=0)),
     )
 
     return success_response(
@@ -701,6 +759,8 @@ async def manage_current_operator_job_timer(
             workstation = workstation_result.scalar_one_or_none()
             if not workstation:
                 raise HTTPException(status_code=404, detail=f"Workstation with ID {payload.workstation_id} not found")
+            if operator_id not in (workstation.operator_ids or []):
+                raise HTTPException(status_code=400, detail="Workstation is not assigned to this operator")
 
         active_session = await _get_active_operator_job_session(db, operator_id=operator_id, job_id=job_id)
         active_any_session = await _get_active_operator_job_session(db, operator_id=operator_id)
@@ -979,7 +1039,30 @@ async def get_current_operator_job_timer_history(
     )
 
 
-@router.post("/{operator_id}/jobs/{job_id}/upload", response_model=SuccessResponse[dict])
+@router.post(
+    "/{operator_id}/jobs/{job_id}/upload",
+    response_model=SuccessResponse[dict],
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["file"],
+                        "properties": {
+                            "file": {"type": "string", "format": "binary"},
+                            "file_design": {"type": "string"},
+                            "stage_name": {"type": "string"},
+                            "file_type": {"type": "string"},
+                            "directory": {"type": "string"},
+                        },
+                    }
+                }
+            },
+            "required": True,
+        }
+    },
+)
 async def upload_operator_job_qa_file(
     operator_id: int,
     job_id: int,

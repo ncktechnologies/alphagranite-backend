@@ -16,7 +16,30 @@ router = APIRouter(
     # so we don't need the dependency here
 )
 
-@router.post("/upload")
+@router.post(
+    "/upload",
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["file", "file_design", "stage_name"],
+                        "properties": {
+                            "file": {"type": "string", "format": "binary"},
+                            "file_type": {"type": "string"},
+                            "file_design": {"type": "string"},
+                            "stage_name": {"type": "string"},
+                            "job_id": {"type": "integer"},
+                            "directory": {"type": "string"},
+                        },
+                    }
+                }
+            },
+            "required": True,
+        }
+    },
+)
 async def upload_file(
     request: Request,
     file: UploadFile = File(...),

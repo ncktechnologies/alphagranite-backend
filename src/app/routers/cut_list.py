@@ -173,6 +173,14 @@ async def update_cut_list(
         if update_data.revision_complete is not None:
             fab.revised = not update_data.revision_complete  # If revision complete, mark revised as False
 
+            # Explicit PATCH behavior: when revision is marked complete, move cut-list FABs to cutting.
+            if update_data.revision_complete is True:
+                if fab.revision_completed_date is None:
+                    fab.revision_completed_date = datetime.now()
+                if fab.current_stage == "cut_list":
+                    fab.current_stage = "cutting"
+                    fab.next_stage = None
+
         _transition_to_cutting_if_revision_complete(fab, current_user.id)
         
         fab.updated_at = datetime.now()

@@ -224,11 +224,33 @@ def add_update_shop_schedule(
     db.refresh(fab)
     return success_response(fab, "Shop schedule updated successfully")
 
-@router.post("/finalprogramming/{fp_id}/files")
+@router.post(
+    "/finalprogramming/{fp_id}/files",
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["files"],
+                        "properties": {
+                            "files": {
+                                "type": "array",
+                                "items": {"type": "string", "format": "binary"},
+                            }
+                        },
+                    }
+                }
+            },
+            "required": True,
+        }
+    },
+)
 async def add_files_to_final_programming(
     fp_id: int, 
     files: List[UploadFile] = FastAPIFile(...), 
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Upload files to final programming, save to disk and database"""
     
@@ -263,6 +285,7 @@ async def add_files_to_final_programming(
             file_type=file.content_type,
             file_size=str(len(contents)),
             stage="final_programming",
+            uploaded_by=current_user.id,
             created_at=datetime.now(),
             updated_at=datetime.now()
         )
@@ -277,6 +300,8 @@ async def add_files_to_final_programming(
             "file_url": file_url,
             "size": len(contents),
             "mime_type": file.content_type,
+            "uploaded_by": current_user.id,
+            "uploaded_by_name": f"{current_user.first_name} {current_user.last_name}".strip() or current_user.username,
             "uploaded_at": datetime.now().isoformat()
         })
     
@@ -479,13 +504,37 @@ async def mark_slabsmith_completed(
     
     return success_response(slabsmith, "SlabSmith marked as completed successfully")
 
-@router.post("/slabsmith/{slabsmith_id}/files")
+@router.post(
+    "/slabsmith/{slabsmith_id}/files",
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["files"],
+                        "properties": {
+                            "files": {
+                                "type": "array",
+                                "items": {"type": "string", "format": "binary"},
+                            },
+                            "file_design": {"type": "string"},
+                            "stage_name": {"type": "string"},
+                        },
+                    }
+                }
+            },
+            "required": True,
+        }
+    },
+)
 async def add_files_to_slabsmith(
     slabsmith_id: int, 
     files: List[UploadFile] = FastAPIFile(...), 
     file_design: Optional[str] = Form(None),
     stage_name: Optional[str] = Form(None),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Upload files to SlabSmith, save to disk and database"""
     
@@ -522,6 +571,7 @@ async def add_files_to_slabsmith(
             stage="slabsmith",
             file_design=file_design,
             stage_name=stage_name,
+            uploaded_by=current_user.id,
             created_at=datetime.now(),
             updated_at=datetime.now()
         )
@@ -538,6 +588,8 @@ async def add_files_to_slabsmith(
             "mime_type": file.content_type,
             "file_design": file_design,
             "stage_name": stage_name,
+            "uploaded_by": current_user.id,
+            "uploaded_by_name": f"{current_user.first_name} {current_user.last_name}".strip() or current_user.username,
             "uploaded_at": datetime.now().isoformat()
         })
     
@@ -596,14 +648,39 @@ async def delete_file_from_slabsmith(
         "total_files": len(file_ids)
     }, "File deleted successfully")
 
-@router.post("/drafting/{drafting_id}/files")
+@router.post(
+    "/drafting/{drafting_id}/files",
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["files"],
+                        "properties": {
+                            "files": {
+                                "type": "array",
+                                "items": {"type": "string", "format": "binary"},
+                            },
+                            "stage": {"type": "string"},
+                            "file_design": {"type": "string"},
+                            "stage_name": {"type": "string"},
+                        },
+                    }
+                }
+            },
+            "required": True,
+        }
+    },
+)
 async def add_files_to_drafting(
     drafting_id: int, 
     files: List[UploadFile] = FastAPIFile(...), 
     stage: Optional[str] = Form(None),
     file_design: Optional[str] = Form(None),
     stage_name: Optional[str] = Form(None),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Upload files to drafting, save to disk and database"""
     
@@ -641,6 +718,7 @@ async def add_files_to_drafting(
             stage_name=stage_name,
             file_size=str(len(contents)),
             stage=stage,
+            uploaded_by=current_user.id,
             created_at=datetime.now(),
             updated_at=datetime.now()
         )
@@ -658,6 +736,8 @@ async def add_files_to_drafting(
             "stage": stage,
             "file_design": file_design,
             "stage_name": stage_name,
+            "uploaded_by": current_user.id,
+            "uploaded_by_name": f"{current_user.first_name} {current_user.last_name}".strip() or current_user.username,
             "created_at": datetime.now().isoformat()
         })
     

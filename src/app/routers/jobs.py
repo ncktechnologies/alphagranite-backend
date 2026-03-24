@@ -42,6 +42,35 @@ PHOTO_EXTS = {"jpg","jpeg","png","gif","webp","heic","bmp","tiff"}
 VIDEO_EXTS = {"mp4","mov","avi","mkv","webm","m4v","wmv"}
 DOC_EXTS   = {"pdf","doc","docx","xls","xlsx","ppt","pptx","txt","csv"}
 
+
+def _is_browser_renderable_file(name: Optional[str], file_type: Optional[str] = None) -> bool:
+    filename = name or ""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext in PHOTO_EXTS or ext == "pdf":
+        return True
+
+    mime, _ = mimetypes.guess_type(filename)
+    if mime and (mime.startswith("image/") or mime == "application/pdf"):
+        return True
+
+    # Fallback for stored media classification
+    if file_type == "photo":
+        return True
+    return False
+
+
+def _build_job_media_view_url(
+    *,
+    job_id: int,
+    file_id: int,
+    file_name: Optional[str],
+    file_path: Optional[str],
+    file_type: Optional[str] = None,
+) -> str:
+    if _is_browser_renderable_file(file_name, file_type) and file_path:
+        return f"{BASE_URL}/static/{file_path.lstrip('/')}"
+    return f"{BASE_URL}{API_PREFIX}/jobs/{job_id}/media/{file_id}/view"
+
 def classify_file(upload: UploadFile) -> str:
     # Default to document
     name = upload.filename or ""
@@ -305,8 +334,14 @@ async def upload_job_media(
                 )
             )
 
-            # Add view URL
-            view_url = f"{BASE_URL}{API_PREFIX}/jobs/{job_id}/media/{file_data['id']}/view"
+            # Build browser-friendly view URL for PDFs/images, fallback to API view endpoint.
+            view_url = _build_job_media_view_url(
+                job_id=job_id,
+                file_id=file_data["id"],
+                file_name=file_data.get("name"),
+                file_path=file_data.get("file_path"),
+                file_type=file_type,
+            )
             file_data["url"] = view_url
             file_data["view_url"] = view_url
             file_data["file_type"] = file_type
@@ -386,8 +421,14 @@ async def get_job_media(
         uploader_first = row[1]
         uploader_last = row[2]
         
-        # Generate API view URL (FastAPI based)
-        file_url = f"{BASE_URL}{API_PREFIX}/jobs/{job_id}/media/{file.id}/view"
+        # Generate browser-friendly view URL for PDFs/images, fallback to API view endpoint.
+        file_url = _build_job_media_view_url(
+            job_id=job_id,
+            file_id=file.id,
+            file_name=file.name,
+            file_path=file.file_path,
+            file_type=file.file_type,
+        )
         
         media_files.append({
             "id": file.id,
@@ -658,8 +699,14 @@ async def get_job_details(
         uploader_first = row[1]
         uploader_last = row[2]
 
-        # Generate API view URL (FastAPI based)
-        file_url = f"{BASE_URL}{API_PREFIX}/jobs/{job_id}/media/{file.id}/view"
+        # Generate browser-friendly view URL for PDFs/images, fallback to API view endpoint.
+        file_url = _build_job_media_view_url(
+            job_id=job_id,
+            file_id=file.id,
+            file_name=file.name,
+            file_path=file.file_path,
+            file_type=file.file_type,
+        )
 
         media_files.append({
             "id": file.id,
