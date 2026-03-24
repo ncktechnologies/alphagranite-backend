@@ -24,7 +24,7 @@ from src.app.database.stone_type import StoneType
 from src.app.database.user import User
 from src.app.database.work_station import WorkStation
 from src.app.database.edge import Edge
-from src.app.interface.business_schemas import OperatorJobTimerActionRequest
+from src.app.interface.business_schemas import OperatorJobTimerActionRequest, OperatorJobTimerCommandRequest
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.service.file import FileService
@@ -725,22 +725,24 @@ async def get_current_operator_tasks(
     )
 
 
-@router.post("/me/jobs/{job_id}/timer/action", response_model=SuccessResponse[dict])
-async def manage_current_operator_job_timer(
+async def _process_current_operator_job_timer_action(
+    *,
     job_id: int,
-    payload: OperatorJobTimerActionRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    action: str,
+    db: AsyncSession,
+    current_user: User,
+    note: Optional[str] = None,
+    workstation_id: Optional[int] = None,
 ):
-    """Start, pause, resume, or stop a timer for the current operator on a job."""
+    """Shared timer-action engine for start, pause, resume, and stop."""
 
     try:
         operator_id = current_user.id
         if operator_id is None:
             raise HTTPException(status_code=403, detail="Invalid operator context")
 
-        action = (payload.action or "").strip().lower()
-        if action not in {"start", "pause", "resume", "stop"}:
+        normalized_action = (action or "").strip().lower()
+        if normalized_action not in {"start", "pause", "resume", "stop"}:
             raise HTTPException(status_code=400, detail="action must be one of: start, pause, resume, stop")
 
         # Always use server-generated time — never trust client-supplied timestamps
@@ -753,19 +755,18 @@ async def manage_current_operator_job_timer(
         if not job:
             raise HTTPException(status_code=404, detail=f"Job with ID {job_id} not found")
 
-        workstation = None
-        if payload.workstation_id is not None:
-            workstation_result = await db.execute(select(WorkStation).where(WorkStation.id == payload.workstation_id))
+        if workstation_id is not None:
+            workstation_result = await db.execute(select(WorkStation).where(WorkStation.id == workstation_id))
             workstation = workstation_result.scalar_one_or_none()
             if not workstation:
-                raise HTTPException(status_code=404, detail=f"Workstation with ID {payload.workstation_id} not found")
+                raise HTTPException(status_code=404, detail=f"Workstation with ID {workstation_id} not found")
             if operator_id not in (workstation.operator_ids or []):
                 raise HTTPException(status_code=400, detail="Workstation is not assigned to this operator")
 
         active_session = await _get_active_operator_job_session(db, operator_id=operator_id, job_id=job_id)
         active_any_session = await _get_active_operator_job_session(db, operator_id=operator_id)
 
-        if action == "start":
+        if normalized_action == "start":
             if active_session:
                 raise HTTPException(status_code=400, detail="An active timer session already exists for this job")
             if active_any_session and active_any_session.job_id != job_id:
@@ -777,7 +778,7 @@ async def manage_current_operator_job_timer(
             session = OperatorJobTimerSession(
                 job_id=job_id,
                 operator_id=operator_id,
-                workstation_id=payload.workstation_id,
+                workstation_id=workstation_id,
                 status="running",
                 session_start_at=action_ts,
                 current_run_start_at=action_ts,
@@ -794,16 +795,16 @@ async def manage_current_operator_job_timer(
                     session_id=session.id,
                     job_id=job_id,
                     operator_id=operator_id,
-                    workstation_id=payload.workstation_id,
+                    workstation_id=workstation_id,
                     action="start",
                     event_at=action_ts,
-                    note=payload.note,
+                    note=note,
                 )
             )
 
             target_session = session
 
-        elif action == "pause":
+        elif normalized_action == "pause":
             if not active_session or active_session.status != "running":
                 raise HTTPException(status_code=400, detail="No running timer session found to pause")
 
@@ -818,24 +819,24 @@ async def manage_current_operator_job_timer(
             active_session.current_pause_start_at = action_ts
             active_session.updated_at = datetime.now()
             active_session.updated_by = operator_id
-            if payload.workstation_id is not None:
-                active_session.workstation_id = payload.workstation_id
+            if workstation_id is not None:
+                active_session.workstation_id = workstation_id
 
             db.add(
                 OperatorJobTimerEvent(
                     session_id=active_session.id,
                     job_id=job_id,
                     operator_id=operator_id,
-                    workstation_id=payload.workstation_id or active_session.workstation_id,
+                    workstation_id=workstation_id or active_session.workstation_id,
                     action="pause",
                     event_at=action_ts,
-                    note=payload.note,
+                    note=note,
                 )
             )
 
             target_session = active_session
 
-        elif action == "resume":
+        elif normalized_action == "resume":
             if not active_session or active_session.status != "paused":
                 raise HTTPException(status_code=400, detail="No paused timer session found to resume")
 
@@ -849,18 +850,18 @@ async def manage_current_operator_job_timer(
             active_session.current_run_start_at = action_ts
             active_session.updated_at = datetime.now()
             active_session.updated_by = operator_id
-            if payload.workstation_id is not None:
-                active_session.workstation_id = payload.workstation_id
+            if workstation_id is not None:
+                active_session.workstation_id = workstation_id
 
             db.add(
                 OperatorJobTimerEvent(
                     session_id=active_session.id,
                     job_id=job_id,
                     operator_id=operator_id,
-                    workstation_id=payload.workstation_id or active_session.workstation_id,
+                    workstation_id=workstation_id or active_session.workstation_id,
                     action="resume",
                     event_at=action_ts,
-                    note=payload.note,
+                    note=note,
                 )
             )
 
@@ -882,8 +883,8 @@ async def manage_current_operator_job_timer(
                     pause_elapsed = int((action_ts - pause_start).total_seconds())
                     active_session.total_pause_seconds = int(active_session.total_pause_seconds or 0) + max(0, pause_elapsed)
 
-            if payload.workstation_id is not None:
-                active_session.workstation_id = payload.workstation_id
+            if workstation_id is not None:
+                active_session.workstation_id = workstation_id
             active_session.status = "stopped"
             active_session.current_run_start_at = None
             active_session.current_pause_start_at = None
@@ -896,10 +897,10 @@ async def manage_current_operator_job_timer(
                     session_id=active_session.id,
                     job_id=job_id,
                     operator_id=operator_id,
-                    workstation_id=payload.workstation_id or active_session.workstation_id,
+                    workstation_id=workstation_id or active_session.workstation_id,
                     action="stop",
                     event_at=action_ts,
-                    note=payload.note,
+                    note=note,
                 )
             )
 
@@ -925,13 +926,13 @@ async def manage_current_operator_job_timer(
                 "job_id": job_id,
                 "operator_id": operator_id,
                 "workstation_id": target_session.workstation_id,
-                "action": action,
+                "action": normalized_action,
                 "timestamp": action_ts.isoformat(),
                 "session": _serialize_operator_job_timer_session(target_session),
                 "total_actual_seconds": total_actual_seconds,
                 "total_actual_hours": total_actual_hours,
             },
-            f"Timer {action} successful",
+            f"Timer {normalized_action} successful",
         )
 
     except HTTPException:
@@ -940,6 +941,101 @@ async def manage_current_operator_job_timer(
     except Exception as exc:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to process timer action: {str(exc)}")
+
+
+@router.post("/me/jobs/{job_id}/timer/action", response_model=SuccessResponse[dict])
+async def manage_current_operator_job_timer(
+    job_id: int,
+    payload: OperatorJobTimerActionRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Start, pause, resume, or stop a timer for the current operator on a job."""
+
+    return await _process_current_operator_job_timer_action(
+        job_id=job_id,
+        action=payload.action,
+        note=payload.note,
+        workstation_id=payload.workstation_id,
+        db=db,
+        current_user=current_user,
+    )
+
+
+@router.post("/me/jobs/{job_id}/timer/start", response_model=SuccessResponse[dict])
+async def start_current_operator_job_timer(
+    job_id: int,
+    payload: OperatorJobTimerCommandRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Start a timer for the current operator on a job."""
+
+    return await _process_current_operator_job_timer_action(
+        job_id=job_id,
+        action="start",
+        note=payload.note,
+        workstation_id=payload.workstation_id,
+        db=db,
+        current_user=current_user,
+    )
+
+
+@router.post("/me/jobs/{job_id}/timer/pause", response_model=SuccessResponse[dict])
+async def pause_current_operator_job_timer(
+    job_id: int,
+    payload: OperatorJobTimerCommandRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Pause a running timer for the current operator on a job."""
+
+    return await _process_current_operator_job_timer_action(
+        job_id=job_id,
+        action="pause",
+        note=payload.note,
+        workstation_id=payload.workstation_id,
+        db=db,
+        current_user=current_user,
+    )
+
+
+@router.post("/me/jobs/{job_id}/timer/resume", response_model=SuccessResponse[dict])
+async def resume_current_operator_job_timer(
+    job_id: int,
+    payload: OperatorJobTimerCommandRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Resume a paused timer for the current operator on a job."""
+
+    return await _process_current_operator_job_timer_action(
+        job_id=job_id,
+        action="resume",
+        note=payload.note,
+        workstation_id=payload.workstation_id,
+        db=db,
+        current_user=current_user,
+    )
+
+
+@router.post("/me/jobs/{job_id}/timer/stop", response_model=SuccessResponse[dict])
+async def stop_current_operator_job_timer(
+    job_id: int,
+    payload: OperatorJobTimerCommandRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Stop an active timer for the current operator on a job."""
+
+    return await _process_current_operator_job_timer_action(
+        job_id=job_id,
+        action="stop",
+        note=payload.note,
+        workstation_id=payload.workstation_id,
+        db=db,
+        current_user=current_user,
+    )
 
 
 @router.get("/me/jobs/{job_id}/timer", response_model=SuccessResponse[dict])

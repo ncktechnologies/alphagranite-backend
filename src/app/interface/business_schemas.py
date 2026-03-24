@@ -1346,6 +1346,12 @@ class OperatorJobTimerActionRequest(BaseModel):
     workstation_id: Optional[int] = None
 
 
+class OperatorJobTimerCommandRequest(BaseModel):
+    note: Optional[str] = None
+    timestamp: Optional[datetime] = None
+    workstation_id: Optional[int] = None
+
+
 class OperatorJobTimerEventResponse(BaseModel):
     id: int
     session_id: int
