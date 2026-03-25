@@ -24,7 +24,11 @@ from src.app.database.stone_type import StoneType
 from src.app.database.user import User
 from src.app.database.work_station import WorkStation
 from src.app.database.edge import Edge
-from src.app.interface.business_schemas import OperatorJobTimerActionRequest, OperatorJobTimerCommandRequest
+from src.app.interface.business_schemas import (
+    OperatorJobTimerActionRequest,
+    OperatorJobTimerCommandRequest,
+    OperatorWorkstationTaskUpdateRequest,
+)
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.service.file import FileService
@@ -36,6 +40,63 @@ router = APIRouter(
     prefix="/operators",
     tags=["Operators"],
 )
+
+
+PHOTO_EXTS = {"jpg", "jpeg", "png", "gif", "webp", "heic", "bmp", "tiff"}
+
+
+def _is_browser_renderable_file(name: Optional[str], file_type: Optional[str] = None) -> bool:
+    filename = name or ""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext in PHOTO_EXTS or ext == "pdf":
+        return True
+
+    mime_type, _ = mimetypes.guess_type(filename)
+    if mime_type and (mime_type.startswith("image/") or mime_type == "application/pdf"):
+        return True
+
+    return file_type == "photo"
+
+
+def _build_operator_file_view_url(
+    *,
+    base_url: str,
+    operator_id: int,
+    job_id: Optional[int],
+    file_id: Optional[int],
+    file_name: Optional[str],
+    file_path: Optional[str],
+    file_type: Optional[str] = None,
+) -> Optional[str]:
+    if _is_browser_renderable_file(file_name, file_type) and file_path:
+        return f"{base_url}/static/{file_path.lstrip('/')}"
+
+    if job_id is None or file_id is None:
+        return None
+
+    return f"{base_url}/api/v1/operators/{operator_id}/jobs/{job_id}/files/{file_id}/view"
+
+
+def _serialize_operator_file(file: File, base_url: str, operator_id: int) -> dict:
+    return {
+        "id": file.id,
+        "name": file.name,
+        "file_url": _build_operator_file_view_url(
+            base_url=base_url,
+            operator_id=operator_id,
+            job_id=file.job_id,
+            file_id=file.id,
+            file_name=file.name,
+            file_path=file.file_path,
+            file_type=file.file_type,
+        ),
+        "file_type": file.file_type,
+        "file_size": file.file_size,
+        "file_design": file.file_design or "",
+        "stage_name": file.stage_name or "",
+        "job_id": file.job_id,
+        "created_at": file.created_at.isoformat() if file.created_at else None,
+    }
 
 
 def _serialize_workstation(ws: WorkStation, operators_by_id: dict = None, sections_by_id: dict = None) -> dict:
@@ -151,8 +212,8 @@ def _serialize_operator_workstation_task(
     edge_name = row[9]
     operator_name = f"{operator.first_name} {operator.last_name}".strip() or operator.username
     estimated_hours = float(plan.estimated_hours) if plan.estimated_hours is not None else None
-    computed_work_percentage = 0.0
-    if estimated_hours and estimated_hours > 0:
+    computed_work_percentage = float(plan.work_percentage or 0)
+    if estimated_hours and estimated_hours > 0 and total_actual_seconds > 0:
         computed_work_percentage = round(min(100.0, (float(total_actual_hours or 0.0) / estimated_hours) * 100.0), 1)
 
     return {
@@ -537,6 +598,215 @@ async def get_workstation_tasks_by_operator(
             **({"grouped_tasks": _group_tasks_by_day(tasks)} if group_by_day else {}),
         },
     }
+
+
+@router.get("/{operator_id}/workstations/{workstation_id}/tasks/{task_id}", response_model=SuccessResponse[dict])
+async def get_workstation_task_by_id(
+    operator_id: int,
+    workstation_id: int,
+    task_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return a specific task assigned to an operator under a selected workstation."""
+
+    operator = (await db.execute(select(User).where(User.id == operator_id))).scalar_one_or_none()
+    if not operator:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Operator not found")
+
+    if not getattr(current_user, "is_super_admin", False) and current_user.id != operator_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this operator's tasks")
+
+    workstation = (await db.execute(select(WorkStation).where(WorkStation.id == workstation_id))).scalar_one_or_none()
+    if not workstation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workstation not found")
+
+    if operator_id not in (workstation.operator_ids or []):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workstation is not assigned to this operator")
+
+    task_query = (
+        select(
+            ShopCutPlan,
+            Fab,
+            BusinessJob,
+            Account.name.label("account_name"),
+            WorkStation.name.label("workstation_name"),
+            PlanningSection.plan_name.label("plan_name"),
+            StoneType.name.label("stone_type_name"),
+            StoneColor.name.label("stone_color_name"),
+            StoneThickness.thickness.label("stone_thickness_value"),
+            Edge.name.label("edge_name"),
+        )
+        .join(Fab, Fab.id == ShopCutPlan.fab_id)
+        .join(BusinessJob, BusinessJob.id == Fab.job_id)
+        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+        .join(WorkStation, WorkStation.id == ShopCutPlan.workstation_id, isouter=True)
+        .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id, isouter=True)
+        .join(StoneType, StoneType.id == Fab.stone_type_id, isouter=True)
+        .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
+        .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
+        .join(Edge, Edge.id == Fab.edge_id, isouter=True)
+        .where(
+            ShopCutPlan.id == task_id,
+            ShopCutPlan.user_id == operator_id,
+            ShopCutPlan.workstation_id == workstation_id,
+        )
+        .limit(1)
+    )
+
+    task_row = (await db.execute(task_query)).first()
+    if not task_row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+
+    job_id = task_row[2].id
+    as_of = datetime.now().replace(second=0, microsecond=0)
+    total_actual_hours, total_actual_seconds = await _recalculate_operator_job_work_totals(
+        db=db,
+        job_id=job_id,
+        operator_id=operator_id,
+        workstation_id=workstation_id,
+        as_of=as_of,
+    )
+
+    active_session = await _get_active_operator_job_session(
+        db,
+        operator_id=operator_id,
+        job_id=job_id,
+        workstation_id=workstation_id,
+    )
+
+    task = _serialize_operator_workstation_task(
+        task_row,
+        operator=operator,
+        total_actual_hours=total_actual_hours,
+        total_actual_seconds=total_actual_seconds,
+        run_time=_current_session_run_time(active_session, as_of) if active_session else None,
+    )
+
+    return success_response(task, "Task retrieved successfully")
+
+
+@router.patch("/{operator_id}/workstations/{workstation_id}/tasks/{task_id}", response_model=SuccessResponse[dict])
+async def update_workstation_task_by_id(
+    operator_id: int,
+    workstation_id: int,
+    task_id: int,
+    payload: OperatorWorkstationTaskUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update a specific task assigned to an operator under a selected workstation."""
+
+    if all(
+        value is None
+        for value in (
+            payload.work_percentage,
+            payload.actual_start_date,
+            payload.actual_end_date,
+            payload.notes,
+        )
+    ):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one field is required")
+
+    operator = (await db.execute(select(User).where(User.id == operator_id))).scalar_one_or_none()
+    if not operator:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Operator not found")
+
+    if not getattr(current_user, "is_super_admin", False) and current_user.id != operator_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this operator's tasks")
+
+    workstation = (await db.execute(select(WorkStation).where(WorkStation.id == workstation_id))).scalar_one_or_none()
+    if not workstation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workstation not found")
+
+    if operator_id not in (workstation.operator_ids or []):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workstation is not assigned to this operator")
+
+    task_query = (
+        select(
+            ShopCutPlan,
+            Fab,
+            BusinessJob,
+            Account.name.label("account_name"),
+            WorkStation.name.label("workstation_name"),
+            PlanningSection.plan_name.label("plan_name"),
+            StoneType.name.label("stone_type_name"),
+            StoneColor.name.label("stone_color_name"),
+            StoneThickness.thickness.label("stone_thickness_value"),
+            Edge.name.label("edge_name"),
+        )
+        .join(Fab, Fab.id == ShopCutPlan.fab_id)
+        .join(BusinessJob, BusinessJob.id == Fab.job_id)
+        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+        .join(WorkStation, WorkStation.id == ShopCutPlan.workstation_id, isouter=True)
+        .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id, isouter=True)
+        .join(StoneType, StoneType.id == Fab.stone_type_id, isouter=True)
+        .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
+        .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
+        .join(Edge, Edge.id == Fab.edge_id, isouter=True)
+        .where(
+            ShopCutPlan.id == task_id,
+            ShopCutPlan.user_id == operator_id,
+            ShopCutPlan.workstation_id == workstation_id,
+        )
+        .limit(1)
+    )
+
+    task_row = (await db.execute(task_query)).first()
+    if not task_row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+
+    plan = task_row[0]
+    updated_start = _normalize_naive_dt(payload.actual_start_date) if payload.actual_start_date is not None else plan.actual_start_date
+    updated_end = _normalize_naive_dt(payload.actual_end_date) if payload.actual_end_date is not None else plan.actual_end_date
+
+    if updated_start and updated_end and updated_end < updated_start:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="actual_end_date cannot be earlier than actual_start_date",
+        )
+
+    if payload.work_percentage is not None:
+        plan.work_percentage = payload.work_percentage
+    if payload.actual_start_date is not None:
+        plan.actual_start_date = updated_start
+    if payload.actual_end_date is not None:
+        plan.actual_end_date = updated_end
+    if payload.notes is not None:
+        plan.notes = payload.notes
+
+    plan.updated_at = datetime.now()
+    plan.updated_by = current_user.id
+
+    await db.commit()
+    await db.refresh(plan)
+
+    job_id = task_row[2].id
+    as_of = datetime.now().replace(second=0, microsecond=0)
+    total_actual_hours, total_actual_seconds = await _recalculate_operator_job_work_totals(
+        db=db,
+        job_id=job_id,
+        operator_id=operator_id,
+        workstation_id=workstation_id,
+        as_of=as_of,
+    )
+
+    active_session = await _get_active_operator_job_session(
+        db,
+        operator_id=operator_id,
+        job_id=job_id,
+        workstation_id=workstation_id,
+    )
+
+    task = _serialize_operator_workstation_task(
+        task_row,
+        operator=operator,
+        total_actual_hours=total_actual_hours,
+        total_actual_seconds=total_actual_seconds,
+        run_time=_current_session_run_time(active_session, as_of) if active_session else None,
+    )
+
+    return success_response(task, "Task updated successfully")
 
 
 @router.get("/{operator_id}/workstations/{workstation_id}/tasks/active")
@@ -1239,6 +1509,74 @@ async def upload_operator_job_qa_file(
             "operator_id": operator_id,
         },
         "QA file uploaded successfully",
+    )
+
+
+@router.get("/me/files", response_model=SuccessResponse[dict])
+async def get_my_uploaded_files(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get all files uploaded by the current operator across all jobs."""
+
+    operator_id = current_user.id
+    if operator_id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not authenticated")
+
+    return await _get_operator_uploaded_files_response(
+        operator_id=operator_id,
+        request=request,
+        db=db,
+    )
+
+
+@router.get("/{operator_id}/files", response_model=SuccessResponse[dict])
+async def get_operator_uploaded_files(
+    operator_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get all files uploaded by a specific operator across all jobs."""
+
+    operator_result = await db.execute(select(User).where(User.id == operator_id))
+    operator = operator_result.scalar_one_or_none()
+    if not operator:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Operator not found")
+
+    if not getattr(current_user, "is_super_admin", False) and current_user.id != operator_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to access files for this operator",
+        )
+
+    return await _get_operator_uploaded_files_response(
+        operator_id=operator_id,
+        request=request,
+        db=db,
+    )
+
+
+async def _get_operator_uploaded_files_response(
+    *,
+    operator_id: int,
+    request: Request,
+    db: AsyncSession,
+):
+    file_result = await db.execute(
+        select(File)
+        .where(File.uploaded_by == operator_id)
+        .order_by(File.created_at.desc(), File.id.desc())
+    )
+    files = file_result.scalars().all()
+    base_url = FileService.get_base_url(request)
+
+    return success_response(
+        {
+            "data": [_serialize_operator_file(file, base_url, operator_id) for file in files],
+        },
+        f"Retrieved {len(files)} file(s) uploaded by operator {operator_id}",
     )
 
 

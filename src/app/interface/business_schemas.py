@@ -252,6 +252,13 @@ class FabPlanItem(BaseModel):
     notes: Optional[str] = None
 
 
+class OperatorWorkstationTaskUpdateRequest(BaseModel):
+    work_percentage: Optional[int] = Field(None, ge=0, le=100)
+    actual_start_date: Optional[datetime] = None
+    actual_end_date: Optional[datetime] = None
+    notes: Optional[str] = None
+
+
 # Fab Schemas
 class FabCreate(BaseModel):
     job_id: int = Field(..., gt=0)
