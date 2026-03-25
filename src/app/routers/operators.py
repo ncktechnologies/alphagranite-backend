@@ -68,9 +68,6 @@ def _build_operator_file_view_url(
     file_path: Optional[str],
     file_type: Optional[str] = None,
 ) -> Optional[str]:
-    if _is_browser_renderable_file(file_name, file_type) and file_path:
-        return f"{base_url}/static/{file_path.lstrip('/')}"
-
     if job_id is None or file_id is None:
         return None
 
@@ -95,8 +92,45 @@ def _serialize_operator_file(file: File, base_url: str, operator_id: int) -> dic
         "file_design": file.file_design or "",
         "stage_name": file.stage_name or "",
         "job_id": file.job_id,
+        "task_id": file.task_id,
+        "uploaded_by": file.uploaded_by,
         "created_at": file.created_at.isoformat() if file.created_at else None,
     }
+
+
+def _serialize_operator_task_file(file: File, base_url: str, operator_id: int) -> dict:
+    return {
+        "id": file.id,
+        "name": file.name,
+        "file_url": _build_operator_file_view_url(
+            base_url=base_url,
+            operator_id=operator_id,
+            job_id=file.job_id,
+            file_id=file.id,
+            file_name=file.name,
+            file_path=file.file_path,
+            file_type=file.file_type,
+        ),
+        "file_type": file.file_type,
+        "file_design": file.file_design or "",
+        "created_at": file.created_at.isoformat() if file.created_at else None,
+    }
+
+
+async def _get_operator_task_files(
+    *,
+    db: AsyncSession,
+    operator_id: int,
+    task_id: int,
+    base_url: str,
+) -> list[dict]:
+    file_result = await db.execute(
+        select(File)
+        .where(File.task_id == task_id, File.uploaded_by == operator_id)
+        .order_by(File.created_at.desc(), File.id.desc())
+    )
+    files = file_result.scalars().all()
+    return [_serialize_operator_task_file(file, base_url, operator_id) for file in files]
 
 
 def _serialize_workstation(ws: WorkStation, operators_by_id: dict = None, sections_by_id: dict = None) -> dict:
@@ -605,6 +639,7 @@ async def get_workstation_task_by_id(
     operator_id: int,
     workstation_id: int,
     task_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -683,6 +718,13 @@ async def get_workstation_task_by_id(
         run_time=_current_session_run_time(active_session, as_of) if active_session else None,
     )
 
+    task["files"] = await _get_operator_task_files(
+        db=db,
+        operator_id=operator_id,
+        task_id=task_id,
+        base_url=FileService.get_base_url(request),
+    )
+
     return success_response(task, "Task retrieved successfully")
 
 
@@ -692,6 +734,7 @@ async def update_workstation_task_by_id(
     workstation_id: int,
     task_id: int,
     payload: OperatorWorkstationTaskUpdateRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -804,6 +847,13 @@ async def update_workstation_task_by_id(
         total_actual_hours=total_actual_hours,
         total_actual_seconds=total_actual_seconds,
         run_time=_current_session_run_time(active_session, as_of) if active_session else None,
+    )
+
+    task["files"] = await _get_operator_task_files(
+        db=db,
+        operator_id=operator_id,
+        task_id=task_id,
+        base_url=FileService.get_base_url(request),
     )
 
     return success_response(task, "Task updated successfully")
@@ -1421,6 +1471,7 @@ async def get_current_operator_job_timer_history(
                             "stage_name": {"type": "string"},
                             "file_type": {"type": "string"},
                             "directory": {"type": "string"},
+                            "task_id": {"type": "integer"},
                         },
                     }
                 }
@@ -1438,6 +1489,7 @@ async def upload_operator_job_qa_file(
     stage_name: str = Form("qa"),
     file_type: Optional[str] = Form(None),
     directory: Optional[str] = Form(None),
+    task_id: Optional[int] = Form(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -1459,6 +1511,23 @@ async def upload_operator_job_qa_file(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to upload files for this operator",
         )
+
+    if task_id is not None:
+        task_result = await db.execute(
+            select(ShopCutPlan)
+            .join(Fab, Fab.id == ShopCutPlan.fab_id)
+            .where(
+                ShopCutPlan.id == task_id,
+                ShopCutPlan.user_id == operator_id,
+                Fab.job_id == job_id,
+            )
+        )
+        task = task_result.scalar_one_or_none()
+        if not task:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Task not found for this operator and job",
+            )
 
     settings = get_settings()
 
@@ -1499,6 +1568,7 @@ async def upload_operator_job_qa_file(
         file_design=file_design,
         stage_name=stage_name,
         job_id=job_id,
+        task_id=task_id,
         request=request,
     )
 
@@ -1506,6 +1576,7 @@ async def upload_operator_job_qa_file(
         {
             **file_data,
             "job_id": job_id,
+            "task_id": task_id,
             "operator_id": operator_id,
         },
         "QA file uploaded successfully",

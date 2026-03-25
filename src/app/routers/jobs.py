@@ -67,8 +67,6 @@ def _build_job_media_view_url(
     file_path: Optional[str],
     file_type: Optional[str] = None,
 ) -> str:
-    if _is_browser_renderable_file(file_name, file_type) and file_path:
-        return f"{BASE_URL}/static/{file_path.lstrip('/')}"
     return f"{BASE_URL}{API_PREFIX}/jobs/{job_id}/media/{file_id}/view"
 
 def classify_file(upload: UploadFile) -> str:
