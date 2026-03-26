@@ -1,6 +1,6 @@
-from typing import List
+from typing import Optional, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import APIRouter, Depends, UploadFile, File, Form, Request, HTTPException, status
+from fastapi import APIRouter, Depends, UploadFile, File, Form, Request, HTTPException, status, Query
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 import mimetypes
@@ -134,13 +134,13 @@ async def get_file(
         file_id=file_id,
         request=request
     )
-    
+
     if not file_data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"File with ID {file_id} not found"
         )
-    
+
     return success_response(
         data=file_data,
         message="File details retrieved successfully"
@@ -178,22 +178,29 @@ async def delete_file(
 @router.get("")
 async def get_all_files(
     request: Request,
-    job_id: int = None,
-    stage: str = None,
-    uploaded_by: int = None,
+    job_id: Optional[int] = None,
+    stage: Optional[str] = None,
+    uploaded_by: Optional[int] = None,
+    file_type: Optional[str] = Query(None, description="Filter by file MIME type"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get all files, optionally filtered by job_id, stage, or uploaded_by"""
-    files = await call_service(
+    """Get files with optional filters and pagination."""
+    response_data = await call_service(
         FileService.get_all_files,
         db=db,
         job_id=job_id,
         stage=stage,
         uploaded_by=uploaded_by,
-        request=request
+        file_type=file_type,
+        skip=skip,
+        limit=limit,
+        request=request,
     )
-    return success_response(data=files, message="Files retrieved successfully")
+    count = len(response_data.get("data", []))
+    return success_response(data=response_data, message=f"Retrieved {count} file(s)")
 
 
 @router.get("/{file_id}/view")
@@ -203,7 +210,8 @@ async def view_file(
     current_user: User = Depends(get_current_user)
 ):
     """Stream a file for in-browser rendering where supported (e.g., PDF)."""
-    file_result = await db.execute(select(FileModel).where(FileModel.id == file_id))
+    file_expr: Any = FileModel
+    file_result = await db.execute(select(FileModel).where(file_expr.id == file_id))
     db_file = file_result.scalar_one_or_none()
 
     if not db_file:

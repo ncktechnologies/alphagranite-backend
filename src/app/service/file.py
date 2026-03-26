@@ -2,7 +2,7 @@ import os
 import uuid
 import shutil
 from datetime import datetime
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,13 +10,14 @@ from fastapi import UploadFile, HTTPException, status, Request
 
 
 from src.app.database.file import File
+from src.app.database.user import User
 
 
 class FileService:
     """Service for managing file uploads and retrievals"""
     
     @staticmethod
-    def get_base_url(request: Request = None) -> str:
+    def get_base_url(request: Optional[Request] = None) -> str:
         """Get the base URL from the request or fall back to settings"""
         if request:
             # Respect reverse-proxy headers so generated URLs are HTTPS in production.
@@ -36,12 +37,12 @@ class FileService:
         file: UploadFile,
         user_id: int,
         directory: str = "uploads",
-        file_type: str = None,
-        file_design: str = None,
-        stage_name: str = None,
-        job_id: int = None,
+        file_type: Optional[str] = None,
+        file_design: Optional[str] = None,
+        stage_name: Optional[str] = None,
+        job_id: Optional[int] = None,
         task_id: Optional[int] = None,
-        request: Request = None
+        request: Optional[Request] = None
     ) -> Dict[str, Any]:
         """
         Upload a file to the server and save its metadata in the database
@@ -70,7 +71,8 @@ class FileService:
         os.makedirs(uploads_dir, exist_ok=True)
         
         # Generate a unique filename
-        file_extension = os.path.splitext(file.filename)[1]
+        original_name = file.filename or "upload.bin"
+        file_extension = os.path.splitext(original_name)[1]
         unique_filename = f"{uuid.uuid4()}{file_extension}"
         file_path = os.path.join(directory, unique_filename)
         full_path = os.path.join(settings.STATIC_DIR, file_path)
@@ -101,9 +103,9 @@ class FileService:
             
         # Create file record in database
         db_file = File(
-            name=file.filename,
+            name=original_name,
             file_path=file_path,
-            file_type=file_type,
+            file_type=file_type or "application/octet-stream",
             file_size=file_size,
             stage=stage_name,
             stage_name=stage_name,
@@ -125,7 +127,7 @@ class FileService:
         return FileService._serialize_file(db_file, base_url)
         
     @staticmethod
-    async def get_file(db: AsyncSession, file_id: int, request: Request = None) -> Dict[str, Any]:
+    async def get_file(db: AsyncSession, file_id: int, request: Optional[Request] = None) -> Optional[Dict[str, Any]]:
         """
         Get file metadata by ID and generate URL
         
@@ -137,18 +139,37 @@ class FileService:
         Returns:
             Dictionary containing file information including URL
         """
-        # Query file from database
-        query = select(File).where(File.id == file_id)
+        file_expr: Any = File
+        user_expr: Any = User
+
+        query = (
+            select(
+                File,
+                user_expr.first_name.label("uploader_first_name"),
+                user_expr.last_name.label("uploader_last_name"),
+            )
+            .where(file_expr.id == file_id)
+            .join(User, file_expr.uploaded_by == user_expr.id, isouter=True)
+        )
         result = await db.execute(query)
-        file = result.scalar_one_or_none()
+        row = result.first()
         
-        if not file:
+        if not row:
             return None
+
+        file = row[0]
+        uploader_first = row[1]
+        uploader_last = row[2]
         
         # Get base URL from request or settings
         base_url = FileService.get_base_url(request)
 
-        return FileService._serialize_file(file, base_url)
+        return FileService._serialize_file_with_uploader(
+            file=file,
+            base_url=base_url,
+            uploader_first=uploader_first,
+            uploader_last=uploader_last,
+        )
         
     @staticmethod
     async def delete_file(db: AsyncSession, file_id: int) -> bool:
@@ -167,7 +188,8 @@ class FileService:
         settings = get_settings()
         
         # Query file from database
-        query = select(File).where(File.id == file_id)
+        file_expr: Any = File
+        query = select(File).where(file_expr.id == file_id)
         result = await db.execute(query)
         file = result.scalar_one_or_none()
         
@@ -192,28 +214,112 @@ class FileService:
     @staticmethod
     async def get_all_files(
         db: AsyncSession,
-        job_id: int = None,
-        stage: str = None,
-        uploaded_by: int = None,
-        request: Request = None
-    ) -> List[Dict[str, Any]]:
-        query = select(File)
+        job_id: Optional[int] = None,
+        stage: Optional[str] = None,
+        uploaded_by: Optional[int] = None,
+        file_type: Optional[str] = None,
+        skip: int = 0,
+        limit: int = 100,
+        request: Optional[Request] = None
+    ) -> Dict[str, Any]:
+        file_expr: Any = File
+        user_expr: Any = User
+
+        query = (
+            select(
+                File,
+                user_expr.first_name.label("uploader_first_name"),
+                user_expr.last_name.label("uploader_last_name"),
+            )
+            .join(User, file_expr.uploaded_by == user_expr.id, isouter=True)
+        )
+
         if job_id is not None:
-            query = query.where(File.job_id == job_id)
+            query = query.where(file_expr.job_id == job_id)
         if stage is not None:
-            query = query.where(File.stage == stage)
+            query = query.where(file_expr.stage == stage)
         if uploaded_by is not None:
-            query = query.where(File.uploaded_by == uploaded_by)
-        query = query.order_by(File.created_at.desc())
+            query = query.where(file_expr.uploaded_by == uploaded_by)
+        if file_type is not None:
+            query = query.where(file_expr.file_type == file_type)
+
+        count_query = select(func.count()).select_from(File)
+        if job_id is not None:
+            count_query = count_query.where(file_expr.job_id == job_id)
+        if stage is not None:
+            count_query = count_query.where(file_expr.stage == stage)
+        if uploaded_by is not None:
+            count_query = count_query.where(file_expr.uploaded_by == uploaded_by)
+        if file_type is not None:
+            count_query = count_query.where(file_expr.file_type == file_type)
+
+        total_result = await db.execute(count_query)
+        total = total_result.scalar() or 0
+
+        query = query.order_by(file_expr.created_at.desc()).offset(skip).limit(limit)
 
         result = await db.execute(query)
-        files = result.scalars().all()
+        rows = result.all()
 
         base_url = FileService.get_base_url(request)
-        return [
-            FileService._serialize_file(f, base_url)
-            for f in files
+        data = [
+            FileService._serialize_file_with_uploader(
+                file=row[0],
+                base_url=base_url,
+                uploader_first=row[1],
+                uploader_last=row[2],
+            )
+            for row in rows
         ]
+
+        page = (skip // limit) + 1 if limit > 0 else 1
+        return {
+            "total": total,
+            "page": page,
+            "per_page": limit,
+            "filters": {
+                "job_id": job_id,
+                "stage": stage,
+                "uploaded_by": uploaded_by,
+                "file_type": file_type,
+            },
+            "data": data,
+        }
+
+    @staticmethod
+    def _build_file_view_url(base_url: str, file_id: int) -> str:
+        return f"{base_url}/api/v1/files/{file_id}/view"
+
+    @staticmethod
+    def _serialize_file_with_uploader(
+        file: File,
+        base_url: str,
+        uploader_first: Optional[str],
+        uploader_last: Optional[str],
+    ) -> Dict[str, Any]:
+        uploader_name = None
+        if uploader_first:
+            uploader_name = f"{uploader_first} {uploader_last}".strip()
+
+        safe_file_id = int(file.id or 0)
+        return {
+            "id": file.id,
+            "name": file.name,
+            "file_path": file.file_path,
+            "file_type": file.file_type,
+            "file_size": file.file_size,
+            "file_design": file.file_design,
+            "stage": file.stage,
+            "stage_name": file.stage_name,
+            "job_id": file.job_id,
+            "task_id": file.task_id,
+            "uploaded_by": file.uploaded_by,
+            "uploader_name": uploader_name,
+            "file_url": FileService._build_file_view_url(base_url, safe_file_id),
+            "url": FileService._build_file_view_url(base_url, safe_file_id),
+            "created_at": file.created_at.isoformat() if file.created_at else None,
+            "updated_at": file.updated_at.isoformat() if file.updated_at else None,
+        }
 
     @staticmethod
     def _serialize_file(f: File, base_url: str) -> Dict[str, Any]:
