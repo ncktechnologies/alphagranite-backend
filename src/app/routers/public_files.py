@@ -1,6 +1,7 @@
 import os
 import mimetypes
 from pathlib import Path
+from typing import Any
 from fastapi import APIRouter
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.future import select
@@ -16,6 +17,26 @@ router = APIRouter()
 # Get the project root directory
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 UPLOAD_DIR = PROJECT_ROOT / "static" / "uploads"
+
+
+def _resolve_media_type(file_name: str, file_path: str, db_file_type: str | None) -> str:
+    """Prefer explicit DB/PDF hints to avoid browsers treating PDFs as downloads."""
+    candidate = (db_file_type or "").strip().lower()
+    if candidate == "application/pdf":
+        return "application/pdf"
+    if candidate.startswith("image/"):
+        return candidate
+
+    ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
+    if ext == "pdf":
+        return "application/pdf"
+
+    guessed, _ = mimetypes.guess_type(file_path)
+    if guessed == "application/pdf":
+        return "application/pdf"
+    if guessed:
+        return guessed
+    return "application/octet-stream"
 
 @router.get("/test-public")
 async def test_public_route():
@@ -52,7 +73,8 @@ async def download_file(filename: str):
 @router.get("/files/{file_id}/view")
 async def public_view_file(file_id: int, db: AsyncSession = Depends(get_db)):
     """Public endpoint to stream files inline by file ID."""
-    file_result = await db.execute(select(File).where(File.id == file_id))
+    file_expr: Any = File
+    file_result = await db.execute(select(File).where(file_expr.id == file_id))
     db_file = file_result.scalar_one_or_none()
 
     if not db_file:
@@ -62,9 +84,11 @@ async def public_view_file(file_id: int, db: AsyncSession = Depends(get_db)):
     if not absolute_path.exists():
         raise HTTPException(status_code=404, detail="File not found on server")
 
-    media_type, _ = mimetypes.guess_type(str(absolute_path))
-    if not media_type:
-        media_type = "application/octet-stream"
+    media_type = _resolve_media_type(
+        file_name=db_file.name or "",
+        file_path=str(absolute_path),
+        db_file_type=db_file.file_type,
+    )
 
     return FileResponse(
         path=str(absolute_path),

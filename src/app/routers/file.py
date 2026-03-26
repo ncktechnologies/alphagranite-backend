@@ -20,6 +20,25 @@ router = APIRouter(
     # so we don't need the dependency here
 )
 
+
+def _resolve_media_type(file_name: str, file_path: str, db_file_type: Optional[str]) -> str:
+    candidate = (db_file_type or "").strip().lower()
+    if candidate == "application/pdf":
+        return "application/pdf"
+    if candidate.startswith("image/"):
+        return candidate
+
+    ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
+    if ext == "pdf":
+        return "application/pdf"
+
+    guessed, _ = mimetypes.guess_type(file_path)
+    if guessed == "application/pdf":
+        return "application/pdf"
+    if guessed:
+        return guessed
+    return "application/octet-stream"
+
 @router.post(
     "/upload",
     openapi_extra={
@@ -226,9 +245,11 @@ async def view_file(
             detail="File not found on server"
         )
 
-    media_type, _ = mimetypes.guess_type(absolute_path)
-    if not media_type:
-        media_type = "application/octet-stream"
+    media_type = _resolve_media_type(
+        file_name=db_file.name or "",
+        file_path=absolute_path,
+        db_file_type=db_file.file_type,
+    )
 
     return FileResponse(
         path=absolute_path,
