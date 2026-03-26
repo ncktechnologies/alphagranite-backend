@@ -1,8 +1,12 @@
 from typing import List
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends, UploadFile, File, Form, Request, HTTPException, status
+from fastapi.responses import FileResponse
+from sqlalchemy import select
+import mimetypes
 
 from src.app.database.user import User
+from src.app.database.file import File as FileModel
 from src.app.service.file import FileService
 from src.app.utils.config import get_db, get_settings
 from src.app.utils.helpers import success_response, call_service
@@ -190,3 +194,37 @@ async def get_all_files(
         request=request
     )
     return success_response(data=files, message="Files retrieved successfully")
+
+
+@router.get("/{file_id}/view")
+async def view_file(
+    file_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Stream a file for in-browser rendering where supported (e.g., PDF)."""
+    file_result = await db.execute(select(FileModel).where(FileModel.id == file_id))
+    db_file = file_result.scalar_one_or_none()
+
+    if not db_file:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File with ID {file_id} not found"
+        )
+
+    absolute_path = os.path.join("/app/static", db_file.file_path)
+    if not os.path.exists(absolute_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found on server"
+        )
+
+    media_type, _ = mimetypes.guess_type(absolute_path)
+    if not media_type:
+        media_type = "application/octet-stream"
+
+    return FileResponse(
+        path=absolute_path,
+        media_type=media_type,
+        headers={"Content-Disposition": f'inline; filename="{db_file.name}"'}
+    )

@@ -19,8 +19,9 @@ class FileService:
     def get_base_url(request: Request = None) -> str:
         """Get the base URL from the request or fall back to settings"""
         if request:
-            # Build base URL from request
-            scheme = request.url.scheme
+            # Respect reverse-proxy headers so generated URLs are HTTPS in production.
+            forwarded_proto = request.headers.get("x-forwarded-proto")
+            scheme = (forwarded_proto.split(",")[0].strip() if forwarded_proto else request.url.scheme)
             host = request.headers.get("host", request.url.netloc)
             return f"{scheme}://{host}"
         
@@ -146,10 +147,7 @@ class FileService:
         
         # Get base URL from request or settings
         base_url = FileService.get_base_url(request)
-        
-        # Generate file URL
-        file_url = f"{base_url}/static/{file.file_path}"
-        
+
         return FileService._serialize_file(file, base_url)
         
     @staticmethod
@@ -233,5 +231,5 @@ class FileService:
             "uploaded_by": f.uploaded_by,
             "created_at": f.created_at,
             "updated_at": f.updated_at,
-            "url": f"{base_url}/static/{f.file_path}"
+            "url": f"{base_url}/api/v1/files/{f.id}/view"
         }
