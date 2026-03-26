@@ -206,8 +206,7 @@ async def get_all_files(
 @router.get("/{file_id}/view")
 async def view_file(
     file_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: AsyncSession = Depends(get_db)
 ):
     """Stream a file for in-browser rendering where supported (e.g., PDF)."""
     file_expr: Any = FileModel

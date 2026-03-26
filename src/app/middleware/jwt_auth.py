@@ -20,6 +20,8 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             request.url.path.startswith("/favicon.ico") or
             request.url.path.startswith("/api/v1/test-public/") or
             request.url.path.startswith("/api/v1/files/download/") or
+            request.url.path.startswith("/api/v1/files/") and request.url.path.endswith("/view") or
+            request.url.path.startswith("/files/") and request.url.path.endswith("/view") or
             request.url.path.startswith("/static") or
             # Skip job media view endpoints (with or without /api/v1)
             ("/media/" in request.url.path and request.url.path.endswith("/view"))):
@@ -91,6 +93,8 @@ from fastapi import Request
 # Public routes that should NOT require authentication
 PUBLIC_PATHS = [
     "/api/v1/files/download",
+    "/api/v1/files/",
+    "/files/",
     "/docs",
     "/openapi.json",
     "/redoc"
@@ -98,6 +102,10 @@ PUBLIC_PATHS = [
 
 def is_public_path(path: str) -> bool:
     """Check if the request path is public"""
+    if path.startswith("/api/v1/files/") and path.endswith("/view"):
+        return True
+    if path.startswith("/files/") and path.endswith("/view"):
+        return True
     return any(path.startswith(public_path) for public_path in PUBLIC_PATHS)
 
 async def get_current_user(request: Request, db: AsyncSession = Depends(get_db)):
