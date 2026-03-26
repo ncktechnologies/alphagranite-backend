@@ -1,7 +1,14 @@
 import os
+import mimetypes
 from pathlib import Path
 from fastapi import APIRouter
 from fastapi.responses import FileResponse, JSONResponse
+from sqlalchemy.future import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import Depends, HTTPException
+
+from src.app.database import get_db
+from src.app.database.file import File
 from src.app.utils.helpers import error_response
 
 router = APIRouter()
@@ -39,4 +46,28 @@ async def download_file(filename: str):
         path=file_path,
         filename=filename,
         media_type="application/octet-stream"
+    )
+
+
+@router.get("/files/{file_id}/view")
+async def public_view_file(file_id: int, db: AsyncSession = Depends(get_db)):
+    """Public endpoint to stream files inline by file ID."""
+    file_result = await db.execute(select(File).where(File.id == file_id))
+    db_file = file_result.scalar_one_or_none()
+
+    if not db_file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    absolute_path = Path("/app/static") / db_file.file_path
+    if not absolute_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on server")
+
+    media_type, _ = mimetypes.guess_type(str(absolute_path))
+    if not media_type:
+        media_type = "application/octet-stream"
+
+    return FileResponse(
+        path=str(absolute_path),
+        media_type=media_type,
+        headers={"Content-Disposition": f'inline; filename="{db_file.name}"'}
     )
