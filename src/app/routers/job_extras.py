@@ -275,9 +275,6 @@ async def add_files_to_final_programming(
         with open(file_path, "wb") as f:
             f.write(contents)
         
-        # Create full URL for the file
-        file_url = f"{BASE_URL}/api/v1/files/download/{unique_filename}"
-        
         # Create database record matching the actual files table schema
         file_record = File(
             name=file.filename,
@@ -292,6 +289,8 @@ async def add_files_to_final_programming(
         
         db.add(file_record)
         await db.flush()  # Get the ID without committing
+
+        file_url = f"{BASE_URL}/api/v1/files/{file_record.id}/view"
         
         uploaded_file_ids.append(file_record.id)
         uploaded_files_info.append({
@@ -559,9 +558,6 @@ async def add_files_to_slabsmith(
         with open(file_path, "wb") as f:
             f.write(contents)
         
-        # Create full URL for the file
-        file_url = f"{BASE_URL}/api/v1/files/download/{unique_filename}"
-        
         # Create database record matching the actual files table schema
         file_record = File(
             name=file.filename,
@@ -578,6 +574,8 @@ async def add_files_to_slabsmith(
         
         db.add(file_record)
         await db.flush()  # Get the ID without committing
+
+        file_url = f"{BASE_URL}/api/v1/files/{file_record.id}/view"
         
         uploaded_file_ids.append(file_record.id)
         uploaded_files_info.append({
@@ -708,8 +706,6 @@ async def add_files_to_drafting(
         with open(file_path, "wb") as f:
             f.write(contents)
         
-        file_url = f"{BASE_URL}/api/v1/files/download/{unique_filename}"
-        
         file_record = File(
             name=file.filename,
             file_path=str(file_path),
@@ -725,6 +721,8 @@ async def add_files_to_drafting(
         
         db.add(file_record)
         await db.flush()
+
+        file_url = f"{BASE_URL}/api/v1/files/{file_record.id}/view"
         
         uploaded_file_ids.append(file_record.id)
         uploaded_files_info.append({
@@ -827,9 +825,7 @@ async def get_file_info(file_id: int, db: AsyncSession = Depends(get_db)):
     if not file_record:
         raise error_response("File not found", 404)
     
-    # Generate download URL
-    filename = os.path.basename(file_record.file_path)
-    file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
+    file_url = f"{BASE_URL}/api/v1/files/{file_record.id}/view"
     
     return success_response({
         "id": file_record.id,
