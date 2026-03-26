@@ -93,8 +93,7 @@ from fastapi import Request
 # Public routes that should NOT require authentication
 PUBLIC_PATHS = [
     "/api/v1/files/download",
-    "/api/v1/files/",
-    "/files/",
+    "/files/download",
     "/docs",
     "/openapi.json",
     "/redoc"
