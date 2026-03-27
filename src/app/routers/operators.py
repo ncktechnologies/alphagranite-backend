@@ -1707,9 +1707,8 @@ async def view_operator_job_document(
         )
 
     # Return JSON response with viewable file URL
-    from src.app.config import get_settings as get_app_settings
-    settings = get_app_settings()
-    base_url = settings.BASE_URL
+    settings = get_settings()
+    base_url = settings.API_BASE_URL
     
     return success_response(
         {
