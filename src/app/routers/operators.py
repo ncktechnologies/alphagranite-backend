@@ -68,10 +68,12 @@ def _build_operator_file_view_url(
     file_path: Optional[str],
     file_type: Optional[str] = None,
 ) -> Optional[str]:
-    if job_id is None or file_id is None:
+    if file_id is None:
         return None
 
-    return f"{base_url}/api/v1/operators/{operator_id}/jobs/{job_id}/files/{file_id}/view"
+    # Return the simple file viewer URL which doesn't require operator/job context
+    # and doesn't require auth token for browser viewing
+    return f"{base_url}/api/v1/files/{file_id}/view"
 
 
 def _serialize_operator_file(file: File, base_url: str, operator_id: int) -> dict:
@@ -1651,7 +1653,7 @@ async def _get_operator_uploaded_files_response(
     )
 
 
-@router.get("/{operator_id}/jobs/{job_id}/files/{file_id}/view")
+@router.get("/{operator_id}/jobs/{job_id}/files/{file_id}/view", response_model=SuccessResponse[dict])
 async def view_operator_job_document(
     operator_id: int,
     job_id: int,
@@ -1659,7 +1661,7 @@ async def view_operator_job_document(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Securely stream PDF/image files for operator in-browser viewing."""
+    """Return a viewable file URL for operator job documents."""
 
     operator_result = await db.execute(select(User).where(User.id == operator_id))
     operator = operator_result.scalar_one_or_none()
@@ -1704,21 +1706,20 @@ async def view_operator_job_document(
             detail="Only PDF and image files are supported for browser viewing",
         )
 
-    settings = get_settings()
-    file_path = db_file.file_path
-    static_root = os.path.realpath(settings.STATIC_DIR)
-    absolute_path = file_path if os.path.isabs(file_path) else os.path.join(settings.STATIC_DIR, file_path)
-    resolved_path = os.path.realpath(absolute_path)
-
-    if not resolved_path.startswith(static_root + os.sep) and resolved_path != static_root:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid file path")
-
-    if not os.path.exists(resolved_path):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found on server")
-
-    safe_media_type = "application/pdf" if ext == "pdf" else mime_type
-    return FileResponse(
-        path=resolved_path,
-        media_type=safe_media_type,
-        headers={"Content-Disposition": f'inline; filename="{db_file.name}"'},
+    # Return JSON response with viewable file URL
+    from src.app.config import get_settings as get_app_settings
+    settings = get_app_settings()
+    base_url = settings.BASE_URL
+    
+    return success_response(
+        {
+            "file_id": db_file.id,
+            "file_name": db_file.name,
+            "file_type": db_file.file_type,
+            "file_size": db_file.file_size,
+            "file_url": f"{base_url}/api/v1/files/{db_file.id}/view",
+            "job_id": job_id,
+            "operator_id": operator_id,
+        },
+        "File URL retrieved successfully",
     )

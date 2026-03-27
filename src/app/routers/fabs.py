@@ -2343,6 +2343,7 @@ def _build_fab_list_query(
         latest_templating.c.schedule_start_date.label("templating_schedule_start_date"),
         latest_templating.c.schedule_due_date.label("templating_schedule_due_date"),
         latest_templating.c.notes.label("templating_notes"),
+        latest_templating.c.actual_end_date.label("templating_actual_end_date"),
         TechnicianUser.first_name.label("technician_first_name"),
         TechnicianUser.last_name.label("technician_last_name"),
         BusinessJob,
@@ -2594,11 +2595,12 @@ def _convert_fab_row_to_dict(row: tuple) -> dict:
     stone_type_name, stone_color_name, stone_thickness_value = row[3], row[4], row[5]
     edge_name = row[6]
     templating_schedule_start_date, templating_schedule_due_date, templating_notes = row[7], row[8], row[9]
-    technician_first_name, technician_last_name = row[10], row[11]
-    business_job = row[12]
-    account_name, account_number, account_contact_person, account_email, account_phone = row[13:18]
-    drafter_first_name, drafter_last_name = row[18], row[19]
-    drafter_assigned_by_first_name, drafter_assigned_by_last_name = row[20], row[21]
+    templating_actual_end_date = row[10]
+    technician_first_name, technician_last_name = row[11], row[12]
+    business_job = row[13]
+    account_name, account_number, account_contact_person, account_email, account_phone = row[14:19]
+    drafter_first_name, drafter_last_name = row[19], row[20]
+    drafter_assigned_by_first_name, drafter_assigned_by_last_name = row[21], row[22]
     
     # Add related data
     fab_dict["sales_person_name"] = f"{sales_person_first_name} {sales_person_last_name}" if sales_person_first_name else None
@@ -2625,6 +2627,7 @@ def _convert_fab_row_to_dict(row: tuple) -> dict:
     fab_dict["templating_schedule_start_date"] = templating_schedule_start_date.isoformat() if templating_schedule_start_date else None
     fab_dict["templating_schedule_due_date"] = templating_schedule_due_date.isoformat() if templating_schedule_due_date else None
     fab_dict["templating_notes"] = templating_notes
+    fab_dict["templating_actual_end_date"] = templating_actual_end_date.isoformat() if templating_actual_end_date else None
     fab_dict["technician_name"] = f"{technician_first_name} {technician_last_name}" if technician_first_name else None
     
     fab_dict["drafter_name"] = f"{drafter_first_name} {drafter_last_name}" if drafter_first_name else None
