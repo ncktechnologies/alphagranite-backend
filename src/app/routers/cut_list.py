@@ -21,20 +21,17 @@ router = APIRouter(
 )
 
 
-def _transition_to_cutting_if_revision_complete(fab: Fab, user_id: Optional[int]) -> bool:
+def _transition_to_shop_if_cutlist_complete(fab: Fab, user_id: Optional[int]) -> bool:
     if not fab:
         return False
 
     if fab.current_stage != "cut_list":
         return False
 
-    if fab.revised:
+    if not fab.cutlist_complete:
         return False
 
-    if fab.revision_completed_date is None:
-        return False
-
-    fab.current_stage = "cutting"
+    fab.current_stage = "shop"
     fab.next_stage = None
     fab.updated_at = datetime.now()
     fab.updated_by = user_id
@@ -90,12 +87,12 @@ async def schedule_shop_date(
         if schedule_data.revision_complete is not None:
             fab.revised = not schedule_data.revision_complete
 
-        _transition_to_cutting_if_revision_complete(fab, current_user.id)
+        _transition_to_shop_if_cutlist_complete(fab, current_user.id)
 
         fab_type = (fab.fab_type or "").strip().lower()
         is_resurface = fab_type in {"resurface_scheduling", "resurface"}
 
-        if fab.current_stage == "cutting":
+        if fab.current_stage == "shop":
             fab.next_stage = None
         elif is_resurface:
             fab.next_stage = "install_scheduling"
@@ -169,19 +166,12 @@ async def update_cut_list(
         if update_data.shop_date_schedule is not None:
             fab.shop_date_schedule = _to_naive_dt(update_data.shop_date_schedule)
         
-        # Handle revision_complete
-        if update_data.revision_complete is not None:
-            fab.revised = not update_data.revision_complete  # If revision complete, mark revised as False
-
-            # Explicit PATCH behavior: when revision is marked complete, move cut-list FABs to cutting.
-            if update_data.revision_complete is True:
-                if fab.revision_completed_date is None:
-                    fab.revision_completed_date = datetime.now()
-                if fab.current_stage == "cut_list":
-                    fab.current_stage = "cutting"
-                    fab.next_stage = None
-
-        _transition_to_cutting_if_revision_complete(fab, current_user.id)
+        # Handle cutlist_complete — triggers move to shop stage
+        if update_data.cutlist_complete is not None:
+            fab.cutlist_complete = update_data.cutlist_complete
+            if update_data.cutlist_complete is True and fab.current_stage == "cut_list":
+                fab.current_stage = "shop"
+                fab.next_stage = None
         
         fab.updated_at = datetime.now()
         fab.updated_by = current_user.id
@@ -208,7 +198,7 @@ async def update_cut_list(
                 "slab_smith_used": fab.slab_smith_used,
                 "fp_not_needed": fab.fp_not_needed,
                 "shop_date_schedule": fab.shop_date_schedule.isoformat() if fab.shop_date_schedule else None,
-                "revision_complete": not fab.revised,
+                "cutlist_complete": fab.cutlist_complete,
                 "updated_at": fab.updated_at.isoformat()
             }
         }
@@ -263,7 +253,7 @@ async def get_cut_list_details(
     
     fab, job, account, sales_person, stone_type, stone_color, stone_thickness, edge = row
 
-    if _transition_to_cutting_if_revision_complete(fab, current_user.id):
+    if _transition_to_shop_if_cutlist_complete(fab, current_user.id):
         await db.commit()
         await db.refresh(fab)
     
@@ -302,7 +292,7 @@ async def get_cut_list_details(
             "confirmed_date": fab.confirmed_date.isoformat() if fab.confirmed_date else None,
             "slab_smith_used": fab.slab_smith_used,
             "fp_not_needed": fab.fp_not_needed,
-            "revision_complete": not fab.revised,  # NEW: Add revision_complete field
+            "cutlist_complete": fab.cutlist_complete,
             "wj_linft": fab.wj_linft,
             "edging_linft": fab.edging_linft,
             "cnc_linft": fab.cnc_linft,

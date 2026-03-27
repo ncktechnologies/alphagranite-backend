@@ -486,6 +486,7 @@ async def get_all_sales_ct(
 @router.get("/stages/slabsmith/pending", response_model=SuccessResponse[dict])
 async def get_pending_slabsmith_fab_ids(
     search: Optional[str] = None,
+    type: Optional[str] = None,
     date_filter: Optional[str] = None,
     fab_type: Optional[str] = None,
     skip: int = 0,
@@ -582,7 +583,7 @@ async def get_pending_slabsmith_fab_ids(
         status_id=None,
         current_stage=None,
         next_stage=None,
-        search=search,
+        search=None,
         templating_fab_ids=None,
         latest_templating=latest_templating,
         shop_date_start=None,
@@ -598,19 +599,46 @@ async def get_pending_slabsmith_fab_ids(
         date_filter=None
     ).where(*filters)
 
+    # Build search filter based on type
+    if search and type:
+        if type == "fab_id":
+            search_filter = sa.cast(Fab.id, sa.String) == search
+        elif type == "job_number":
+            search_filter = BusinessJob.job_number == search
+        elif type == "job_name":
+            search_filter = BusinessJob.name.ilike(f"%{search}%")
+        else:
+            search_filter = None
+    else:
+        search_filter = None
+
+    if search_filter is not None:
+        base_query = base_query.where(search_filter)
+    elif search:
+        search_term = f"%{search}%"
+        base_query = base_query.where(
+            or_(
+                sa.cast(Fab.id, sa.String) == search,
+                BusinessJob.name.ilike(search_term),
+                BusinessJob.job_number == search
+            )
+        )
+
     count_query = (
         select(func.count(Fab.id))
         .select_from(Fab)
         .join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
         .where(*filters)
     )
-    if search:
+    if search_filter is not None:
+        count_query = count_query.where(search_filter)
+    elif search:
         search_term = f"%{search}%"
         count_query = count_query.where(
             or_(
-                sa.cast(Fab.id, sa.String).ilike(search_term),
+                sa.cast(Fab.id, sa.String) == search,
                 BusinessJob.name.ilike(search_term),
-                BusinessJob.job_number.ilike(search_term)
+                BusinessJob.job_number == search
             )
         )
 

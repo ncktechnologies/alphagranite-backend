@@ -1724,6 +1724,7 @@ async def get_pending_final_programming_fabs(
     shop_date_end: Optional[date] = Query(None, description="Filter by shop_date_schedule on or before this date (YYYY-MM-DD)"),  # NEW
     fab_type: Optional[str] = Query(None, description="Filter by fab type"),  # NEW
     search: Optional[str] = Query(None, description="Search by FAB ID or Job Name"),  # NEW
+    type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, job_name"),  # NEW
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -1821,13 +1822,28 @@ async def get_pending_final_programming_fabs(
     if fab_type:
         query = query.where(Fab.fab_type.ilike(f"%{fab_type}%"))
     
-    # NEW: Apply search filter (FAB ID or Job Name)
-    if search:
+    # NEW: Build search filter based on type
+    if search and type:
+        if type == "fab_id":
+            search_filter = sa.cast(Fab.id, sa.String) == search
+        elif type == "job_number":
+            search_filter = BusinessJob.job_number == search
+        elif type == "job_name":
+            search_filter = BusinessJob.name.ilike(f"%{search}%")
+        else:
+            search_filter = None
+    else:
+        search_filter = None
+
+    if search_filter is not None:
+        query = query.where(search_filter)
+    elif search:
         search_term = f"%{search}%"
         query = query.where(
             or_(
-                sa.cast(Fab.id, sa.String).ilike(search_term),
-                BusinessJob.name.ilike(search_term)
+                sa.cast(Fab.id, sa.String) == search,
+                BusinessJob.name.ilike(search_term),
+                BusinessJob.job_number == search
             )
         )
     
@@ -1852,13 +1868,17 @@ async def get_pending_final_programming_fabs(
         count_query = count_query.where(Fab.shop_date_schedule <= shop_date_end)
     if fab_type:
         count_query = count_query.where(Fab.fab_type.ilike(f"%{fab_type}%"))
-    if search:
+    if search_filter is not None:
+        count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
+        count_query = count_query.where(search_filter)
+    elif search:
         search_term = f"%{search}%"
         count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
         count_query = count_query.where(
             or_(
-                sa.cast(Fab.id, sa.String).ilike(search_term),
-                BusinessJob.name.ilike(search_term)
+                sa.cast(Fab.id, sa.String) == search,
+                BusinessJob.name.ilike(search_term),
+                BusinessJob.job_number == search
             )
         )
     
@@ -2777,8 +2797,7 @@ async def _batch_load_drafting_data(db: AsyncSession, fab_ids: List[int]) -> dic
             file = row[0]
             uploader_first = row[1]
             uploader_last = row[2]
-            filename = os.path.basename(file.file_path)
-            file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
+            file_url = f"{BASE_URL}/api/v1/files/{file.id}/view"
             files_by_id[file.id] = {
                 "id": file.id,
                 "name": file.name,
@@ -2872,8 +2891,7 @@ async def _batch_load_sales_ct_data(db: AsyncSession, fab_ids: List[int]) -> dic
             file = row[0]
             uploader_first = row[1]
             uploader_last = row[2]
-            filename = os.path.basename(file.file_path)
-            file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
+            file_url = f"{BASE_URL}/api/v1/files/{file.id}/view"
             files_by_id[file.id] = {
                 "id": file.id,
                 "name": file.name,
@@ -3015,8 +3033,7 @@ async def _batch_load_slabsmith_data(db: AsyncSession, fab_ids: List[int]) -> di
             file = row[0]
             uploader_first = row[1]
             uploader_last = row[2]
-            filename = os.path.basename(file.file_path)
-            file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
+            file_url = f"{BASE_URL}/api/v1/files/{file.id}/view"
             files_by_id[file.id] = {
                 "id": file.id,
                 "name": file.name,
@@ -3116,8 +3133,7 @@ async def get_draft_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
                 uploader_first = row[1]
                 uploader_last = row[2]
 
-                filename = os.path.basename(file.file_path)
-                file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
+                file_url = f"{BASE_URL}/api/v1/files/{file.id}/view"
 
                 files_data.append({
                     "id": file.id,
@@ -3208,8 +3224,7 @@ async def get_sales_ct_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
                 uploader_first = row[1]
                 uploader_last = row[2]
 
-                filename = os.path.basename(file.file_path)
-                file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
+                file_url = f"{BASE_URL}/api/v1/files/{file.id}/view"
 
                 files_data.append({
                     "id": file.id,
@@ -3373,8 +3388,7 @@ async def get_slabsmith_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
                 file = file_row[0]
                 uploader_first = file_row[1]
                 uploader_last = file_row[2]
-                filename = os.path.basename(file.file_path)
-                file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
+                file_url = f"{BASE_URL}/api/v1/files/{file.id}/view"
                 files_data.append({
                     "id": file.id,
                     "name": file.name,
@@ -3459,8 +3473,7 @@ async def _batch_load_latest_revisions(db: AsyncSession, fab_ids: List[int]) -> 
             file = file_row[0]
             uploader_first = file_row[1]
             uploader_last = file_row[2]
-            filename = os.path.basename(file.file_path)
-            file_url = f"{BASE_URL}/api/v1/files/download/{filename}"
+            file_url = f"{BASE_URL}/api/v1/files/{file.id}/view"
             files_by_id[file.id] = {
                 "id": file.id,
                 "name": file.name,

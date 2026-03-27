@@ -1159,7 +1159,7 @@ class CutListUpdate(BaseModel):
     slab_smith_used: Optional[bool] = Field(None, description="Whether slab smith was used")
     fp_not_needed: Optional[bool] = Field(None, description="Whether final programming is not needed")
     shop_date_schedule: Optional[datetime] = Field(None, description="Scheduled shop date")
-    revision_complete: Optional[bool] = Field(None, description="Whether revision is complete")
+    cutlist_complete: Optional[bool] = Field(None, description="Whether cut list is complete; triggers move to shop stage")
     notes: Optional[str] = Field(None, description="Additional notes")
 
 
