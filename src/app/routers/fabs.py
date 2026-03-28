@@ -57,6 +57,7 @@ FAB_STAGES = [
 ]
 
 BASE_URL = os.getenv("BASE_URL", "https://api.ag.easybusiness.ng")
+PUNCHOUT_REDIRECT_FAB_TYPES = ("PUNCHOUT-AG", "PUNCHOUT-BILLABLE")
 
 def _add_total_cut_lnft(fab_dict: dict) -> None:
     # Uses wj_linft (existing model field), with fallback to wj_lnft if present.
@@ -128,6 +129,11 @@ def _stage_filter_condition(stage_name: str):
                 Fab.current_stage == "cut_list",
                 Fab.shop_est_completion_date.isnot(None),
             ),
+        )
+    if stage_name == "install_scheduling":
+        return and_(
+            Fab.current_stage == "install_scheduling",
+            ~Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
         )
     return Fab.current_stage == stage_name
 
@@ -390,9 +396,11 @@ async def create_fab(
     fab_type = (fab_dict.get("fab_type") or "").strip().upper()
     fab_dict["fab_type"] = fab_type  # persist uppercase globally
 
-    if fab_type in {"PUNCHOUT-AG", "PUNCHOUT-BILLABLE"}:
-        current_stage = "install_scheduling"
-        next_stage = get_next_stage("install_scheduling")
+    if fab_type in PUNCHOUT_REDIRECT_FAB_TYPES:
+        # Punchout FABs should be handled via the shop-est-completion flow,
+        # not shown in install_scheduling lists.
+        current_stage = "cut_list"
+        next_stage = get_next_stage("cut_list")
     elif fab_type == "RESURFACE":
         current_stage = "resurface_scheduling"
         next_stage = get_next_stage("resurface_scheduling")
@@ -803,15 +811,15 @@ async def get_fabs_with_shop_est_completion(
 
     # Step 3: Build main query
     search_filter = None
-    if search and type:
-        if type == "fab_id":
-            search_filter = sa.cast(Fab.id, sa.String) == search
-        elif type == "job_number":
-            search_filter = BusinessJob.job_number == search
-        elif type == "job_name":
-            search_filter = BusinessJob.name.ilike(f"%{search}%")
-    else:
-        search_filter = None
+    search_value = search.strip() if isinstance(search, str) else search
+    search_type = type.strip().lower() if isinstance(type, str) else None
+    if search_value and search_type:
+        if search_type == "fab_id":
+            search_filter = sa.cast(Fab.id, sa.String) == search_value
+        elif search_type == "job_number":
+            search_filter = sa.cast(BusinessJob.job_number, sa.String) == search_value
+        elif search_type == "job_name":
+            search_filter = BusinessJob.name.ilike(f"%{search_value}%")
 
     query = _build_fab_list_query(
         job_id, fab_type, sales_person_id, status_id, current_stage, next_stage,
@@ -822,19 +830,24 @@ async def get_fabs_with_shop_est_completion(
         date_filter
     )
 
-    # Filter to only FABs with a shop_est_completion_date set
-    query = query.where(Fab.shop_est_completion_date.isnot(None))
+    # Include records that already have shop_est_completion_date or belong to
+    # punchout FAB types that should be handled in this endpoint.
+    shop_est_or_punchout_filter = or_(
+        Fab.shop_est_completion_date.isnot(None),
+        Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+    )
+    query = query.where(shop_est_or_punchout_filter)
 
     # Apply search filter if present
     if search_filter is not None:
         query = query.where(search_filter)
-    elif search:
-        search_term = f"%{search}%"
+    elif search_value:
+        search_term = f"%{search_value}%"
         query = query.where(
             or_(
-                sa.cast(Fab.id, sa.String) == search,
+                sa.cast(Fab.id, sa.String) == search_value,
                 BusinessJob.name.ilike(search_term),
-                BusinessJob.job_number == search
+                sa.cast(BusinessJob.job_number, sa.String) == search_value
             )
         )
 
@@ -866,8 +879,7 @@ async def get_fabs_with_shop_est_completion(
     count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
     count_query = count_query.outerjoin(latest_templating, sa.literal(True))
 
-    # Filter to only FABs with a shop_est_completion_date set
-    count_query = count_query.where(Fab.shop_est_completion_date.isnot(None))
+    count_query = count_query.where(shop_est_or_punchout_filter)
 
     # Apply all basic filters to count query
     if job_id is not None:
@@ -927,13 +939,13 @@ async def get_fabs_with_shop_est_completion(
 
     if search_filter is not None:
         count_query = count_query.where(search_filter)
-    elif search:
-        search_term = f"%{search}%"
+    elif search_value:
+        search_term = f"%{search_value}%"
         count_query = count_query.where(
             or_(
-                sa.cast(Fab.id, sa.String) == search,
+                sa.cast(Fab.id, sa.String) == search_value,
                 BusinessJob.name.ilike(search_term),
-                BusinessJob.job_number == search
+                sa.cast(BusinessJob.job_number, sa.String) == search_value
             )
         )
 
@@ -963,7 +975,7 @@ async def get_fabs_with_shop_est_completion(
             func.sum(Fab.no_of_pieces).label("no_of_pieces")
         ).select_from(Fab).where(_stage_filter_condition(current_stage))
 
-        stage_totals_query = stage_totals_query.where(Fab.shop_est_completion_date.isnot(None))
+        stage_totals_query = stage_totals_query.where(shop_est_or_punchout_filter)
 
         if job_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.job_id == job_id)
@@ -995,14 +1007,14 @@ async def get_fabs_with_shop_est_completion(
 
         if search_filter is not None:
             stage_totals_query = stage_totals_query.where(search_filter)
-        elif search:
-            search_term = f"%{search}%"
+        elif search_value:
+            search_term = f"%{search_value}%"
             stage_totals_query = stage_totals_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
             stage_totals_query = stage_totals_query.where(
                 or_(
-                    sa.cast(Fab.id, sa.String) == search,
+                    sa.cast(Fab.id, sa.String) == search_value,
                     BusinessJob.name.ilike(search_term),
-                    BusinessJob.job_number == search
+                    sa.cast(BusinessJob.job_number, sa.String) == search_value
                 )
             )
 
@@ -1585,7 +1597,10 @@ async def get_fabs_by_stage(
     if stage_name == "install_scheduling":
         query = query.where(
             or_(
-                Fab.current_stage == "install_scheduling",
+                and_(
+                    Fab.current_stage == "install_scheduling",
+                    ~Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+                ),
                 and_(
                     Fab.current_stage == "resurface_scheduling",
                     Fab.shop_date_schedule.isnot(None),
@@ -1605,7 +1620,10 @@ async def get_fabs_by_stage(
     if stage_name == "install_scheduling":
         count_query = select(func.count()).select_from(Fab).where(
             or_(
-                Fab.current_stage == "install_scheduling",
+                and_(
+                    Fab.current_stage == "install_scheduling",
+                    ~Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+                ),
                 and_(
                     Fab.current_stage == "resurface_scheduling",
                     Fab.shop_date_schedule.isnot(None),
