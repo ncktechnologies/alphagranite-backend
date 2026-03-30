@@ -134,6 +134,7 @@ class EmployeeService:
                 activity_trace_id=new_employee.id
             )
 
+            notification_result = None
             if data.email:
                 email_body = f"""
                 Welcome to Alpha Granite!
@@ -149,7 +150,7 @@ class EmployeeService:
                 The Alpha Granite Team
                 """
 
-                await send_notification(
+                notification_result = await send_notification(
                     db=db,
                     email=data.email,
                     title="Your Alpha Granite Account",
@@ -157,10 +158,17 @@ class EmployeeService:
                     user_id=current_user_id
                 )
 
+                logger.info(
+                    "[CREATE] Notification result for employee email %s: %s",
+                    data.email,
+                    notification_result,
+                )
+
             # Return employee with generated password
             return {
                 "employee": new_employee,
-                "password": password
+                "password": password,
+                "notification": notification_result,
             }
 
         except IntegrityError as e:

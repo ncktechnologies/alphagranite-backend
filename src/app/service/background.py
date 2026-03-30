@@ -2,16 +2,19 @@ import os
 import logging
 import smtplib
 import asyncio
+from typing import Optional
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.database.user import User
 from src.app.utils.config import SessionLocal, ADMIN_EMAIL
 from src.app.database.audit_trail import AuditTrail
-from src.app.utils.helpers import error_response, success_response
+from src.app.utils.helpers import success_response
+
+logger = logging.getLogger("notification_service")
 
 # Reuse the application's async SessionLocal exported from config to avoid
 # hardcoded credentials and duplicate engine creation which caused
@@ -28,8 +31,25 @@ def send_email(to_email: str, subject: str, body: str, is_html: bool = True):
     smtp_from = os.getenv("DEFAULT_FROM_EMAIL")
     use_tls = os.getenv("EMAIL_USE_TLS", "True").lower() == "true"
 
+    missing = []
+    if not smtp_host:
+        missing.append("EMAIL_HOST")
+    if not smtp_user:
+        missing.append("EMAIL_HOST_USER")
+    if not smtp_password:
+        missing.append("EMAIL_HOST_PASSWORD")
+    if not smtp_from:
+        missing.append("DEFAULT_FROM_EMAIL")
+    if missing:
+        raise ValueError(f"Missing required email environment variables: {', '.join(missing)}")
+
+    smtp_host_value = str(smtp_host)
+    smtp_user_value = str(smtp_user)
+    smtp_password_value = str(smtp_password)
+    smtp_from_value = str(smtp_from)
+
     msg = MIMEMultipart()
-    msg["From"] = smtp_from
+    msg["From"] = smtp_from_value
     msg["To"] = to_email
     msg["Subject"] = subject
     
@@ -40,14 +60,14 @@ def send_email(to_email: str, subject: str, body: str, is_html: bool = True):
         msg.attach(MIMEText(body, "plain"))
 
     try:
-        with smtplib.SMTP(smtp_host, smtp_port) as server:
+        with smtplib.SMTP(smtp_host_value, smtp_port) as server:
             if use_tls:
                 server.starttls()
-            server.login(smtp_user, smtp_password)
-            server.sendmail(smtp_from, to_email, msg.as_string())
-    except Exception:
-        # Log error or handle as needed (avoid raising inside background tasks)
-        pass
+            server.login(smtp_user_value, smtp_password_value)
+            server.sendmail(smtp_from_value, to_email, msg.as_string())
+    except Exception as e:
+        logger.exception("Failed to send email to %s: %s", to_email, str(e))
+        raise
 
 async def save_audit_trail(
     db: AsyncSession,
@@ -55,9 +75,9 @@ async def save_audit_trail(
     user_id: int,
     message: str,
     activity_trace_id: int,
-    device_id: str = None,
-    ip_address: str = None,
-    browser: str = None,
+    device_id: Optional[str] = None,
+    ip_address: Optional[str] = None,
+    browser: Optional[str] = None,
 ):
     async with SessionLocal() as session:
         audit = AuditTrail(
@@ -79,7 +99,7 @@ async def send_notification(
     email: str,
     title: str,
     body: str,
-    user_id: int = None,
+    user_id: Optional[int] = None,
     is_html: bool = True  # Add this parameter
 ):
     """
@@ -105,7 +125,11 @@ async def send_notification(
             email_list = [email.strip()]
     
     if not email_list:
-        return error_response("No valid email addresses provided", 400)
+        return {
+            "success": False,
+            "message": "No valid email addresses provided",
+            "data": {"sent": [], "failed": []},
+        }
     
     # Process each email
     sent_emails = []
@@ -115,22 +139,39 @@ async def send_notification(
         # Check if email is an admin email
         is_admin_email = recipient_email.lower() in admin_emails
         
-        # For non-admin emails, verify user exists and has notifications enabled
+        # For non-admin emails, honor recipient-level notification settings when a user exists.
         if not is_admin_email:
             try:
                 async with SessionLocal() as session:
-                    result = await session.execute(select(User).where(User.id == user_id))
-                    user = result.scalars().first()
-                    if not user or getattr(user, "status", None) == "deleted":
-                        await save_audit_trail(session, "notification_failed", user_id, f"Notification failed for {recipient_email}", 0)
+                    result = await session.execute(
+                        select(User).where(func.lower(User.email) == recipient_email.lower())
+                    )
+                    recipient_user = result.scalars().first()
+
+                    # If recipient maps to a deleted user, skip sending.
+                    if recipient_user and getattr(recipient_user, "status", None) == 3:
+                        await save_audit_trail(
+                            session,
+                            "notification_failed",
+                            user_id or 0,
+                            f"Notification skipped for deleted user {recipient_email}",
+                            0,
+                        )
                         failed_emails.append(recipient_email)
                         continue
-                    if not getattr(user, "email_notifications_enabled", True):
-                        await save_audit_trail(session, "notification_off", user_id, f"Notification off for {recipient_email}", 0)
+
+                    if recipient_user and not getattr(recipient_user, "email_notifications_enabled", True):
+                        await save_audit_trail(
+                            session,
+                            "notification_off",
+                            user_id or 0,
+                            f"Notification disabled for {recipient_email}",
+                            0,
+                        )
                         failed_emails.append(recipient_email)
                         continue
             except Exception as e:
-                logging.error(f"Error verifying user for notification: {e}")
+                logger.exception("Error verifying user for notification to %s: %s", recipient_email, str(e))
                 failed_emails.append(recipient_email)
                 continue
         
@@ -142,9 +183,9 @@ async def send_notification(
             
             # Record audit trail that notification was sent
             async with SessionLocal() as session:
-                await save_audit_trail(session, "notification_sent", user_id, f"Notification sent to {recipient_email}", 0)
+                await save_audit_trail(session, "notification_sent", user_id or 0, f"Notification sent to {recipient_email}", 0)
         except Exception as e:
-            logging.error(f"Error sending email to {recipient_email}: {e}")
+            logger.exception("Error sending email to %s: %s", recipient_email, str(e))
             failed_emails.append(recipient_email)
     
     # Return response based on results
@@ -159,7 +200,8 @@ async def send_notification(
             f"Notification sent to {len(sent_emails)} recipient(s), failed for {len(failed_emails)}."
         )
     else:
-        return error_response(
-            f"Failed to send notification to all recipients: {', '.join(failed_emails)}", 
-            500
-        )
+        return {
+            "success": False,
+            "message": f"Failed to send notification to all recipients: {', '.join(failed_emails)}",
+            "data": {"sent": [], "failed": failed_emails},
+        }
