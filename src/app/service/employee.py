@@ -18,7 +18,6 @@ from src.app.database.status import Status
 from src.app.database.user_role import UserRole
 from src.app.database.department import Department
 from src.app.utils.constants import (
-    MSG_EMAIL_EXISTS,
     MSG_EMPLOYEE_EXISTS,
     MSG_EMPLOYEE_NOT_FOUND,
 )
@@ -66,10 +65,6 @@ class EmployeeService:
     
     @staticmethod
     async def create_employee(db: AsyncSession, data, current_user_id: int, background_tasks, profile_image_id: Optional[int] = None):
-        result = await db.execute(select(User).where(User.email == data.email))
-        if result.scalars().first():
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=MSG_EMAIL_EXISTS)
-
         # Validate department exists
         dept_result = await db.execute(select(Department).where(Department.id == data.department))
         if not dept_result.scalars().first():
@@ -538,6 +533,5 @@ class EmployeeService:
 
     @staticmethod
     async def is_email_unique(db: AsyncSession, email: str) -> bool:
-        result = await db.execute(select(User).where(User.email == email))
-        existing_user = result.scalars().first()
-        return existing_user is None
+        # Duplicate emails are allowed by business rule.
+        return True

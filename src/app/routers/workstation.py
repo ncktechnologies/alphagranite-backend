@@ -21,12 +21,14 @@ router = APIRouter(
 
 class WorkstationCreate(BaseModel):
     name: str
+    is_active: bool = True
     status_id: int
     planning_section_id: Optional[int] = None
     operator_ids: Optional[List[int]] = None
 
 class WorkstationUpdate(BaseModel):
     name: Optional[str] = None
+    is_active: Optional[bool] = None
     status_id: Optional[int] = None
     planning_section_id: Optional[int] = None
     operator_ids: Optional[List[int]] = None
@@ -75,6 +77,7 @@ async def create_workstation(
 
     ws = WorkStation(
         name=payload.name,
+        is_active=payload.is_active,
         status_id=payload.status_id,
         planning_section_id=payload.planning_section_id,
         operator_ids=payload.operator_ids or [],
@@ -86,7 +89,22 @@ async def create_workstation(
     await db.commit()
     await db.refresh(ws)
     
-    return success_response(_serialize_workstation(ws), "Workstation created successfully")
+    # Batch load operators for enriched response
+    operators_by_id: dict = {}
+    if ws.operator_ids:
+        ops_result = await db.execute(select(User).where(User.id.in_(ws.operator_ids)))
+        for u in ops_result.scalars().all():
+            operators_by_id[u.id] = u
+
+    # Load planning section for enriched response
+    sections_by_id: dict = {}
+    if ws.planning_section_id:
+        ps_result = await db.execute(select(PlanningSection).where(PlanningSection.id == ws.planning_section_id))
+        ps = ps_result.scalar_one_or_none()
+        if ps:
+            sections_by_id[ps.id] = ps
+    
+    return success_response(_serialize_workstation(ws, operators_by_id, sections_by_id), "Workstation created successfully")
 
 
 @router.put("/{ws_id}", response_model=SuccessResponse[dict])
@@ -115,6 +133,9 @@ async def update_workstation(
                 detail="Workstation name must be unique"
             )
         ws.name = payload.name
+
+    if payload.is_active is not None:
+        ws.is_active = payload.is_active
 
     if payload.status_id is not None:
         status_result = await db.execute(select(Status).where(Status.value_id == payload.status_id))
@@ -146,7 +167,22 @@ async def update_workstation(
     await db.commit()
     await db.refresh(ws)
 
-    return success_response(_serialize_workstation(ws), "Workstation updated successfully")
+    # Batch load operators for enriched response
+    operators_by_id: dict = {}
+    if ws.operator_ids:
+        ops_result = await db.execute(select(User).where(User.id.in_(ws.operator_ids)))
+        for u in ops_result.scalars().all():
+            operators_by_id[u.id] = u
+
+    # Load planning section for enriched response
+    sections_by_id: dict = {}
+    if ws.planning_section_id:
+        ps_result = await db.execute(select(PlanningSection).where(PlanningSection.id == ws.planning_section_id))
+        ps = ps_result.scalar_one_or_none()
+        if ps:
+            sections_by_id[ps.id] = ps
+
+    return success_response(_serialize_workstation(ws, operators_by_id, sections_by_id), "Workstation updated successfully")
 
 
 @router.delete("/{ws_id}", response_model=SuccessResponse[dict])
@@ -167,6 +203,7 @@ async def delete_workstation(
         )
     
     ws.status_id = 0
+    ws.is_active = False
     ws.updated_at = datetime.now()
     ws.updated_by = current_user.id
     
@@ -196,7 +233,22 @@ async def get_workstation_by_name(
             detail="Workstation not found"
         )
     
-    return success_response(_serialize_workstation(ws), "Workstation retrieved successfully")
+    # Batch load operators for enriched response
+    operators_by_id: dict = {}
+    if ws.operator_ids:
+        ops_result = await db.execute(select(User).where(User.id.in_(ws.operator_ids)))
+        for u in ops_result.scalars().all():
+            operators_by_id[u.id] = u
+
+    # Load planning section for enriched response
+    sections_by_id: dict = {}
+    if ws.planning_section_id:
+        ps_result = await db.execute(select(PlanningSection).where(PlanningSection.id == ws.planning_section_id))
+        ps = ps_result.scalar_one_or_none()
+        if ps:
+            sections_by_id[ps.id] = ps
+    
+    return success_response(_serialize_workstation(ws, operators_by_id, sections_by_id), "Workstation retrieved successfully")
 
 
 @router.get("", response_model=SuccessResponse[dict])
@@ -281,7 +333,22 @@ async def get_workstation(
             detail="Workstation not found"
         )
     
-    return success_response(_serialize_workstation(ws), "Workstation retrieved successfully")
+    # Batch load operators for enriched response
+    operators_by_id: dict = {}
+    if ws.operator_ids:
+        ops_result = await db.execute(select(User).where(User.id.in_(ws.operator_ids)))
+        for u in ops_result.scalars().all():
+            operators_by_id[u.id] = u
+
+    # Load planning section for enriched response
+    sections_by_id: dict = {}
+    if ws.planning_section_id:
+        ps_result = await db.execute(select(PlanningSection).where(PlanningSection.id == ws.planning_section_id))
+        ps = ps_result.scalar_one_or_none()
+        if ps:
+            sections_by_id[ps.id] = ps
+    
+    return success_response(_serialize_workstation(ws, operators_by_id, sections_by_id), "Workstation retrieved successfully")
 
 def _serialize_workstation(ws: WorkStation, operators_by_id: dict = None, sections_by_id: dict = None) -> dict:
     operators_by_id = operators_by_id or {}
@@ -301,6 +368,7 @@ def _serialize_workstation(ws: WorkStation, operators_by_id: dict = None, sectio
     return {
         "id": ws.id,
         "name": ws.name,
+        "is_active": ws.is_active,
         "status_id": ws.status_id,
         "planning_section_id": ws.planning_section_id,
         "planning_section_name": ps.plan_name if ps else None,

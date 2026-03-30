@@ -20,6 +20,7 @@ class Templating(SQLModel, table=True):
     actual_end_date: Optional[datetime] = Field(default=None)
     duration: Optional[int] = Field(default=None)
     notes: Optional[List[str]] = Field(default=None, sa_column=Column(JSONB))
+    review_checklist: Optional[dict] = Field(default=None, sa_column=Column(JSONB), description="FAB review checklist with checkbox states")
     is_templating_schedule: bool = Field(default=False, description="Is templating scheduled")
     rescheduled: bool = Field(default=False, description="Was this templating rescheduled after unscheduling")
     is_completed: Optional[bool] = Field(default=None)  

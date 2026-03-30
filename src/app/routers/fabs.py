@@ -26,9 +26,10 @@ from src.app.database.stone_thickness import StoneThickness
 from src.app.database.templating import Templating
 from src.app.database.sales_ct import SalesCT
 from src.app.database.status import Status
+from src.app.interface.generated_schemas import ResurfaceScheduling, InstallScheduling
 
 from src.app.interface.business_schemas import (
-    FabCreate, FabUpdate, FabResponse, FabStageUpdate
+    FabCreate, FabUpdate, FabResponse, FabStageUpdate, ResurfaceSchedulingResponse, InstallSchedulingResponse
 )
 from src.app.interface.response_wrappers import SuccessResponse, error_response, success_response
 from src.app.middleware.jwt_auth import get_current_user
@@ -570,6 +571,16 @@ async def get_fabs(
         estimated_completion_date, percentage_completion = _compute_fab_progress_fields(plans)
         f["estimated_completion_date"] = estimated_completion_date
         f["percentage_completion"] = percentage_completion
+
+    # Step 6.2: Batch load resurface scheduling and attach per FAB
+    resurface_scheduling_map = await _batch_load_resurface_scheduling_responses(db, fab_ids)
+    for f in fabs:
+        f["resurface_scheduling"] = resurface_scheduling_map.get(f["id"])
+
+    # Step 6.3: Batch load install scheduling and attach per FAB
+    install_scheduling_map = await _batch_load_install_scheduling_responses(db, fab_ids)
+    for f in fabs:
+        f["install_details"] = install_scheduling_map.get(f["id"])
 
     # Step 7: Get total count with stage-specific date filtering
     count_query = select(func.count(Fab.id)).select_from(Fab)
@@ -3312,6 +3323,87 @@ async def _batch_load_resurface_data(db: AsyncSession, fab_ids: List[int]) -> di
             }
 
     return resurface_by_fab
+
+
+async def _batch_load_resurface_scheduling_responses(db: AsyncSession, fab_ids: List[int]) -> dict:
+    """Load full ResurfaceSchedulingResponse data for each FAB."""
+    if not fab_ids:
+        return {}
+    
+    query = (
+        select(ResurfaceScheduling)
+        .where(ResurfaceScheduling.fab_id.in_(fab_ids))
+        .order_by(ResurfaceScheduling.fab_id, ResurfaceScheduling.id.desc())
+    )
+
+    result = await db.execute(query)
+    rows = result.scalars().all()
+
+    resurface_responses_by_fab = {}
+    for r in rows:
+        if r.fab_id not in resurface_responses_by_fab:
+            resurface_responses_by_fab[r.fab_id] = ResurfaceSchedulingResponse(
+                id=r.id,
+                fab_id=r.fab_id,
+                technician_id=r.technician_id,
+                scheduled_start_date=r.scheduled_start_date,
+                scheduled_end_date=r.scheduled_end_date,
+                actual_start_date=r.actual_start_date,
+                actual_end_date=r.actual_end_date,
+                total_sqft=r.total_sqft,
+                completed_sqft=r.completed_sqft,
+                is_completed=r.is_completed,
+                status_id=r.status_id,
+                created_at=r.created_at,
+                updated_at=r.updated_at,
+                updated_by=r.updated_by
+            )
+
+    return resurface_responses_by_fab
+
+
+async def _batch_load_install_scheduling_responses(db: AsyncSession, fab_ids: List[int]) -> dict:
+    """Load full InstallSchedulingResponse data for each FAB."""
+    if not fab_ids:
+        return {}
+    
+    query = (
+        select(InstallScheduling)
+        .where(InstallScheduling.fab_id.in_(fab_ids))
+        .order_by(InstallScheduling.fab_id, InstallScheduling.id.desc())
+    )
+
+    result = await db.execute(query)
+    rows = result.scalars().all()
+
+    install_scheduling_responses_by_fab = {}
+    for r in rows:
+        if r.fab_id not in install_scheduling_responses_by_fab:
+            # Fetch installer name if installer_id is set
+            installer_name = None
+            if r.installer_id:
+                installer_result = await db.execute(select(User).where(User.id == r.installer_id))
+                installer = installer_result.scalar_one_or_none()
+                if installer:
+                    installer_name = f"{installer.first_name} {installer.last_name}".strip()
+            
+            install_scheduling_responses_by_fab[r.fab_id] = InstallSchedulingResponse(
+                id=r.id,
+                fab_id=r.fab_id,
+                installer_id=r.installer_id,
+                installer_name=installer_name,
+                scheduled_install_date=r.scheduled_install_date,
+                scheduled_end_date=r.scheduled_end_date,
+                actual_install_date=r.actual_install_date,
+                total_sqft=r.total_sqft,
+                is_completed=r.is_completed,
+                status_id=r.status_id,
+                created_at=r.created_at,
+                updated_at=r.updated_at,
+                updated_by=r.updated_by
+            )
+
+    return install_scheduling_responses_by_fab
 
 
 async def _batch_load_install_completion_data(db: AsyncSession, fab_ids: List[int]) -> dict:

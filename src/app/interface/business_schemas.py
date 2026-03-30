@@ -427,6 +427,8 @@ class FabResponse(BaseModel):
     shop_est_completion_date: Optional[datetime] = None
 
     plans: List[FabPlanResponse] = []
+    resurface_scheduling: Optional['ResurfaceSchedulingResponse'] = None
+    install_details: Optional['InstallSchedulingResponse'] = None
 
 
     class Config:
@@ -441,6 +443,7 @@ class TemplatingScheduleCreate(BaseModel):
     schedule_due_date: datetime = Field(..., description="Scheduled due date")
     total_sqft: Optional[str] = Field(None, description="Total square feet")
     notes: Optional[List[str]] = Field(None, description="Additional notes as array")
+    review_checklist: Optional[dict] = Field(None, description="FAB review checklist with checkbox states")
     revenue: Optional[float] = Field(None, ge=0, description="Revenue amount for the fab")
     
 
@@ -452,6 +455,7 @@ class TemplatingScheduleUpdate(BaseModel):
     schedule_due_date: Optional[date] = None
     total_sqft: Optional[float] = None  # Make sure this field exists
     notes: Optional[List[str]] = None
+    review_checklist: Optional[dict] = None
     actual_start_date: Optional[datetime] = None
     actual_end_date: Optional[datetime] = None
     duration: Optional[float] = None
@@ -484,6 +488,7 @@ class TemplatingResponse(BaseModel):
     actual_end_date: Optional[datetime] = None
     duration: Optional[float] = None
     notes: Optional[List[str]] = None
+    review_checklist: Optional[dict] = None
     is_templating_schedule: Optional[bool] = None
     rescheduled: bool = False  # NEW
     is_completed: Optional[bool] = None
@@ -1047,6 +1052,7 @@ class InstallSchedulingResponse(BaseModel):
     id: int
     fab_id: int
     installer_id: Optional[int]
+    installer_name: Optional[str] = None
     scheduled_install_date: Optional[datetime]
     scheduled_end_date: Optional[datetime]
     actual_install_date: Optional[datetime]
@@ -1396,6 +1402,108 @@ class OperatorJobTimerHistoryResponse(BaseModel):
     operator_id: int
     sessions: List[OperatorJobTimerSessionResponse]
     events: List[OperatorJobTimerEventResponse]
+
+
+# Installer Timer Schemas
+class InstallerJobTimerActionRequest(BaseModel):
+    action: str = Field(description="start, pause, resume, stop")
+    note: Optional[str] = None
+    timestamp: Optional[datetime] = None
+
+
+class InstallerJobTimerCommandRequest(BaseModel):
+    note: Optional[str] = None
+    timestamp: Optional[datetime] = None
+
+
+class InstallerJobTimerEventResponse(BaseModel):
+    id: int
+    session_id: int
+    action: str
+    event_at: datetime
+    note: Optional[str] = None
+
+
+class InstallerJobTimerSessionResponse(BaseModel):
+    id: int
+    job_id: int
+    fab_id: Optional[int] = None
+    installer_id: int
+    status: str
+    session_start_at: datetime
+    current_run_start_at: Optional[datetime] = None
+    current_pause_start_at: Optional[datetime] = None
+    stopped_at: Optional[datetime] = None
+    total_work_seconds: int
+    total_pause_seconds: int
+
+
+class InstallerJobTimerStateResponse(BaseModel):
+    job_id: int
+    installer_id: int
+    fab_id: Optional[int] = None
+    session: Optional[InstallerJobTimerSessionResponse] = None
+    total_actual_seconds: int
+    total_actual_hours: float
+
+
+class InstallerJobTimerHistoryResponse(BaseModel):
+    job_id: int
+    installer_id: int
+    fab_id: Optional[int] = None
+    sessions: List[InstallerJobTimerSessionResponse]
+    events: List[InstallerJobTimerEventResponse]
+
+
+# Templater Timer Schemas
+class TemplaterJobTimerActionRequest(BaseModel):
+    action: str = Field(description="start, pause, resume, stop")
+    note: Optional[str] = None
+    timestamp: Optional[datetime] = None
+
+
+class TemplaterJobTimerCommandRequest(BaseModel):
+    note: Optional[str] = None
+    timestamp: Optional[datetime] = None
+
+
+class TemplaterJobTimerEventResponse(BaseModel):
+    id: int
+    session_id: int
+    action: str
+    event_at: datetime
+    note: Optional[str] = None
+
+
+class TemplaterJobTimerSessionResponse(BaseModel):
+    id: int
+    job_id: int
+    fab_id: Optional[int] = None
+    templater_id: int
+    status: str
+    session_start_at: datetime
+    current_run_start_at: Optional[datetime] = None
+    current_pause_start_at: Optional[datetime] = None
+    stopped_at: Optional[datetime] = None
+    total_work_seconds: int
+    total_pause_seconds: int
+
+
+class TemplaterJobTimerStateResponse(BaseModel):
+    job_id: int
+    templater_id: int
+    fab_id: Optional[int] = None
+    session: Optional[TemplaterJobTimerSessionResponse] = None
+    total_actual_seconds: int
+    total_actual_hours: float
+
+
+class TemplaterJobTimerHistoryResponse(BaseModel):
+    job_id: int
+    templater_id: int
+    fab_id: Optional[int] = None
+    sessions: List[TemplaterJobTimerSessionResponse]
+    events: List[TemplaterJobTimerEventResponse]
 
 class EarliestAvailabilityItem(BaseModel):
     planning_section_id: int 

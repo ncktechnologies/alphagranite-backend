@@ -13,6 +13,7 @@ class File(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.now)
     file_size: str = Field(max_length=255)
     job_id: Optional[int] = Field(default=None, foreign_key="business_jobs.id", index=True)
+    fab_id: Optional[int] = Field(default=None, foreign_key="fabs.id", index=True)
     task_id: Optional[int] = Field(default=None, foreign_key="shop_cut_plans.id", index=True)
     uploaded_by: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
     stage: Optional[str] = Field(default=None, index=True)  # e.g., "drafting" or "revision")

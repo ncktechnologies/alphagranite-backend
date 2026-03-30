@@ -61,11 +61,20 @@ async def create_install_scheduling(
     await db.commit()
     await db.refresh(install_scheduling)
     
+    # Fetch installer name if installer_id is set
+    installer_name = None
+    if install_scheduling.installer_id:
+        installer_result = await db.execute(select(User).where(User.id == install_scheduling.installer_id))
+        installer = installer_result.scalar_one_or_none()
+        if installer:
+            installer_name = f"{installer.first_name} {installer.last_name}".strip()
+    
     return success_response(
         InstallSchedulingResponse(
             id=install_scheduling.id,
             fab_id=install_scheduling.fab_id,
             installer_id=install_scheduling.installer_id,
+            installer_name=installer_name,
             scheduled_install_date=install_scheduling.scheduled_install_date,
             scheduled_end_date=install_scheduling.scheduled_end_date,
             actual_install_date=install_scheduling.actual_install_date,
@@ -106,11 +115,20 @@ async def update_install_scheduling(
     await db.commit()
     await db.refresh(install_scheduling)
     
+    # Fetch installer name if installer_id is set
+    installer_name = None
+    if install_scheduling.installer_id:
+        installer_result = await db.execute(select(User).where(User.id == install_scheduling.installer_id))
+        installer = installer_result.scalar_one_or_none()
+        if installer:
+            installer_name = f"{installer.first_name} {installer.last_name}".strip()
+    
     return success_response(
         InstallSchedulingResponse(
             id=install_scheduling.id,
             fab_id=install_scheduling.fab_id,
             installer_id=install_scheduling.installer_id,
+            installer_name=installer_name,
             scheduled_install_date=install_scheduling.scheduled_install_date,
             scheduled_end_date=install_scheduling.scheduled_end_date,
             actual_install_date=install_scheduling.actual_install_date,
@@ -139,11 +157,20 @@ async def get_install_scheduling_by_fab(
     if not install_scheduling:
         raise error_response("Install Scheduling not found for this fab", 404)
     
+    # Fetch installer name if installer_id is set
+    installer_name = None
+    if install_scheduling.installer_id:
+        installer_result = await db.execute(select(User).where(User.id == install_scheduling.installer_id))
+        installer = installer_result.scalar_one_or_none()
+        if installer:
+            installer_name = f"{installer.first_name} {installer.last_name}".strip()
+    
     return success_response(
         InstallSchedulingResponse(
             id=install_scheduling.id,
             fab_id=install_scheduling.fab_id,
             installer_id=install_scheduling.installer_id,
+            installer_name=installer_name,
             scheduled_install_date=install_scheduling.scheduled_install_date,
             scheduled_end_date=install_scheduling.scheduled_end_date,
             actual_install_date=install_scheduling.actual_install_date,

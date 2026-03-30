@@ -9,6 +9,7 @@ class PlanningSection(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     plan_name: str = Field(max_length=255, unique=True, index=True)
     plan_description: Optional[str] = None
+    is_active: bool = Field(default=True)
     status_id: int = Field(foreign_key="status.value_id")
     created_at: datetime = Field(default_factory=datetime.now)
     created_by: int = Field(foreign_key="users.id")

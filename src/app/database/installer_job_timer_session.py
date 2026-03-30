@@ -4,14 +4,13 @@ from typing import Optional
 from sqlmodel import Field, SQLModel
 
 
-class OperatorJobTimerSession(SQLModel, table=True):
-    __tablename__ = "operator_job_timer_sessions"
+class InstallerJobTimerSession(SQLModel, table=True):
+    __tablename__ = "installer_job_timer_sessions"
 
     id: Optional[int] = Field(default=None, primary_key=True)
     job_id: int = Field(foreign_key="business_jobs.id", index=True)
     fab_id: Optional[int] = Field(default=None, foreign_key="fabs.id", index=True)
-    operator_id: int = Field(foreign_key="users.id", index=True)
-    workstation_id: Optional[int] = Field(default=None, foreign_key="work_stations.id", index=True)
+    installer_id: int = Field(foreign_key="users.id", index=True)
     status: str = Field(max_length=20)
 
     session_start_at: datetime
