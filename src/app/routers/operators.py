@@ -685,7 +685,6 @@ async def get_workstation_task_by_id(
         .join(Edge, Edge.id == Fab.edge_id, isouter=True)
         .where(
             ShopCutPlan.id == task_id,
-            ShopCutPlan.user_id == operator_id,
             ShopCutPlan.workstation_id == workstation_id,
         )
         .limit(1)
@@ -791,7 +790,6 @@ async def update_workstation_task_by_id(
         .join(Edge, Edge.id == Fab.edge_id, isouter=True)
         .where(
             ShopCutPlan.id == task_id,
-            ShopCutPlan.user_id == operator_id,
             ShopCutPlan.workstation_id == workstation_id,
         )
         .limit(1)
@@ -923,7 +921,6 @@ async def get_active_workstation_task_by_operator(
         .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
         .join(Edge, Edge.id == Fab.edge_id, isouter=True)
         .where(
-            ShopCutPlan.user_id == operator_id,
             ShopCutPlan.workstation_id == workstation_id,
             Fab.job_id == active_session.job_id,
         )
