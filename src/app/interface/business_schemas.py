@@ -1465,6 +1465,8 @@ class TemplaterJobTimerActionRequest(BaseModel):
 class TemplaterJobTimerCommandRequest(BaseModel):
     note: Optional[str] = None
     timestamp: Optional[datetime] = None
+    sqft_templated: Optional[float] = None
+    sqft_not_templated: Optional[float] = None
 
 
 class TemplaterJobTimerEventResponse(BaseModel):
@@ -1487,6 +1489,8 @@ class TemplaterJobTimerSessionResponse(BaseModel):
     stopped_at: Optional[datetime] = None
     total_work_seconds: int
     total_pause_seconds: int
+    sqft_templated: Optional[float] = None
+    sqft_not_templated: Optional[float] = None
 
 
 class TemplaterJobTimerStateResponse(BaseModel):
