@@ -111,16 +111,28 @@ async def create_employee(
     # Extract employee and password from result
     employee = result["employee"]
     generated_password = result["password"]
+    notification = result.get("notification")
     
     # Enrich employee with profile image URL
     enriched_employee = await enrich_employee_with_profile_image(db, employee)
     
     # Add generated password to response
     enriched_employee["password"] = generated_password
+
+    # Include notification delivery diagnostics for easier debugging.
+    enriched_employee["notification"] = notification
+
+    message = "Employee created successfully."
+    if notification is None:
+        message = "Employee created successfully. No notification email attempt was made."
+    elif isinstance(notification, dict) and notification.get("success"):
+        message = "Employee created successfully. Password email sent to employee."
+    else:
+        message = "Employee created successfully, but password email failed to send. Check notification details/logs."
     
     return success_response(
         data=enriched_employee,
-        message="Employee created successfully. Password has been generated and sent to employee's email."
+        message=message
     )
 
 @employee_router.get("/{employee_id}")

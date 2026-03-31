@@ -102,6 +102,7 @@ async def schedule_templating(
         existing_templating.schedule_due_date = schedule_due
         existing_templating.total_sqft = templating_data.total_sqft
         existing_templating.notes = templating_data.notes
+        existing_templating.review_checklist = templating_data.review_checklist
         existing_templating.rescheduled = True  # NEW: Mark as rescheduled
         existing_templating.updated_at = utc_now()
         existing_templating.updated_by = current_user.id
@@ -115,6 +116,7 @@ async def schedule_templating(
             schedule_due_date=schedule_due,
             total_sqft=templating_data.total_sqft,
             notes=templating_data.notes,
+            review_checklist=templating_data.review_checklist,
             is_templating_schedule=True,
             rescheduled=False,  # NEW: First schedule is not a reschedule
             status_id=1,
@@ -155,6 +157,7 @@ async def schedule_templating(
         actual_start_date=templating.actual_start_date,
         duration=templating.duration,
         notes=templating.notes,
+        review_checklist=templating.review_checklist,
         is_templating_schedule=templating.is_templating_schedule,
         is_completed=templating.is_completed,
         rescheduled=templating.rescheduled,  # NEW

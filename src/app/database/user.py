@@ -18,7 +18,7 @@ class User(SQLModel, table=True):
     username: str = Field(index=True, unique=True)
     employee_id: UUID = Field(index=True)
     phone: Optional[str] = Field(default=None, max_length=255)
-    email: str = Field(index=True, unique=True, max_length=255)
+    email: str = Field(index=True, max_length=255)
     home_address: Optional[str] = Field(default=None, max_length=255)
     gender: Optional[str] = Field(default=None, max_length=255)
     profile_image_id: Optional[int] = Field(default=None)

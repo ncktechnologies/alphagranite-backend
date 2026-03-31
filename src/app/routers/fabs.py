@@ -26,9 +26,10 @@ from src.app.database.stone_thickness import StoneThickness
 from src.app.database.templating import Templating
 from src.app.database.sales_ct import SalesCT
 from src.app.database.status import Status
+from src.app.interface.generated_schemas import ResurfaceScheduling, InstallScheduling
 
 from src.app.interface.business_schemas import (
-    FabCreate, FabUpdate, FabResponse, FabStageUpdate
+    FabCreate, FabUpdate, FabResponse, FabStageUpdate, ResurfaceSchedulingResponse, InstallSchedulingResponse
 )
 from src.app.interface.response_wrappers import SuccessResponse, error_response, success_response
 from src.app.middleware.jwt_auth import get_current_user
@@ -57,6 +58,7 @@ FAB_STAGES = [
 ]
 
 BASE_URL = os.getenv("BASE_URL", "https://api.ag.easybusiness.ng")
+PUNCHOUT_REDIRECT_FAB_TYPES = ("PUNCHOUT-AG", "PUNCHOUT-BILLABLE")
 
 def _add_total_cut_lnft(fab_dict: dict) -> None:
     # Uses wj_linft (existing model field), with fallback to wj_lnft if present.
@@ -128,6 +130,11 @@ def _stage_filter_condition(stage_name: str):
                 Fab.current_stage == "cut_list",
                 Fab.shop_est_completion_date.isnot(None),
             ),
+        )
+    if stage_name == "install_scheduling":
+        return and_(
+            Fab.current_stage == "install_scheduling",
+            ~Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
         )
     return Fab.current_stage == stage_name
 
@@ -390,9 +397,11 @@ async def create_fab(
     fab_type = (fab_dict.get("fab_type") or "").strip().upper()
     fab_dict["fab_type"] = fab_type  # persist uppercase globally
 
-    if fab_type in {"PUNCHOUT-AG", "PUNCHOUT-BILLABLE"}:
-        current_stage = "install_scheduling"
-        next_stage = get_next_stage("install_scheduling")
+    if fab_type in PUNCHOUT_REDIRECT_FAB_TYPES:
+        # Punchout FABs should be handled via the shop-est-completion flow,
+        # not shown in install_scheduling lists.
+        current_stage = "cut_list"
+        next_stage = get_next_stage("cut_list")
     elif fab_type == "RESURFACE":
         current_stage = "resurface_scheduling"
         next_stage = get_next_stage("resurface_scheduling")
@@ -562,6 +571,16 @@ async def get_fabs(
         estimated_completion_date, percentage_completion = _compute_fab_progress_fields(plans)
         f["estimated_completion_date"] = estimated_completion_date
         f["percentage_completion"] = percentage_completion
+
+    # Step 6.2: Batch load resurface scheduling and attach per FAB
+    resurface_scheduling_map = await _batch_load_resurface_scheduling_responses(db, fab_ids)
+    for f in fabs:
+        f["resurface_scheduling"] = resurface_scheduling_map.get(f["id"])
+
+    # Step 6.3: Batch load install scheduling and attach per FAB
+    install_scheduling_map = await _batch_load_install_scheduling_responses(db, fab_ids)
+    for f in fabs:
+        f["install_details"] = install_scheduling_map.get(f["id"])
 
     # Step 7: Get total count with stage-specific date filtering
     count_query = select(func.count(Fab.id)).select_from(Fab)
@@ -803,18 +822,20 @@ async def get_fabs_with_shop_est_completion(
 
     # Step 3: Build main query
     search_filter = None
-    if search and type:
-        if type == "fab_id":
-            search_filter = sa.cast(Fab.id, sa.String) == search
-        elif type == "job_number":
-            search_filter = BusinessJob.job_number == search
-        elif type == "job_name":
-            search_filter = BusinessJob.name.ilike(f"%{search}%")
-    else:
-        search_filter = None
+    search_value = search.strip() if isinstance(search, str) else search
+    search_type = type.strip().lower() if isinstance(type, str) else None
+    if search_value and search_type:
+        if search_type == "fab_id":
+            search_filter = sa.cast(Fab.id, sa.String) == search_value
+        elif search_type == "job_number":
+            search_filter = sa.cast(BusinessJob.job_number, sa.String) == search_value
+        elif search_type == "job_name":
+            search_filter = BusinessJob.name.ilike(f"%{search_value}%")
+
+    stage_for_query = None if current_stage == "install_scheduling" else current_stage
 
     query = _build_fab_list_query(
-        job_id, fab_type, sales_person_id, status_id, current_stage, next_stage,
+        job_id, fab_type, sales_person_id, status_id, stage_for_query, next_stage,
         None,  # search is handled below
         templating_fab_ids, latest_templating, shop_date_start, shop_date_end,
         template_completed_start, template_completed_end, predraft_completed_start, predraft_completed_end,
@@ -822,19 +843,32 @@ async def get_fabs_with_shop_est_completion(
         date_filter
     )
 
-    # Filter to only FABs with a shop_est_completion_date set
-    query = query.where(Fab.shop_est_completion_date.isnot(None))
+    if current_stage == "install_scheduling":
+        query = query.where(
+            or_(
+                _stage_filter_condition(current_stage),
+                Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+            )
+        )
+
+    # Include records that already have shop_est_completion_date or belong to
+    # punchout FAB types that should be handled in this endpoint.
+    shop_est_or_punchout_filter = or_(
+        Fab.shop_est_completion_date.isnot(None),
+        Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+    )
+    query = query.where(shop_est_or_punchout_filter)
 
     # Apply search filter if present
     if search_filter is not None:
         query = query.where(search_filter)
-    elif search:
-        search_term = f"%{search}%"
+    elif search_value:
+        search_term = f"%{search_value}%"
         query = query.where(
             or_(
-                sa.cast(Fab.id, sa.String) == search,
+                sa.cast(Fab.id, sa.String) == search_value,
                 BusinessJob.name.ilike(search_term),
-                BusinessJob.job_number == search
+                sa.cast(BusinessJob.job_number, sa.String) == search_value
             )
         )
 
@@ -866,8 +900,7 @@ async def get_fabs_with_shop_est_completion(
     count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
     count_query = count_query.outerjoin(latest_templating, sa.literal(True))
 
-    # Filter to only FABs with a shop_est_completion_date set
-    count_query = count_query.where(Fab.shop_est_completion_date.isnot(None))
+    count_query = count_query.where(shop_est_or_punchout_filter)
 
     # Apply all basic filters to count query
     if job_id is not None:
@@ -879,7 +912,15 @@ async def get_fabs_with_shop_est_completion(
     if status_id is not None:
         count_query = count_query.where(Fab.status_id == status_id)
     if current_stage:
-        count_query = count_query.where(_stage_filter_condition(current_stage))
+        if current_stage == "install_scheduling":
+            count_query = count_query.where(
+                or_(
+                    _stage_filter_condition(current_stage),
+                    Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+                )
+            )
+        else:
+            count_query = count_query.where(_stage_filter_condition(current_stage))
     if next_stage:
         count_query = count_query.where(Fab.next_stage == next_stage)
 
@@ -927,13 +968,13 @@ async def get_fabs_with_shop_est_completion(
 
     if search_filter is not None:
         count_query = count_query.where(search_filter)
-    elif search:
-        search_term = f"%{search}%"
+    elif search_value:
+        search_term = f"%{search_value}%"
         count_query = count_query.where(
             or_(
-                sa.cast(Fab.id, sa.String) == search,
+                sa.cast(Fab.id, sa.String) == search_value,
                 BusinessJob.name.ilike(search_term),
-                BusinessJob.job_number == search
+                sa.cast(BusinessJob.job_number, sa.String) == search_value
             )
         )
 
@@ -961,9 +1002,19 @@ async def get_fabs_with_shop_est_completion(
             func.sum(Fab.miter_linft).label("miter_linft"),
             func.sum(Fab.saw_cut_lnft).label("saw_cut_lnft"),
             func.sum(Fab.no_of_pieces).label("no_of_pieces")
-        ).select_from(Fab).where(_stage_filter_condition(current_stage))
+        ).select_from(Fab)
 
-        stage_totals_query = stage_totals_query.where(Fab.shop_est_completion_date.isnot(None))
+        if current_stage == "install_scheduling":
+            stage_totals_query = stage_totals_query.where(
+                or_(
+                    _stage_filter_condition(current_stage),
+                    Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+                )
+            )
+        else:
+            stage_totals_query = stage_totals_query.where(_stage_filter_condition(current_stage))
+
+        stage_totals_query = stage_totals_query.where(shop_est_or_punchout_filter)
 
         if job_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.job_id == job_id)
@@ -995,14 +1046,14 @@ async def get_fabs_with_shop_est_completion(
 
         if search_filter is not None:
             stage_totals_query = stage_totals_query.where(search_filter)
-        elif search:
-            search_term = f"%{search}%"
+        elif search_value:
+            search_term = f"%{search_value}%"
             stage_totals_query = stage_totals_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
             stage_totals_query = stage_totals_query.where(
                 or_(
-                    sa.cast(Fab.id, sa.String) == search,
+                    sa.cast(Fab.id, sa.String) == search_value,
                     BusinessJob.name.ilike(search_term),
-                    BusinessJob.job_number == search
+                    sa.cast(BusinessJob.job_number, sa.String) == search_value
                 )
             )
 
@@ -1190,6 +1241,10 @@ async def get_fab(
     # Fetch draft data
     draft_data = await get_draft_data(db, fab_id)
     fab_dict["draft_data"] = draft_data
+
+    # Fetch CNC data
+    cnc_data = await get_cnc_data(db, fab_id)
+    fab_dict["cnc_data"] = cnc_data
     
     # Fetch Sales CT data
     sales_ct_data = await get_sales_ct_data(db, fab_id)
@@ -1507,6 +1562,10 @@ async def get_fabs_by_job(
         # Fetch draft data
         draft_data = await get_draft_data(db, fab_dict["id"])
         fab_dict["draft_data"] = draft_data
+
+        # Fetch CNC data
+        cnc_data = await get_cnc_data(db, fab_dict["id"])
+        fab_dict["cnc_data"] = cnc_data
         
         # Fetch Sales CT data
         sales_ct_data = await get_sales_ct_data(db, fab_dict["id"])
@@ -1585,7 +1644,10 @@ async def get_fabs_by_stage(
     if stage_name == "install_scheduling":
         query = query.where(
             or_(
-                Fab.current_stage == "install_scheduling",
+                and_(
+                    Fab.current_stage == "install_scheduling",
+                    ~Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+                ),
                 and_(
                     Fab.current_stage == "resurface_scheduling",
                     Fab.shop_date_schedule.isnot(None),
@@ -1605,7 +1667,10 @@ async def get_fabs_by_stage(
     if stage_name == "install_scheduling":
         count_query = select(func.count()).select_from(Fab).where(
             or_(
-                Fab.current_stage == "install_scheduling",
+                and_(
+                    Fab.current_stage == "install_scheduling",
+                    ~Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+                ),
                 and_(
                     Fab.current_stage == "resurface_scheduling",
                     Fab.shop_date_schedule.isnot(None),
@@ -1706,6 +1771,10 @@ async def get_fabs_by_stage(
         # Fetch draft data
         draft_data = await get_draft_data(db, fab_dict["id"])
         fab_dict["draft_data"] = draft_data
+
+        # Fetch CNC data
+        cnc_data = await get_cnc_data(db, fab_dict["id"])
+        fab_dict["cnc_data"] = cnc_data
         
         # Fetch Sales CT data
         sales_ct_data = await get_sales_ct_data(db, fab_dict["id"])
@@ -1972,6 +2041,10 @@ async def get_pending_final_programming_fabs(
         # Fetch draft data
         draft_data = await get_draft_data(db, fab_dict["id"])
         fab_dict["draft_data"] = draft_data
+
+        # Fetch CNC data
+        cnc_data = await get_cnc_data(db, fab_dict["id"])
+        fab_dict["cnc_data"] = cnc_data
         
         # Fetch Sales CT data
         sales_ct_data = await get_sales_ct_data(db, fab_dict["id"])
@@ -2654,6 +2727,7 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
         for fab_dict in fab_dicts:
             fab_dict["fab_notes"] = []
             fab_dict["draft_data"] = None
+            fab_dict["cnc_data"] = None
             fab_dict["sales_ct_data"] = None
             fab_dict["slabsmith_data"] = None
             fab_dict["resurface_details"] = None
@@ -2669,6 +2743,9 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
     
     # Load drafting data
     drafting_by_fab = await _batch_load_drafting_data(db, fab_ids)
+
+    # Load CNC data
+    cnc_by_fab = await _batch_load_cnc_data(db, fab_ids)
     
     # Load sales CT data
     sales_ct_by_fab = await _batch_load_sales_ct_data(db, fab_ids)
@@ -2692,6 +2769,7 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
         fab_id = fab_dict["id"]
         fab_dict["fab_notes"] = notes_by_fab.get(fab_id, [])
         fab_dict["draft_data"] = drafting_by_fab.get(fab_id)
+        fab_dict["cnc_data"] = cnc_by_fab.get(fab_id)
         fab_dict["sales_ct_data"] = sales_ct_by_fab.get(fab_id)
         fab_dict["slabsmith_data"] = slabsmith_by_fab.get(fab_id)
         fab_dict["resurface_details"] = resurface_by_fab.get(fab_id)
@@ -2848,6 +2926,108 @@ async def _batch_load_drafting_data(db: AsyncSession, fab_ids: List[int]) -> dic
             }
     
     return drafting_by_fab
+
+
+async def _batch_load_cnc_data(db: AsyncSession, fab_ids: List[int]) -> dict:
+    """Load CNC drafting data with files for each FAB."""
+    from src.app.database.cnc import CNCDrafting
+    from src.app.database.file import File
+    from sqlalchemy.orm import aliased
+
+    DrafterUser = aliased(User)
+    UpdaterUser = aliased(User)
+
+    query = select(
+        CNCDrafting,
+        DrafterUser.first_name.label("drafter_first_name"),
+        DrafterUser.last_name.label("drafter_last_name"),
+        UpdaterUser.first_name.label("updater_first_name"),
+        UpdaterUser.last_name.label("updater_last_name")
+    ).where(CNCDrafting.fab_id.in_(fab_ids))\
+     .join(DrafterUser, CNCDrafting.drafter_id == DrafterUser.id, isouter=True)\
+     .join(UpdaterUser, CNCDrafting.updated_by == UpdaterUser.id, isouter=True)\
+     .order_by(CNCDrafting.fab_id, CNCDrafting.id.desc())
+
+    result = await db.execute(query)
+    rows = result.all()
+
+    all_file_ids = set()
+    for row in rows:
+        cnc = row[0]
+        if cnc.file_ids:
+            all_file_ids.update(int(fid.strip()) for fid in cnc.file_ids.split(",") if fid.strip())
+
+    files_by_id = {}
+    if all_file_ids:
+        UploaderUser = aliased(User)
+        files_query = (
+            select(File, UploaderUser.first_name, UploaderUser.last_name)
+            .join(UploaderUser, File.uploaded_by == UploaderUser.id, isouter=True)
+            .where(File.id.in_(all_file_ids))
+        )
+        files_result = await db.execute(files_query)
+        for file_row in files_result.all():
+            file = file_row[0]
+            uploader_first = file_row[1]
+            uploader_last = file_row[2]
+            file_url = f"{BASE_URL}/api/v1/files/{file.id}/view"
+            files_by_id[file.id] = {
+                "id": file.id,
+                "name": file.name,
+                "file_url": file_url,
+                "file_type": file.file_type,
+                "file_size": file.file_size,
+                "stage": file.stage,
+                "file_design": file.file_design,
+                "stage_name": file.stage_name,
+                "uploaded_by": file.uploaded_by,
+                "uploaded_by_name": f"{uploader_first} {uploader_last}" if uploader_first else None,
+                "created_by": file.uploaded_by,
+                "created_by_name": f"{uploader_first} {uploader_last}" if uploader_first else None,
+                "created_at": file.created_at.isoformat() if file.created_at else None,
+            }
+
+    cnc_by_fab = {}
+    for row in rows:
+        cnc = row[0]
+        if cnc.fab_id not in cnc_by_fab:
+            files_data = []
+            if cnc.file_ids:
+                file_id_list = [int(fid.strip()) for fid in cnc.file_ids.split(",") if fid.strip()]
+                files_data = [files_by_id[fid] for fid in file_id_list if fid in files_by_id]
+
+            cnc_by_fab[cnc.fab_id] = {
+                "id": cnc.id,
+                "fab_id": cnc.fab_id,
+                "drafter_id": cnc.drafter_id,
+                "drafter_name": f"{row[1]} {row[2]}" if row[1] else None,
+                "scheduled_start_date": cnc.scheduled_start_date.isoformat() if cnc.scheduled_start_date else None,
+                "scheduled_end_date": cnc.scheduled_end_date.isoformat() if cnc.scheduled_end_date else None,
+                "drafter_start_date": cnc.drafter_start_date.isoformat() if cnc.drafter_start_date else None,
+                "drafter_end_date": cnc.drafter_end_date.isoformat() if cnc.drafter_end_date else None,
+                "total_sqft_required_to_draft": cnc.total_sqft_required_to_draft,
+                "total_sqft": float(cnc.total_sqft) if cnc.total_sqft is not None else None,
+                "no_of_pieces": cnc.no_of_pieces,
+                "cad_review_complete": cnc.cad_review_complete,
+                "draft_completed": cnc.draft_completed,
+                "notes": cnc.notes,
+                "current_stage": cnc.current_stage,
+                "total_sqft_drafted": float(cnc.total_sqft_drafted) if cnc.total_sqft_drafted is not None else None,
+                "no_of_piece_drafted": cnc.no_of_piece_drafted,
+                "draft_note": cnc.draft_note,
+                "mentions": cnc.mentions,
+                "total_hours_drafted": float(cnc.total_hours_drafted) if cnc.total_hours_drafted is not None else None,
+                "is_completed": cnc.is_completed,
+                "file_ids": cnc.file_ids,
+                "files": files_data,
+                "status_id": cnc.status_id,
+                "created_at": cnc.created_at.isoformat() if cnc.created_at else None,
+                "updated_at": cnc.updated_at.isoformat() if cnc.updated_at else None,
+                "updated_by": cnc.updated_by,
+                "updated_by_name": f"{row[3]} {row[4]}" if row[3] else None,
+            }
+
+    return cnc_by_fab
 
 
 async def _batch_load_sales_ct_data(db: AsyncSession, fab_ids: List[int]) -> dict:
@@ -3176,6 +3356,103 @@ async def get_draft_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
     }
 
 
+async def get_cnc_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
+    """Get the latest CNC drafting data for a FAB"""
+    from src.app.database.cnc import CNCDrafting
+    from src.app.database.file import File
+    from sqlalchemy.orm import aliased
+
+    DrafterUser = aliased(User)
+    UpdaterUser = aliased(User)
+
+    query = select(
+        CNCDrafting,
+        DrafterUser.first_name.label("drafter_first_name"),
+        DrafterUser.last_name.label("drafter_last_name"),
+        UpdaterUser.first_name.label("updater_first_name"),
+        UpdaterUser.last_name.label("updater_last_name")
+    ).where(CNCDrafting.fab_id == fab_id)\
+     .join(DrafterUser, CNCDrafting.drafter_id == DrafterUser.id, isouter=True)\
+     .join(UpdaterUser, CNCDrafting.updated_by == UpdaterUser.id, isouter=True)\
+     .order_by(CNCDrafting.id.desc())\
+     .limit(1)
+
+    result = await db.execute(query)
+    row = result.first()
+
+    if not row:
+        return None
+
+    cnc = row[0]
+    drafter_first = row[1]
+    drafter_last = row[2]
+    updater_first = row[3]
+    updater_last = row[4]
+
+    files_data = []
+    if cnc.file_ids:
+        file_id_list = [int(fid.strip()) for fid in cnc.file_ids.split(",") if fid.strip()]
+        if file_id_list:
+            UploaderUser = aliased(User)
+            files_query = (
+                select(File, UploaderUser.first_name, UploaderUser.last_name)
+                .join(UploaderUser, File.uploaded_by == UploaderUser.id, isouter=True)
+                .where(File.id.in_(file_id_list))
+            )
+            files_result = await db.execute(files_query)
+            for file_row in files_result.all():
+                file = file_row[0]
+                uploader_first = file_row[1]
+                uploader_last = file_row[2]
+                file_url = f"{BASE_URL}/api/v1/files/{file.id}/view"
+                files_data.append({
+                    "id": file.id,
+                    "name": file.name,
+                    "file_url": file_url,
+                    "file_type": file.file_type,
+                    "file_size": file.file_size,
+                    "stage": file.stage,
+                    "file_design": file.file_design,
+                    "stage_name": file.stage_name,
+                    "uploaded_by": file.uploaded_by,
+                    "uploaded_by_name": f"{uploader_first} {uploader_last}" if uploader_first else None,
+                    "created_by": file.uploaded_by,
+                    "created_by_name": f"{uploader_first} {uploader_last}" if uploader_first else None,
+                    "created_at": file.created_at.isoformat() if file.created_at else None,
+                })
+
+    return {
+        "id": cnc.id,
+        "fab_id": cnc.fab_id,
+        "drafter_id": cnc.drafter_id,
+        "drafter_name": f"{drafter_first} {drafter_last}" if drafter_first else None,
+        "scheduled_start_date": cnc.scheduled_start_date.isoformat() if cnc.scheduled_start_date else None,
+        "scheduled_end_date": cnc.scheduled_end_date.isoformat() if cnc.scheduled_end_date else None,
+        "drafter_start_date": cnc.drafter_start_date.isoformat() if cnc.drafter_start_date else None,
+        "drafter_end_date": cnc.drafter_end_date.isoformat() if cnc.drafter_end_date else None,
+        "total_sqft_required_to_draft": cnc.total_sqft_required_to_draft,
+        "total_sqft": float(cnc.total_sqft) if cnc.total_sqft is not None else None,
+        "no_of_pieces": cnc.no_of_pieces,
+        "cad_review_complete": cnc.cad_review_complete,
+        "draft_completed": cnc.draft_completed,
+        "notes": cnc.notes,
+        "current_stage": cnc.current_stage,
+        "total_sqft_drafted": float(cnc.total_sqft_drafted) if cnc.total_sqft_drafted is not None else None,
+        "no_of_piece_drafted": cnc.no_of_piece_drafted,
+        "draft_note": cnc.draft_note,
+        "mentions": cnc.mentions,
+        "total_hours_drafted": float(cnc.total_hours_drafted) if cnc.total_hours_drafted is not None else None,
+        "is_completed": cnc.is_completed,
+        "file_ids": cnc.file_ids,
+        "files": files_data,
+        "status_id": cnc.status_id,
+        "created_at": cnc.created_at.isoformat() if cnc.created_at else None,
+        "updated_at": cnc.updated_at.isoformat() if cnc.updated_at else None,
+        "updated_by": cnc.updated_by,
+        "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None,
+    }
+
+
 async def get_sales_ct_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
     """Get the latest sales CT data for a FAB"""
     from src.app.database.file import File
@@ -3294,6 +3571,87 @@ async def _batch_load_resurface_data(db: AsyncSession, fab_ids: List[int]) -> di
             }
 
     return resurface_by_fab
+
+
+async def _batch_load_resurface_scheduling_responses(db: AsyncSession, fab_ids: List[int]) -> dict:
+    """Load full ResurfaceSchedulingResponse data for each FAB."""
+    if not fab_ids:
+        return {}
+    
+    query = (
+        select(ResurfaceScheduling)
+        .where(ResurfaceScheduling.fab_id.in_(fab_ids))
+        .order_by(ResurfaceScheduling.fab_id, ResurfaceScheduling.id.desc())
+    )
+
+    result = await db.execute(query)
+    rows = result.scalars().all()
+
+    resurface_responses_by_fab = {}
+    for r in rows:
+        if r.fab_id not in resurface_responses_by_fab:
+            resurface_responses_by_fab[r.fab_id] = ResurfaceSchedulingResponse(
+                id=r.id,
+                fab_id=r.fab_id,
+                technician_id=r.technician_id,
+                scheduled_start_date=r.scheduled_start_date,
+                scheduled_end_date=r.scheduled_end_date,
+                actual_start_date=r.actual_start_date,
+                actual_end_date=r.actual_end_date,
+                total_sqft=r.total_sqft,
+                completed_sqft=r.completed_sqft,
+                is_completed=r.is_completed,
+                status_id=r.status_id,
+                created_at=r.created_at,
+                updated_at=r.updated_at,
+                updated_by=r.updated_by
+            )
+
+    return resurface_responses_by_fab
+
+
+async def _batch_load_install_scheduling_responses(db: AsyncSession, fab_ids: List[int]) -> dict:
+    """Load full InstallSchedulingResponse data for each FAB."""
+    if not fab_ids:
+        return {}
+    
+    query = (
+        select(InstallScheduling)
+        .where(InstallScheduling.fab_id.in_(fab_ids))
+        .order_by(InstallScheduling.fab_id, InstallScheduling.id.desc())
+    )
+
+    result = await db.execute(query)
+    rows = result.scalars().all()
+
+    install_scheduling_responses_by_fab = {}
+    for r in rows:
+        if r.fab_id not in install_scheduling_responses_by_fab:
+            # Fetch installer name if installer_id is set
+            installer_name = None
+            if r.installer_id:
+                installer_result = await db.execute(select(User).where(User.id == r.installer_id))
+                installer = installer_result.scalar_one_or_none()
+                if installer:
+                    installer_name = f"{installer.first_name} {installer.last_name}".strip()
+            
+            install_scheduling_responses_by_fab[r.fab_id] = InstallSchedulingResponse(
+                id=r.id,
+                fab_id=r.fab_id,
+                installer_id=r.installer_id,
+                installer_name=installer_name,
+                scheduled_install_date=r.scheduled_install_date,
+                scheduled_end_date=r.scheduled_end_date,
+                actual_install_date=r.actual_install_date,
+                total_sqft=r.total_sqft,
+                is_completed=r.is_completed,
+                status_id=r.status_id,
+                created_at=r.created_at,
+                updated_at=r.updated_at,
+                updated_by=r.updated_by
+            )
+
+    return install_scheduling_responses_by_fab
 
 
 async def _batch_load_install_completion_data(db: AsyncSession, fab_ids: List[int]) -> dict:

@@ -94,6 +94,7 @@ def _serialize_operator_file(file: File, base_url: str, operator_id: int) -> dic
         "file_design": file.file_design or "",
         "stage_name": file.stage_name or "",
         "job_id": file.job_id,
+        "fab_id": file.fab_id,
         "task_id": file.task_id,
         "uploaded_by": file.uploaded_by,
         "created_at": file.created_at.isoformat() if file.created_at else None,
@@ -115,6 +116,7 @@ def _serialize_operator_task_file(file: File, base_url: str, operator_id: int) -
         ),
         "file_type": file.file_type,
         "file_design": file.file_design or "",
+        "fab_id": file.fab_id,
         "created_at": file.created_at.isoformat() if file.created_at else None,
     }
 
@@ -365,6 +367,7 @@ def _normalize_naive_dt(value: Optional[datetime]) -> Optional[datetime]:
 def _serialize_operator_job_timer_session(session: OperatorJobTimerSession) -> dict:
     return {
         "id": session.id,
+        "fab_id": session.fab_id,
         "job_id": session.job_id,
         "operator_id": session.operator_id,
         "workstation_id": session.workstation_id,
@@ -382,6 +385,7 @@ def _serialize_operator_job_timer_event(event: OperatorJobTimerEvent) -> dict:
     return {
         "id": event.id,
         "session_id": event.session_id,
+        "fab_id": event.fab_id,
         "action": event.action,
         "event_at": event.event_at.isoformat() if event.event_at else None,
         "note": event.note,
@@ -392,13 +396,22 @@ def _serialize_operator_job_timer_event(event: OperatorJobTimerEvent) -> dict:
 async def _recalculate_operator_job_work_totals(
     db: AsyncSession,
     *,
+    fab_id: Optional[int] = None,
     job_id: int,
     operator_id: int,
     as_of: datetime,
     workstation_id: Optional[int] = None,
 ) -> tuple[float, int]:
+    if fab_id is not None:
+        timer_scope_filter = or_(
+            OperatorJobTimerSession.fab_id == fab_id,
+            (OperatorJobTimerSession.fab_id.is_(None)) & (OperatorJobTimerSession.job_id == job_id),
+        )
+    else:
+        timer_scope_filter = OperatorJobTimerSession.job_id == job_id
+
     totals_query = select(func.coalesce(func.sum(OperatorJobTimerSession.total_work_seconds), 0)).where(
-            OperatorJobTimerSession.job_id == job_id,
+            timer_scope_filter,
             OperatorJobTimerSession.operator_id == operator_id,
         )
     if workstation_id is not None:
@@ -408,11 +421,11 @@ async def _recalculate_operator_job_work_totals(
     stored_seconds = int(totals_result.scalar() or 0)
 
     running_query = select(OperatorJobTimerSession).where(
-            OperatorJobTimerSession.job_id == job_id,
-            OperatorJobTimerSession.operator_id == operator_id,
-            OperatorJobTimerSession.status == "running",
-            OperatorJobTimerSession.current_run_start_at.is_not(None),
-        )
+        timer_scope_filter,
+        OperatorJobTimerSession.operator_id == operator_id,
+        OperatorJobTimerSession.status == "running",
+        OperatorJobTimerSession.current_run_start_at.is_not(None),
+    )
     if workstation_id is not None:
         running_query = running_query.where(OperatorJobTimerSession.workstation_id == workstation_id)
 
@@ -434,6 +447,7 @@ async def _get_active_operator_job_session(
     db: AsyncSession,
     *,
     operator_id: int,
+    fab_id: Optional[int] = None,
     job_id: Optional[int] = None,
     workstation_id: Optional[int] = None,
 ) -> Optional[OperatorJobTimerSession]:
@@ -441,7 +455,17 @@ async def _get_active_operator_job_session(
         OperatorJobTimerSession.operator_id == operator_id,
         OperatorJobTimerSession.status.in_(["running", "paused"]),
     )
-    if job_id is not None:
+    if fab_id is not None:
+        if job_id is not None:
+            query = query.where(
+                or_(
+                    OperatorJobTimerSession.fab_id == fab_id,
+                    (OperatorJobTimerSession.fab_id.is_(None)) & (OperatorJobTimerSession.job_id == job_id),
+                )
+            )
+        else:
+            query = query.where(OperatorJobTimerSession.fab_id == fab_id)
+    elif job_id is not None:
         query = query.where(OperatorJobTimerSession.job_id == job_id)
     if workstation_id is not None:
         query = query.where(OperatorJobTimerSession.workstation_id == workstation_id)
@@ -685,7 +709,6 @@ async def get_workstation_task_by_id(
         .join(Edge, Edge.id == Fab.edge_id, isouter=True)
         .where(
             ShopCutPlan.id == task_id,
-            ShopCutPlan.user_id == operator_id,
             ShopCutPlan.workstation_id == workstation_id,
         )
         .limit(1)
@@ -791,7 +814,6 @@ async def update_workstation_task_by_id(
         .join(Edge, Edge.id == Fab.edge_id, isouter=True)
         .where(
             ShopCutPlan.id == task_id,
-            ShopCutPlan.user_id == operator_id,
             ShopCutPlan.workstation_id == workstation_id,
         )
         .limit(1)
@@ -923,7 +945,6 @@ async def get_active_workstation_task_by_operator(
         .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
         .join(Edge, Edge.id == Fab.edge_id, isouter=True)
         .where(
-            ShopCutPlan.user_id == operator_id,
             ShopCutPlan.workstation_id == workstation_id,
             Fab.job_id == active_session.job_id,
         )
@@ -1050,6 +1071,7 @@ async def get_current_operator_tasks(
 async def _process_current_operator_job_timer_action(
     *,
     job_id: int,
+    fab_id: Optional[int],
     action: str,
     db: AsyncSession,
     current_user: User,
@@ -1085,7 +1107,12 @@ async def _process_current_operator_job_timer_action(
             if operator_id not in (workstation.operator_ids or []):
                 raise HTTPException(status_code=400, detail="Workstation is not assigned to this operator")
 
-        active_session = await _get_active_operator_job_session(db, operator_id=operator_id, job_id=job_id)
+        active_session = await _get_active_operator_job_session(
+            db,
+            operator_id=operator_id,
+            fab_id=fab_id,
+            job_id=job_id,
+        )
         active_any_session = await _get_active_operator_job_session(db, operator_id=operator_id)
 
         if normalized_action == "start":
@@ -1099,6 +1126,7 @@ async def _process_current_operator_job_timer_action(
 
             session = OperatorJobTimerSession(
                 job_id=job_id,
+                fab_id=fab_id,
                 operator_id=operator_id,
                 workstation_id=workstation_id,
                 status="running",
@@ -1116,6 +1144,7 @@ async def _process_current_operator_job_timer_action(
                 OperatorJobTimerEvent(
                     session_id=session.id,
                     job_id=job_id,
+                    fab_id=fab_id,
                     operator_id=operator_id,
                     workstation_id=workstation_id,
                     action="start",
@@ -1148,6 +1177,7 @@ async def _process_current_operator_job_timer_action(
                 OperatorJobTimerEvent(
                     session_id=active_session.id,
                     job_id=job_id,
+                    fab_id=fab_id,
                     operator_id=operator_id,
                     workstation_id=workstation_id or active_session.workstation_id,
                     action="pause",
@@ -1179,6 +1209,7 @@ async def _process_current_operator_job_timer_action(
                 OperatorJobTimerEvent(
                     session_id=active_session.id,
                     job_id=job_id,
+                    fab_id=fab_id,
                     operator_id=operator_id,
                     workstation_id=workstation_id or active_session.workstation_id,
                     action="resume",
@@ -1218,6 +1249,7 @@ async def _process_current_operator_job_timer_action(
                 OperatorJobTimerEvent(
                     session_id=active_session.id,
                     job_id=job_id,
+                    fab_id=fab_id,
                     operator_id=operator_id,
                     workstation_id=workstation_id or active_session.workstation_id,
                     action="stop",
@@ -1234,6 +1266,7 @@ async def _process_current_operator_job_timer_action(
 
         total_actual_hours, total_actual_seconds = await _recalculate_operator_job_work_totals(
             db=db,
+            fab_id=fab_id,
             job_id=job_id,
             operator_id=operator_id,
             as_of=action_ts,
@@ -1245,6 +1278,7 @@ async def _process_current_operator_job_timer_action(
 
         return success_response(
             {
+                "fab_id": fab_id,
                 "job_id": job_id,
                 "operator_id": operator_id,
                 "workstation_id": target_session.workstation_id,
@@ -1265,17 +1299,33 @@ async def _process_current_operator_job_timer_action(
         raise HTTPException(status_code=500, detail=f"Failed to process timer action: {str(exc)}")
 
 
-@router.post("/me/jobs/{job_id}/timer/action", response_model=SuccessResponse[dict])
+async def _get_fab_and_job_id(db: AsyncSession, fab_id: int) -> tuple[Fab, int]:
+    fab_result = await db.execute(select(Fab).where(Fab.id == fab_id))
+    fab = fab_result.scalar_one_or_none()
+    if not fab:
+        raise HTTPException(status_code=404, detail=f"FAB with ID {fab_id} not found")
+
+    job_id = fab.job_id
+    if job_id is None:
+        raise HTTPException(status_code=400, detail=f"FAB {fab_id} is not linked to a job")
+
+    return fab, job_id
+
+
+@router.post("/me/jobs/{fab_id}/timer/action", response_model=SuccessResponse[dict])
 async def manage_current_operator_job_timer(
-    job_id: int,
+    fab_id: int,
     payload: OperatorJobTimerActionRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Start, pause, resume, or stop a timer for the current operator on a job."""
+    """Start, pause, resume, or stop a timer for the current operator on a FAB."""
+
+    _, job_id = await _get_fab_and_job_id(db, fab_id)
 
     return await _process_current_operator_job_timer_action(
         job_id=job_id,
+        fab_id=fab_id,
         action=payload.action,
         note=payload.note,
         workstation_id=payload.workstation_id,
@@ -1284,17 +1334,20 @@ async def manage_current_operator_job_timer(
     )
 
 
-@router.post("/me/jobs/{job_id}/timer/start", response_model=SuccessResponse[dict])
+@router.post("/me/jobs/{fab_id}/timer/start", response_model=SuccessResponse[dict])
 async def start_current_operator_job_timer(
-    job_id: int,
+    fab_id: int,
     payload: OperatorJobTimerCommandRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Start a timer for the current operator on a job."""
+    """Start a timer for the current operator on a FAB."""
+
+    _, job_id = await _get_fab_and_job_id(db, fab_id)
 
     return await _process_current_operator_job_timer_action(
         job_id=job_id,
+        fab_id=fab_id,
         action="start",
         note=payload.note,
         workstation_id=payload.workstation_id,
@@ -1303,17 +1356,20 @@ async def start_current_operator_job_timer(
     )
 
 
-@router.post("/me/jobs/{job_id}/timer/pause", response_model=SuccessResponse[dict])
+@router.post("/me/jobs/{fab_id}/timer/pause", response_model=SuccessResponse[dict])
 async def pause_current_operator_job_timer(
-    job_id: int,
+    fab_id: int,
     payload: OperatorJobTimerCommandRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Pause a running timer for the current operator on a job."""
+    """Pause a running timer for the current operator on a FAB."""
+
+    _, job_id = await _get_fab_and_job_id(db, fab_id)
 
     return await _process_current_operator_job_timer_action(
         job_id=job_id,
+        fab_id=fab_id,
         action="pause",
         note=payload.note,
         workstation_id=payload.workstation_id,
@@ -1322,17 +1378,20 @@ async def pause_current_operator_job_timer(
     )
 
 
-@router.post("/me/jobs/{job_id}/timer/resume", response_model=SuccessResponse[dict])
+@router.post("/me/jobs/{fab_id}/timer/resume", response_model=SuccessResponse[dict])
 async def resume_current_operator_job_timer(
-    job_id: int,
+    fab_id: int,
     payload: OperatorJobTimerCommandRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Resume a paused timer for the current operator on a job."""
+    """Resume a paused timer for the current operator on a FAB."""
+
+    _, job_id = await _get_fab_and_job_id(db, fab_id)
 
     return await _process_current_operator_job_timer_action(
         job_id=job_id,
+        fab_id=fab_id,
         action="resume",
         note=payload.note,
         workstation_id=payload.workstation_id,
@@ -1341,17 +1400,20 @@ async def resume_current_operator_job_timer(
     )
 
 
-@router.post("/me/jobs/{job_id}/timer/stop", response_model=SuccessResponse[dict])
+@router.post("/me/jobs/{fab_id}/timer/stop", response_model=SuccessResponse[dict])
 async def stop_current_operator_job_timer(
-    job_id: int,
+    fab_id: int,
     payload: OperatorJobTimerCommandRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Stop an active timer for the current operator on a job."""
+    """Stop an active timer for the current operator on a FAB."""
+
+    _, job_id = await _get_fab_and_job_id(db, fab_id)
 
     return await _process_current_operator_job_timer_action(
         job_id=job_id,
+        fab_id=fab_id,
         action="stop",
         note=payload.note,
         workstation_id=payload.workstation_id,
@@ -1360,27 +1422,27 @@ async def stop_current_operator_job_timer(
     )
 
 
-@router.get("/me/jobs/{job_id}/timer", response_model=SuccessResponse[dict])
+@router.get("/me/jobs/{fab_id}/timer", response_model=SuccessResponse[dict])
 async def get_current_operator_job_timer_state(
-    job_id: int,
+    fab_id: int,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get current timer state for the logged-in operator on a job."""
+    """Get current timer state for the logged-in operator on a FAB."""
 
     operator_id = current_user.id
     if operator_id is None:
         raise HTTPException(status_code=403, detail="Invalid operator context")
 
-    job_result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
-    job = job_result.scalar_one_or_none()
-    if not job:
-        raise HTTPException(status_code=404, detail=f"Job with ID {job_id} not found")
+    _, job_id = await _get_fab_and_job_id(db, fab_id)
 
     latest_result = await db.execute(
         select(OperatorJobTimerSession)
         .where(
-            OperatorJobTimerSession.job_id == job_id,
+            or_(
+                OperatorJobTimerSession.fab_id == fab_id,
+                (OperatorJobTimerSession.fab_id.is_(None)) & (OperatorJobTimerSession.job_id == job_id),
+            ),
             OperatorJobTimerSession.operator_id == operator_id,
         )
         .order_by(OperatorJobTimerSession.created_at.desc())
@@ -1391,6 +1453,7 @@ async def get_current_operator_job_timer_state(
     now_ts = datetime.now().replace(second=0, microsecond=0)
     total_actual_hours, total_actual_seconds = await _recalculate_operator_job_work_totals(
         db=db,
+        fab_id=fab_id,
         job_id=job_id,
         operator_id=operator_id,
         as_of=now_ts,
@@ -1398,6 +1461,7 @@ async def get_current_operator_job_timer_state(
 
     return success_response(
         {
+            "fab_id": fab_id,
             "job_id": job_id,
             "operator_id": operator_id,
             "workstation_id": latest.workstation_id if latest else None,
@@ -1409,27 +1473,27 @@ async def get_current_operator_job_timer_state(
     )
 
 
-@router.get("/me/jobs/{job_id}/timer/history", response_model=SuccessResponse[dict])
+@router.get("/me/jobs/{fab_id}/timer/history", response_model=SuccessResponse[dict])
 async def get_current_operator_job_timer_history(
-    job_id: int,
+    fab_id: int,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get timer session and event history for the logged-in operator on a job."""
+    """Get timer session and event history for the logged-in operator on a FAB."""
 
     operator_id = current_user.id
     if operator_id is None:
         raise HTTPException(status_code=403, detail="Invalid operator context")
 
-    job_result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
-    job = job_result.scalar_one_or_none()
-    if not job:
-        raise HTTPException(status_code=404, detail=f"Job with ID {job_id} not found")
+    _, job_id = await _get_fab_and_job_id(db, fab_id)
 
     sessions_result = await db.execute(
         select(OperatorJobTimerSession)
         .where(
-            OperatorJobTimerSession.job_id == job_id,
+            or_(
+                OperatorJobTimerSession.fab_id == fab_id,
+                (OperatorJobTimerSession.fab_id.is_(None)) & (OperatorJobTimerSession.job_id == job_id),
+            ),
             OperatorJobTimerSession.operator_id == operator_id,
         )
         .order_by(OperatorJobTimerSession.created_at.asc())
@@ -1439,7 +1503,10 @@ async def get_current_operator_job_timer_history(
     events_result = await db.execute(
         select(OperatorJobTimerEvent)
         .where(
-            OperatorJobTimerEvent.job_id == job_id,
+            or_(
+                OperatorJobTimerEvent.fab_id == fab_id,
+                (OperatorJobTimerEvent.fab_id.is_(None)) & (OperatorJobTimerEvent.job_id == job_id),
+            ),
             OperatorJobTimerEvent.operator_id == operator_id,
         )
         .order_by(OperatorJobTimerEvent.event_at.asc())
@@ -1448,6 +1515,7 @@ async def get_current_operator_job_timer_history(
 
     return success_response(
         {
+            "fab_id": fab_id,
             "job_id": job_id,
             "operator_id": operator_id,
             "sessions": [_serialize_operator_job_timer_session(session) for session in sessions],
@@ -1458,7 +1526,7 @@ async def get_current_operator_job_timer_history(
 
 
 @router.post(
-    "/{operator_id}/jobs/{job_id}/upload",
+    "/{operator_id}/jobs/{fab_id}/upload",
     response_model=SuccessResponse[dict],
     openapi_extra={
         "requestBody": {
@@ -1484,7 +1552,7 @@ async def get_current_operator_job_timer_history(
 )
 async def upload_operator_job_qa_file(
     operator_id: int,
-    job_id: int,
+    fab_id: int,
     request: Request,
     file: UploadFile = FileUpload(...),
     file_design: str = Form("qa"),
@@ -1495,17 +1563,14 @@ async def upload_operator_job_qa_file(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Upload a QA file for a specific operator and job."""
+    """Upload a QA file for a specific operator and FAB."""
 
     operator_result = await db.execute(select(User).where(User.id == operator_id))
     operator = operator_result.scalar_one_or_none()
     if not operator:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Operator not found")
 
-    job_result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
-    job = job_result.scalar_one_or_none()
-    if not job:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    _, job_id = await _get_fab_and_job_id(db, fab_id)
 
     # Prevent spoofed uploads for another operator unless super admin.
     if not getattr(current_user, "is_super_admin", False) and current_user.id != operator_id:
@@ -1521,14 +1586,14 @@ async def upload_operator_job_qa_file(
             .where(
                 ShopCutPlan.id == task_id,
                 ShopCutPlan.user_id == operator_id,
-                Fab.job_id == job_id,
+                Fab.id == fab_id,
             )
         )
         task = task_result.scalar_one_or_none()
         if not task:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Task not found for this operator and job",
+                detail="Task not found for this operator and FAB",
             )
 
     settings = get_settings()
@@ -1557,7 +1622,7 @@ async def upload_operator_job_qa_file(
                 detail=f"File extension not allowed. Allowed extensions: {', '.join(settings.ALLOWED_EXTENSIONS)}",
             )
 
-    upload_directory = directory or f"uploads/jobs/{job_id}/qa"
+    upload_directory = directory or f"uploads/fabs/{fab_id}/qa"
 
     resolved_file_type = file_type or "qa"
 
@@ -1570,6 +1635,7 @@ async def upload_operator_job_qa_file(
         file_design=file_design,
         stage_name=stage_name,
         job_id=job_id,
+        fab_id=fab_id,
         task_id=task_id,
         request=request,
     )
@@ -1577,6 +1643,7 @@ async def upload_operator_job_qa_file(
     return success_response(
         {
             **file_data,
+            "fab_id": fab_id,
             "job_id": job_id,
             "task_id": task_id,
             "operator_id": operator_id,
@@ -1653,15 +1720,15 @@ async def _get_operator_uploaded_files_response(
     )
 
 
-@router.get("/{operator_id}/jobs/{job_id}/files/{file_id}/view", response_model=SuccessResponse[dict])
+@router.get("/{operator_id}/jobs/{fab_id}/files/{file_id}/view", response_model=SuccessResponse[dict])
 async def view_operator_job_document(
     operator_id: int,
-    job_id: int,
+    fab_id: int,
     file_id: int,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Return a viewable file URL for operator job documents."""
+    """Return a viewable file URL for operator FAB documents."""
 
     operator_result = await db.execute(select(User).where(User.id == operator_id))
     operator = operator_result.scalar_one_or_none()
@@ -1674,11 +1741,19 @@ async def view_operator_job_document(
             detail="Not authorized to access files for this operator",
         )
 
+    _, job_id = await _get_fab_and_job_id(db, fab_id)
+
     file_result = await db.execute(
-        select(File).where(
+        select(File)
+        .outerjoin(ShopCutPlan, ShopCutPlan.id == File.task_id)
+        .where(
             File.id == file_id,
-            File.job_id == job_id,
+            or_(
+                File.fab_id == fab_id,
+                (File.fab_id.is_(None)) & (File.job_id == job_id),
+            ),
             File.uploaded_by == operator_id,
+            or_(File.task_id.is_(None), ShopCutPlan.fab_id == fab_id),
         )
     )
     db_file = file_result.scalar_one_or_none()
@@ -1707,9 +1782,8 @@ async def view_operator_job_document(
         )
 
     # Return JSON response with viewable file URL
-    from src.app.config import get_settings as get_app_settings
-    settings = get_app_settings()
-    base_url = settings.BASE_URL
+    settings = get_settings()
+    base_url = settings.API_BASE_URL
     
     return success_response(
         {
@@ -1718,6 +1792,7 @@ async def view_operator_job_document(
             "file_type": db_file.file_type,
             "file_size": db_file.file_size,
             "file_url": f"{base_url}/api/v1/files/{db_file.id}/view",
+            "fab_id": fab_id,
             "job_id": job_id,
             "operator_id": operator_id,
         },

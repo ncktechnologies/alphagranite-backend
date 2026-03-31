@@ -9,6 +9,7 @@ class WorkStation(SQLModel, table=True, extend_existing=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(max_length=255, unique=True, index=True)
+    is_active: bool = Field(default=True)
     status_id: int = Field(foreign_key="status.value_id")
     planning_section_id: Optional[int] = Field(default=None, foreign_key="planning_sections.id")
     operator_ids: Optional[List[int]] = Field(default=None, sa_column=Column(JSONB))

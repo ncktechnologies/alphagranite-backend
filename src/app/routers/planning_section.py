@@ -19,6 +19,7 @@ router = APIRouter()
 async def create_planning_section(
     plan_name: str = Form(...),
     plan_description: Optional[str] = Form(None),
+    is_active: bool = Form(True),
     status_id: int = Form(1),
     db: AsyncSession = Depends(get_db),
     created_by: int = 1,
@@ -35,6 +36,7 @@ async def create_planning_section(
     section = PlanningSectionSchema(
         plan_name=plan_name,
         plan_description=plan_description,
+        is_active=is_active,
         status_id=status_id,
         created_by=created_by,
         created_at=datetime.now(),
@@ -50,6 +52,7 @@ async def update_planning_section(
     section_id: int,
     plan_name: str = Form(...),
     plan_description: Optional[str] = Form(None),
+    is_active: Optional[bool] = Form(None),
     status_id: int = Form(...),
     db: AsyncSession = Depends(get_db),
     updated_by: int = 1,
@@ -72,6 +75,8 @@ async def update_planning_section(
 
     section.plan_name = plan_name
     section.plan_description = plan_description
+    if is_active is not None:
+        section.is_active = is_active
     section.status_id = status_id
     section.updated_by = updated_by
     section.updated_at = datetime.now()
@@ -95,10 +100,24 @@ async def get_planning_section_by_name(
     return success_response(section, "Planning section retrieved successfully")
 
 
+@router.get("/planning-section/by-name/{planning_section_name}", response_model=SuccessResponse[PlanningSectionSchema])
+async def get_planning_section_by_name_path(
+    planning_section_name: str,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(PlanningSectionSchema).where(PlanningSectionSchema.plan_name == planning_section_name)
+    )
+    section = result.scalar_one_or_none()
+    if not section:
+        raise error_response("Planning section not found", 404)
+    return success_response(section, "Planning section retrieved successfully")
+
+
 @router.get("/planning-section/active", response_model=SuccessResponse[List[PlanningSectionSchema]])  # required
 async def get_active_planning_sections(db: AsyncSession = Depends(get_db)):
     result = await db.execute(
-        select(PlanningSectionSchema).where(PlanningSectionSchema.status_id == 1)
+        select(PlanningSectionSchema).where(PlanningSectionSchema.is_active.is_(True))
     )
     sections = result.scalars().all()
     return success_response(sections, "Active planning sections retrieved successfully")
@@ -130,6 +149,7 @@ async def get_workstations_by_planning_section(
         {
             "planning_section_id": planning_section_id,
             "plan_name": section.plan_name,
+            "is_active": section.is_active,
             "total": len(workstations),
             "workstations": [
                 {
