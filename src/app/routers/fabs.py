@@ -832,14 +832,24 @@ async def get_fabs_with_shop_est_completion(
         elif search_type == "job_name":
             search_filter = BusinessJob.name.ilike(f"%{search_value}%")
 
+    stage_for_query = None if current_stage == "install_scheduling" else current_stage
+
     query = _build_fab_list_query(
-        job_id, fab_type, sales_person_id, status_id, current_stage, next_stage,
+        job_id, fab_type, sales_person_id, status_id, stage_for_query, next_stage,
         None,  # search is handled below
         templating_fab_ids, latest_templating, shop_date_start, shop_date_end,
         template_completed_start, template_completed_end, predraft_completed_start, predraft_completed_end,
         draft_completed_start, draft_completed_end, sct_completed_start, sct_completed_end,
         date_filter
     )
+
+    if current_stage == "install_scheduling":
+        query = query.where(
+            or_(
+                _stage_filter_condition(current_stage),
+                Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+            )
+        )
 
     # Include records that already have shop_est_completion_date or belong to
     # punchout FAB types that should be handled in this endpoint.
@@ -902,7 +912,15 @@ async def get_fabs_with_shop_est_completion(
     if status_id is not None:
         count_query = count_query.where(Fab.status_id == status_id)
     if current_stage:
-        count_query = count_query.where(_stage_filter_condition(current_stage))
+        if current_stage == "install_scheduling":
+            count_query = count_query.where(
+                or_(
+                    _stage_filter_condition(current_stage),
+                    Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+                )
+            )
+        else:
+            count_query = count_query.where(_stage_filter_condition(current_stage))
     if next_stage:
         count_query = count_query.where(Fab.next_stage == next_stage)
 
@@ -984,7 +1002,17 @@ async def get_fabs_with_shop_est_completion(
             func.sum(Fab.miter_linft).label("miter_linft"),
             func.sum(Fab.saw_cut_lnft).label("saw_cut_lnft"),
             func.sum(Fab.no_of_pieces).label("no_of_pieces")
-        ).select_from(Fab).where(_stage_filter_condition(current_stage))
+        ).select_from(Fab)
+
+        if current_stage == "install_scheduling":
+            stage_totals_query = stage_totals_query.where(
+                or_(
+                    _stage_filter_condition(current_stage),
+                    Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+                )
+            )
+        else:
+            stage_totals_query = stage_totals_query.where(_stage_filter_condition(current_stage))
 
         stage_totals_query = stage_totals_query.where(shop_est_or_punchout_filter)
 
