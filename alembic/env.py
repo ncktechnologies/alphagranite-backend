@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Optional
 from logging.config import fileConfig
 
 from sqlalchemy import pool
@@ -14,7 +15,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 load_dotenv()
 
 # Import SQLModel for SQLModel.metadata
-from sqlmodel import SQLModel
+from sqlmodel import Field, SQLModel
 
 # Import your models to register them with SQLModel.metadata
 from src.app.database.user import User
@@ -34,7 +35,6 @@ from src.app.database.edge import Edge
 from src.app.database.fab_notes import FabNotes
 from src.app.database.fab_type import FabType
 from src.app.database.job_note import JobNote
-from src.app.database.job import Job, JobApplication, JobBase
 from src.app.database.planning_section import PlanningSection
 from src.app.database.work_station import WorkStation
 from src.app.database.stone_color import StoneColor
@@ -52,6 +52,9 @@ from src.app.database.templater_job_timer_session import TemplaterJobTimerSessio
 from src.app.database.templater_job_timer_event import TemplaterJobTimerEvent
 from src.app.database.installer_job_timer_session import InstallerJobTimerSession
 from src.app.database.installer_job_timer_event import InstallerJobTimerEvent
+
+
+
 # Models defined in generated_schemas (includes re-exports from database/*.py thin wrappers)
 from src.app.interface.generated_schemas import (
     Templating, SlabSmith, ShopPlanning,
@@ -93,6 +96,12 @@ if config.config_file_name is not None:
 # Set up target metadata for autogenerate support
 target_metadata = SQLModel.metadata
 
+
+def include_object(object_, name, type_, reflected, compare_to):
+    if type_ == "table" and name == "companies" and _is_company_placeholder:
+        return False
+    return True
+
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
@@ -115,6 +124,7 @@ def run_migrations_offline() -> None:
     context.configure(
         url=url,
         target_metadata=target_metadata,
+        include_object=include_object,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -138,7 +148,9 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection,
+            target_metadata=target_metadata,
+            include_object=include_object,
         )
 
         with context.begin_transaction():
