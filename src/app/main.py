@@ -79,7 +79,7 @@ log_level = os.getenv("LOG_LEVEL", "INFO")
 setup_logging(log_level)
 
 # Get CORS settings from environment variables or use defaults
-cors_origins_str = os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:3000,http://localhost:5173")
+cors_origins_str = os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:3000,http://localhost:5173,https://ag.staging.easybusiness.ng")
 cors_origins = ["*"] if cors_origins_str == "*" else cors_origins_str.split(",")
 cors_methods = os.getenv("CORS_ALLOW_METHODS", "GET,POST,PUT,DELETE,OPTIONS,PATCH").split(",")
 cors_headers = os.getenv("CORS_ALLOW_HEADERS", "*").split(",")
