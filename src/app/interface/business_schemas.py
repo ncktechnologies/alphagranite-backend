@@ -1517,4 +1517,141 @@ class EarliestAvailabilityRequest(BaseModel):
     start_from: Optional[datetime] = None
     slot_minutes: int = 30
     search_horizon_days: int = 30
+
+
+# ============ CNC DRAFTING SCHEMAS ============
+
+class CNCDraftingItem(BaseModel):
+    fab_id: int
+    scheduled_start_date: datetime
+    scheduled_end_date: datetime
+    total_sqft_required_to_draft: float
+
+
+class CNCDraftingCreate(BaseModel):
+    drafter_id: int
+    items: List[CNCDraftingItem]
+
+
+class CNCDraftingUpdate(BaseModel):
+    total_sqft: Optional[float] = Field(None, description="Updated square feet")
+    no_of_pieces: Optional[int] = Field(None, description="Number of pieces")
+    cad_review_complete: Optional[bool] = None
+    draft_completed: Optional[bool] = None
+    notes: Optional[str] = None
+    current_stage: Optional[str] = None
+    drafter_start_date: Optional[datetime] = None
+    drafter_end_date: Optional[datetime] = None
+    total_sqft_drafted: Optional[float] = None
+    no_of_piece_drafted: Optional[int] = None
+    draft_note: Optional[str] = None
+    total_hours_drafted: Optional[float] = None
+    mentions: Optional[str] = None
+    is_completed: Optional[bool] = None
+    status_id: Optional[int] = None
+
+    @field_validator('drafter_start_date', 'drafter_end_date', mode='before')
+    @classmethod
+    def remove_timezone(cls, v):
+        if v is None:
+            return v
+        if isinstance(v, str):
+            if v.endswith('Z'):
+                v = v[:-1] + '+00:00'
+            dt = datetime.fromisoformat(v)
+            return dt.replace(tzinfo=None)
+        if isinstance(v, datetime) and v.tzinfo is not None:
+            return v.replace(tzinfo=None)
+        return v
+
+
+class CNCDraftingSubmitUpdate(BaseModel):
+    total_sqft: Optional[float] = None
+    no_of_piece: Optional[int] = None
+    is_completed: Optional[bool] = False
+    note: Optional[str] = None
+    mentions: Optional[str] = None
+
+
+class CNCDraftingResponse(BaseModel):
+    id: int
+    fab_id: int
+    drafter_id: int
+    drafter_name: Optional[str] = None
+    scheduled_start_date: datetime
+    scheduled_end_date: datetime
+    drafter_start_date: Optional[datetime] = None
+    drafter_end_date: Optional[datetime] = None
+    total_sqft_required_to_draft: str
+    total_sqft: Optional[float] = None
+    no_of_pieces: Optional[int] = None
+    cad_review_complete: Optional[bool] = None
+    draft_completed: Optional[bool] = None
+    notes: Optional[str] = None
+    current_stage: Optional[str] = None
+    total_sqft_drafted: Optional[float] = None
+    no_of_piece_drafted: Optional[int] = None
+    draft_note: Optional[str] = None
+    mentions: Optional[str] = None
+    total_hours_drafted: Optional[float] = None
+    is_completed: bool
+    file_ids: Optional[str] = None
+    status_id: int
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+
+class CNCDraftingSessionAction(BaseModel):
+    drafter_id: int
+    action: str  # start, pause, resume, on_hold, end
+    session_start_time: Optional[datetime] = None
+    session_end_time: Optional[datetime] = None
+    timestamp: Optional[datetime] = None
+    sqft_drafted: Optional[str] = None
+    work_percentage_done: Optional[float] = None
+    note: Optional[str] = None
+    is_revision: Optional[bool] = False
+
+    @field_validator('timestamp', 'session_start_time', 'session_end_time', mode='before')
+    @classmethod
+    def clean_iso_timestamp(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, str):
+            v = v.replace('. ', '.')
+            return datetime.fromisoformat(v.replace('Z', '+00:00'))
+        return v
+
+
+class CNCDraftingSessionNoteResponse(BaseModel):
+    timestamp: datetime
+    action: str
+    note: Optional[str] = None
+    sqft_drafted: Optional[str] = None
+    work_percentage_done: Optional[int] = None
+
+
+class CNCDraftingSessionResponse(BaseModel):
+    session_id: int
+    fab_id: int
+    drafter_id: int
+    status: str
+    current_session_start_time: datetime
+    last_action_time: Optional[datetime] = None
+    total_time_spent: int
+    cumulative_sqft_drafted: str
+    work_percentage_done: int
+    current_pause_start_time: Optional[datetime] = None
+    total_pause_duration: int
+    notes: List[CNCDraftingSessionNoteResponse]
+
+
+class CNCDraftingSessionHistoryResponse(BaseModel):
+    fab_id: int
+    sessions: List[CNCDraftingSessionResponse]
+    total_sessions: int
     max_proposals_per_request: int = 3

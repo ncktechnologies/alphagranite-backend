@@ -1213,6 +1213,10 @@ async def get_fab(
     # Fetch draft data
     draft_data = await get_draft_data(db, fab_id)
     fab_dict["draft_data"] = draft_data
+
+    # Fetch CNC data
+    cnc_data = await get_cnc_data(db, fab_id)
+    fab_dict["cnc_data"] = cnc_data
     
     # Fetch Sales CT data
     sales_ct_data = await get_sales_ct_data(db, fab_id)
@@ -1530,6 +1534,10 @@ async def get_fabs_by_job(
         # Fetch draft data
         draft_data = await get_draft_data(db, fab_dict["id"])
         fab_dict["draft_data"] = draft_data
+
+        # Fetch CNC data
+        cnc_data = await get_cnc_data(db, fab_dict["id"])
+        fab_dict["cnc_data"] = cnc_data
         
         # Fetch Sales CT data
         sales_ct_data = await get_sales_ct_data(db, fab_dict["id"])
@@ -1735,6 +1743,10 @@ async def get_fabs_by_stage(
         # Fetch draft data
         draft_data = await get_draft_data(db, fab_dict["id"])
         fab_dict["draft_data"] = draft_data
+
+        # Fetch CNC data
+        cnc_data = await get_cnc_data(db, fab_dict["id"])
+        fab_dict["cnc_data"] = cnc_data
         
         # Fetch Sales CT data
         sales_ct_data = await get_sales_ct_data(db, fab_dict["id"])
@@ -2001,6 +2013,10 @@ async def get_pending_final_programming_fabs(
         # Fetch draft data
         draft_data = await get_draft_data(db, fab_dict["id"])
         fab_dict["draft_data"] = draft_data
+
+        # Fetch CNC data
+        cnc_data = await get_cnc_data(db, fab_dict["id"])
+        fab_dict["cnc_data"] = cnc_data
         
         # Fetch Sales CT data
         sales_ct_data = await get_sales_ct_data(db, fab_dict["id"])
@@ -2683,6 +2699,7 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
         for fab_dict in fab_dicts:
             fab_dict["fab_notes"] = []
             fab_dict["draft_data"] = None
+            fab_dict["cnc_data"] = None
             fab_dict["sales_ct_data"] = None
             fab_dict["slabsmith_data"] = None
             fab_dict["resurface_details"] = None
@@ -2698,6 +2715,9 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
     
     # Load drafting data
     drafting_by_fab = await _batch_load_drafting_data(db, fab_ids)
+
+    # Load CNC data
+    cnc_by_fab = await _batch_load_cnc_data(db, fab_ids)
     
     # Load sales CT data
     sales_ct_by_fab = await _batch_load_sales_ct_data(db, fab_ids)
@@ -2721,6 +2741,7 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
         fab_id = fab_dict["id"]
         fab_dict["fab_notes"] = notes_by_fab.get(fab_id, [])
         fab_dict["draft_data"] = drafting_by_fab.get(fab_id)
+        fab_dict["cnc_data"] = cnc_by_fab.get(fab_id)
         fab_dict["sales_ct_data"] = sales_ct_by_fab.get(fab_id)
         fab_dict["slabsmith_data"] = slabsmith_by_fab.get(fab_id)
         fab_dict["resurface_details"] = resurface_by_fab.get(fab_id)
@@ -2877,6 +2898,108 @@ async def _batch_load_drafting_data(db: AsyncSession, fab_ids: List[int]) -> dic
             }
     
     return drafting_by_fab
+
+
+async def _batch_load_cnc_data(db: AsyncSession, fab_ids: List[int]) -> dict:
+    """Load CNC drafting data with files for each FAB."""
+    from src.app.database.cnc import CNCDrafting
+    from src.app.database.file import File
+    from sqlalchemy.orm import aliased
+
+    DrafterUser = aliased(User)
+    UpdaterUser = aliased(User)
+
+    query = select(
+        CNCDrafting,
+        DrafterUser.first_name.label("drafter_first_name"),
+        DrafterUser.last_name.label("drafter_last_name"),
+        UpdaterUser.first_name.label("updater_first_name"),
+        UpdaterUser.last_name.label("updater_last_name")
+    ).where(CNCDrafting.fab_id.in_(fab_ids))\
+     .join(DrafterUser, CNCDrafting.drafter_id == DrafterUser.id, isouter=True)\
+     .join(UpdaterUser, CNCDrafting.updated_by == UpdaterUser.id, isouter=True)\
+     .order_by(CNCDrafting.fab_id, CNCDrafting.id.desc())
+
+    result = await db.execute(query)
+    rows = result.all()
+
+    all_file_ids = set()
+    for row in rows:
+        cnc = row[0]
+        if cnc.file_ids:
+            all_file_ids.update(int(fid.strip()) for fid in cnc.file_ids.split(",") if fid.strip())
+
+    files_by_id = {}
+    if all_file_ids:
+        UploaderUser = aliased(User)
+        files_query = (
+            select(File, UploaderUser.first_name, UploaderUser.last_name)
+            .join(UploaderUser, File.uploaded_by == UploaderUser.id, isouter=True)
+            .where(File.id.in_(all_file_ids))
+        )
+        files_result = await db.execute(files_query)
+        for file_row in files_result.all():
+            file = file_row[0]
+            uploader_first = file_row[1]
+            uploader_last = file_row[2]
+            file_url = f"{BASE_URL}/api/v1/files/{file.id}/view"
+            files_by_id[file.id] = {
+                "id": file.id,
+                "name": file.name,
+                "file_url": file_url,
+                "file_type": file.file_type,
+                "file_size": file.file_size,
+                "stage": file.stage,
+                "file_design": file.file_design,
+                "stage_name": file.stage_name,
+                "uploaded_by": file.uploaded_by,
+                "uploaded_by_name": f"{uploader_first} {uploader_last}" if uploader_first else None,
+                "created_by": file.uploaded_by,
+                "created_by_name": f"{uploader_first} {uploader_last}" if uploader_first else None,
+                "created_at": file.created_at.isoformat() if file.created_at else None,
+            }
+
+    cnc_by_fab = {}
+    for row in rows:
+        cnc = row[0]
+        if cnc.fab_id not in cnc_by_fab:
+            files_data = []
+            if cnc.file_ids:
+                file_id_list = [int(fid.strip()) for fid in cnc.file_ids.split(",") if fid.strip()]
+                files_data = [files_by_id[fid] for fid in file_id_list if fid in files_by_id]
+
+            cnc_by_fab[cnc.fab_id] = {
+                "id": cnc.id,
+                "fab_id": cnc.fab_id,
+                "drafter_id": cnc.drafter_id,
+                "drafter_name": f"{row[1]} {row[2]}" if row[1] else None,
+                "scheduled_start_date": cnc.scheduled_start_date.isoformat() if cnc.scheduled_start_date else None,
+                "scheduled_end_date": cnc.scheduled_end_date.isoformat() if cnc.scheduled_end_date else None,
+                "drafter_start_date": cnc.drafter_start_date.isoformat() if cnc.drafter_start_date else None,
+                "drafter_end_date": cnc.drafter_end_date.isoformat() if cnc.drafter_end_date else None,
+                "total_sqft_required_to_draft": cnc.total_sqft_required_to_draft,
+                "total_sqft": float(cnc.total_sqft) if cnc.total_sqft is not None else None,
+                "no_of_pieces": cnc.no_of_pieces,
+                "cad_review_complete": cnc.cad_review_complete,
+                "draft_completed": cnc.draft_completed,
+                "notes": cnc.notes,
+                "current_stage": cnc.current_stage,
+                "total_sqft_drafted": float(cnc.total_sqft_drafted) if cnc.total_sqft_drafted is not None else None,
+                "no_of_piece_drafted": cnc.no_of_piece_drafted,
+                "draft_note": cnc.draft_note,
+                "mentions": cnc.mentions,
+                "total_hours_drafted": float(cnc.total_hours_drafted) if cnc.total_hours_drafted is not None else None,
+                "is_completed": cnc.is_completed,
+                "file_ids": cnc.file_ids,
+                "files": files_data,
+                "status_id": cnc.status_id,
+                "created_at": cnc.created_at.isoformat() if cnc.created_at else None,
+                "updated_at": cnc.updated_at.isoformat() if cnc.updated_at else None,
+                "updated_by": cnc.updated_by,
+                "updated_by_name": f"{row[3]} {row[4]}" if row[3] else None,
+            }
+
+    return cnc_by_fab
 
 
 async def _batch_load_sales_ct_data(db: AsyncSession, fab_ids: List[int]) -> dict:
@@ -3202,6 +3325,103 @@ async def get_draft_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
         "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
         "updated_by": draft.updated_by,
         "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
+    }
+
+
+async def get_cnc_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
+    """Get the latest CNC drafting data for a FAB"""
+    from src.app.database.cnc import CNCDrafting
+    from src.app.database.file import File
+    from sqlalchemy.orm import aliased
+
+    DrafterUser = aliased(User)
+    UpdaterUser = aliased(User)
+
+    query = select(
+        CNCDrafting,
+        DrafterUser.first_name.label("drafter_first_name"),
+        DrafterUser.last_name.label("drafter_last_name"),
+        UpdaterUser.first_name.label("updater_first_name"),
+        UpdaterUser.last_name.label("updater_last_name")
+    ).where(CNCDrafting.fab_id == fab_id)\
+     .join(DrafterUser, CNCDrafting.drafter_id == DrafterUser.id, isouter=True)\
+     .join(UpdaterUser, CNCDrafting.updated_by == UpdaterUser.id, isouter=True)\
+     .order_by(CNCDrafting.id.desc())\
+     .limit(1)
+
+    result = await db.execute(query)
+    row = result.first()
+
+    if not row:
+        return None
+
+    cnc = row[0]
+    drafter_first = row[1]
+    drafter_last = row[2]
+    updater_first = row[3]
+    updater_last = row[4]
+
+    files_data = []
+    if cnc.file_ids:
+        file_id_list = [int(fid.strip()) for fid in cnc.file_ids.split(",") if fid.strip()]
+        if file_id_list:
+            UploaderUser = aliased(User)
+            files_query = (
+                select(File, UploaderUser.first_name, UploaderUser.last_name)
+                .join(UploaderUser, File.uploaded_by == UploaderUser.id, isouter=True)
+                .where(File.id.in_(file_id_list))
+            )
+            files_result = await db.execute(files_query)
+            for file_row in files_result.all():
+                file = file_row[0]
+                uploader_first = file_row[1]
+                uploader_last = file_row[2]
+                file_url = f"{BASE_URL}/api/v1/files/{file.id}/view"
+                files_data.append({
+                    "id": file.id,
+                    "name": file.name,
+                    "file_url": file_url,
+                    "file_type": file.file_type,
+                    "file_size": file.file_size,
+                    "stage": file.stage,
+                    "file_design": file.file_design,
+                    "stage_name": file.stage_name,
+                    "uploaded_by": file.uploaded_by,
+                    "uploaded_by_name": f"{uploader_first} {uploader_last}" if uploader_first else None,
+                    "created_by": file.uploaded_by,
+                    "created_by_name": f"{uploader_first} {uploader_last}" if uploader_first else None,
+                    "created_at": file.created_at.isoformat() if file.created_at else None,
+                })
+
+    return {
+        "id": cnc.id,
+        "fab_id": cnc.fab_id,
+        "drafter_id": cnc.drafter_id,
+        "drafter_name": f"{drafter_first} {drafter_last}" if drafter_first else None,
+        "scheduled_start_date": cnc.scheduled_start_date.isoformat() if cnc.scheduled_start_date else None,
+        "scheduled_end_date": cnc.scheduled_end_date.isoformat() if cnc.scheduled_end_date else None,
+        "drafter_start_date": cnc.drafter_start_date.isoformat() if cnc.drafter_start_date else None,
+        "drafter_end_date": cnc.drafter_end_date.isoformat() if cnc.drafter_end_date else None,
+        "total_sqft_required_to_draft": cnc.total_sqft_required_to_draft,
+        "total_sqft": float(cnc.total_sqft) if cnc.total_sqft is not None else None,
+        "no_of_pieces": cnc.no_of_pieces,
+        "cad_review_complete": cnc.cad_review_complete,
+        "draft_completed": cnc.draft_completed,
+        "notes": cnc.notes,
+        "current_stage": cnc.current_stage,
+        "total_sqft_drafted": float(cnc.total_sqft_drafted) if cnc.total_sqft_drafted is not None else None,
+        "no_of_piece_drafted": cnc.no_of_piece_drafted,
+        "draft_note": cnc.draft_note,
+        "mentions": cnc.mentions,
+        "total_hours_drafted": float(cnc.total_hours_drafted) if cnc.total_hours_drafted is not None else None,
+        "is_completed": cnc.is_completed,
+        "file_ids": cnc.file_ids,
+        "files": files_data,
+        "status_id": cnc.status_id,
+        "created_at": cnc.created_at.isoformat() if cnc.created_at else None,
+        "updated_at": cnc.updated_at.isoformat() if cnc.updated_at else None,
+        "updated_by": cnc.updated_by,
+        "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None,
     }
 
 

@@ -400,3 +400,69 @@ class DraftingSessionNote(SQLModel, table=True):
     sqft_drafted: Optional[str] = Field(default=None)
     work_percentage_done: Optional[int] = Field(default=None)
     created_at: datetime = Field(default_factory=datetime.now)
+
+
+# --- CNC Drafting ---
+class CNCDrafting(SQLModel, table=True):
+    __tablename__ = "cnc_draftings"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    drafter_id: int = Field()
+    fab_id: int = Field(foreign_key="fabs.id", unique=True)
+    scheduled_start_date: datetime = Field()
+    scheduled_end_date: datetime = Field()
+    drafter_start_date: Optional[datetime] = Field(default=None)
+    drafter_end_date: Optional[datetime] = Field(default=None)
+    status_id: int = Field(default=1)
+    total_sqft: Optional[float] = Field(default=None)
+    no_of_pieces: Optional[int] = Field(default=None)
+    cad_review_complete: Optional[bool] = Field(default=False)
+    draft_completed: Optional[bool] = Field(default=False)
+    notes: Optional[str] = Field(default=None)
+    current_stage: Optional[str] = Field(default=None)
+    total_sqft_required_to_draft: str = Field()
+    total_sqft_drafted: Optional[float] = Field(default=None)
+    no_of_piece_drafted: Optional[int] = Field(default=None)
+    draft_note: Optional[str] = Field(default=None)
+    mentions: Optional[str] = Field(default=None, description="List of user_ids of user to be notified")
+    total_hours_drafted: Optional[float] = Field(default=None)
+    is_completed: bool = Field(default=False)
+    file_ids: Optional[str] = Field(default=None)
+    created_at: datetime = Field()
+    updated_at: Optional[datetime] = Field(default=None)
+    updated_by: Optional[int] = Field(default=None)
+
+
+# --- CNC Drafting Sessions ---
+class CNCDraftingSession(SQLModel, table=True):
+    __tablename__ = "cnc_drafting_sessions"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    fab_id: int = Field(index=True)
+    drafter_id: int = Field()
+    status: str = Field(default="drafting")  # drafting, paused, on_hold, completed
+
+    session_start_time: datetime = Field()
+    session_end_time: Optional[datetime] = Field(default=None)
+    current_pause_start_time: Optional[datetime] = Field(default=None)
+    total_pause_duration: int = Field(default=0)
+    total_time_spent: int = Field(default=0)
+
+    cumulative_sqft_drafted: Optional[str] = Field(default="0")
+    work_percentage_done: int = Field(default=0)
+
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: Optional[datetime] = Field(default=None)
+
+
+class CNCDraftingSessionNote(SQLModel, table=True):
+    __tablename__ = "cnc_drafting_session_notes"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: int = Field(index=True)
+    fab_id: int = Field(index=True)
+    action: str = Field()  # start, pause, resume, on_hold, end
+    timestamp: datetime = Field()
+    note: Optional[str] = Field(default=None)
+    sqft_drafted: Optional[str] = Field(default=None)
+    work_percentage_done: Optional[int] = Field(default=None)
+    created_at: datetime = Field(default_factory=datetime.now)
