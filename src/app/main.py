@@ -53,6 +53,9 @@ from src.app.routers import install_scheduling
 from src.app.routers import install_completion  
 from src.app.routers import public_files
 from src.app.routers import shop_cut_plan
+from src.app.routers import job_timers
+from src.app.routers import job_listing
+from src.app.routers import job_fab_listing
 
 # Import logging configuration
 from src.app.utils.logger import setup_logging
@@ -264,6 +267,11 @@ app.include_router(revisions.router, prefix="/api/v1", tags=["Revisions"])
 app.include_router(cost_of_stone.router, prefix="/api/v1", tags=["Cost of Stone"])
 app.include_router(install_scheduling.router, prefix="/api/v1", tags=["Install Scheduling"])
 app.include_router(install_completion.router, prefix="/api/v1", tags=["Install Completion"])
+app.include_router(job_timers.router, prefix="/api/v1", tags=["Job Timers"])
+app.include_router(job_listing.router, prefix="/api/v1", tags=["Job Listing"])
+app.include_router(job_fab_listing.router, prefix="/api/v1", tags=["Job Fab Listing"])
+
+
 
 # Existing business workflow routers
 app.include_router(job_extras.router, prefix="/api/v1", tags=["Job Extras"])
