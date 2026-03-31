@@ -1414,6 +1414,8 @@ class InstallerJobTimerActionRequest(BaseModel):
 class InstallerJobTimerCommandRequest(BaseModel):
     note: Optional[str] = None
     timestamp: Optional[datetime] = None
+    sqft_installed: Optional[float] = None
+    sqft_not_installed: Optional[float] = None
 
 
 class InstallerJobTimerEventResponse(BaseModel):
@@ -1436,6 +1438,8 @@ class InstallerJobTimerSessionResponse(BaseModel):
     stopped_at: Optional[datetime] = None
     total_work_seconds: int
     total_pause_seconds: int
+    sqft_installed: Optional[float] = None
+    sqft_not_installed: Optional[float] = None
 
 
 class InstallerJobTimerStateResponse(BaseModel):
