@@ -44,6 +44,7 @@ from src.app.database.shop_cut_plan import ShopCutPlan
 from src.app.database.shop_cut_plan_timer_event import ShopCutPlanTimerEvent
 from src.app.database.shop_cut_plan_timer_session import ShopCutPlanTimerSession
 from src.app.database.shop_notes import ShopNotes
+from src.app.database.shop_planning import ShopPlanning
 from src.app.database.shop_planning_planning_section import ShopPlanningPlanningSection
 from src.app.database.password_reset_otp import PasswordResetOTP
 from src.app.database.operator_job_timer_event import OperatorJobTimerEvent
@@ -53,11 +54,12 @@ from src.app.database.templater_job_timer_event import TemplaterJobTimerEvent
 from src.app.database.installer_job_timer_session import InstallerJobTimerSession
 from src.app.database.installer_job_timer_event import InstallerJobTimerEvent
 
+_is_company_placeholder = False
 
 
 # Models defined in generated_schemas (includes re-exports from database/*.py thin wrappers)
 from src.app.interface.generated_schemas import (
-    Templating, SlabSmith, ShopPlanning,
+    Templating, SlabSmith,
     Drafting, DraftingSession, DraftingSessionNote,
     PreDraftReview, SalesCT, CutList,
     JobTechnicianWorkflow, FinalProgramming,
