@@ -1525,6 +1525,7 @@ class EarliestAvailabilityRequest(BaseModel):
     start_from: Optional[datetime] = None
     slot_minutes: int = 30
     search_horizon_days: int = 30
+    max_proposals_per_request: int = 3
 
 
 # ============ CNC DRAFTING SCHEMAS ============
@@ -1662,4 +1663,3 @@ class CNCDraftingSessionHistoryResponse(BaseModel):
     fab_id: int
     sessions: List[CNCDraftingSessionResponse]
     total_sessions: int
-    max_proposals_per_request: int = 3

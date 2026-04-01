@@ -1565,12 +1565,7 @@ def _next_business_start(value: datetime) -> datetime:
     cursor = value.replace(second=0, microsecond=0)
 
     while not _is_business_day(cursor):
-        cursor = (cursor + timedelta(days=1)).replace(
-            hour=BUSINESS_START_HOUR,
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
+        cursor = (cursor + timedelta(days=1)).replace(second=0, microsecond=0)
 
     day_start, day_end = _business_window_for_day(cursor)
     if cursor < day_start:
@@ -1584,10 +1579,6 @@ def _next_business_start(value: datetime) -> datetime:
         )
         return _next_business_start(next_day)
 
-    lunch_start, lunch_end = _lunch_window_for_day(cursor)
-    if lunch_start <= cursor < lunch_end:
-        return lunch_end
-
     return cursor
 
 
@@ -1596,15 +1587,13 @@ def _is_valid_business_interval(start: datetime, end: datetime) -> bool:
         return False
     if not _is_business_day(start):
         return False
+    if not _is_business_day(end):
+        return False
     if start.date() != end.date():
         return False
 
     day_start, day_end = _business_window_for_day(start)
     if not (start >= day_start and end <= day_end):
-        return False
-
-    # Enforce lunch break: no scheduled work between 12:00 PM and 1:00 PM.
-    if _overlaps_lunch(start, end):
         return False
 
     return True
@@ -1615,12 +1604,7 @@ def _validate_manual_schedule_interval(start: Optional[datetime], estimated_hour
 
     Rules:
     - Must be a weekday (Mon–Fri)
-    - Must fall within 7:00 AM – 4:00 PM
-    - Must NOT start during the 12:00 PM – 1:00 PM lunch break
-    - If estimated_hours > 0, the lunch-adjusted end time must not exceed 4:00 PM
-
-    Lunch-crossing jobs are allowed: the lunch hour is automatically added to
-    the end time so the planner is never blocked.
+    - Must be within 7:00 AM – 4:00 PM
     """
     if start is None:
         raise HTTPException(
@@ -1635,55 +1619,19 @@ def _validate_manual_schedule_interval(start: Optional[datetime], estimated_hour
         )
 
     day_start, day_end = _business_window_for_day(start)
-    lunch_start, lunch_end = _lunch_window_for_day(start)
-
     if not (day_start <= start < day_end):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="scheduled_start must be between 7:00 AM and 4:00 PM",
         )
 
-    if lunch_start <= start < lunch_end:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="scheduled_start cannot be during the lunch break (12:00 PM – 1:00 PM)",
-        )
-
-    try:
-        hours = float(estimated_hours) if estimated_hours is not None else 0.0
-    except (TypeError, ValueError):
-        hours = 0.0
-
-    if hours > 0:
-        adjusted_end = _compute_lunch_adjusted_end(start, hours)
-        if adjusted_end > day_end:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"The scheduled duration ({hours}h) starting at {start.strftime('%I:%M %p')} "
-                    f"exceeds the business day end (4:00 PM) even after accounting for the lunch break"
-                ),
-            )
-
 
 def _advance_after_invalid_interval(cursor: datetime, slot_minutes: int) -> datetime:
     """
-    Advance cursor after an invalid candidate interval.
-    - If in/approaching lunch break, jump to lunch end (1:00 PM) same day.
-    - Otherwise, jump to next business day start.
+    Advance cursor after an invalid candidate interval by one slot,
+    then snap to the next weekday if needed.
     """
-    lunch_start, lunch_end = _lunch_window_for_day(cursor)
-
-    if cursor < lunch_end:
-        next_cursor = lunch_end
-    else:
-        next_cursor = (cursor + timedelta(days=1)).replace(
-            hour=BUSINESS_START_HOUR,
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
-
+    next_cursor = cursor + timedelta(minutes=slot_minutes)
     next_cursor = _align_to_slot(next_cursor, slot_minutes)
     return _next_business_start(next_cursor)
 
@@ -1835,7 +1783,7 @@ async def get_earliest_availability(
             dur_hours = float(p.estimated_hours or 0)
             if not p_start or dur_hours <= 0:
                 continue
-            p_end = p_start + timedelta(hours=dur_hours)
+            p_end = _compute_lunch_adjusted_end(p_start, dur_hours)
             busy_by_ws.setdefault(p.workstation_id, []).append((p_start, p_end))
             busy_by_user.setdefault(p.user_id, []).append((p_start, p_end))
 
@@ -1852,13 +1800,13 @@ async def get_earliest_availability(
         chain_blocked = False
 
         for req in payload.requests:
-            if float(req.estimated_hours or 0) <= 0:
+            duration_hours = float(req.estimated_hours or 0)
+            if duration_hours <= 0:
                 raise HTTPException(
                     status_code=400,
                     detail=f"estimated_hours must be > 0 for operator_id={req.operator_id}, workstation_id={req.workstation_id}"
                 )
 
-            duration = timedelta(hours=float(req.estimated_hours))
             combined_busy = _merge_intervals(
                 (busy_by_ws.get(req.workstation_id, []) + busy_by_user.get(req.operator_id, []))
             )
@@ -1870,8 +1818,10 @@ async def get_earliest_availability(
             else:
                 cursor = search_end
 
-            while cursor + duration <= search_end and len(proposals) < payload.max_proposals_per_request:
-                candidate_end = cursor + duration
+            while cursor < search_end and len(proposals) < payload.max_proposals_per_request:
+                candidate_end = _compute_lunch_adjusted_end(cursor, duration_hours)
+                if candidate_end > search_end:
+                    break
 
                 if not _is_valid_business_interval(cursor, candidate_end):
                     cursor = _advance_after_invalid_interval(cursor, payload.slot_minutes)

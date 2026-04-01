@@ -118,19 +118,11 @@ def _compute_fab_progress_fields(plans: List[dict]) -> tuple[Optional[str], floa
 def _stage_filter_condition(stage_name: str):
     """
     Stage visibility rule:
-    - install_completion includes:
-      1) FABs whose current_stage is install_completion
-      2) FABs still in cut_list but already having shop_est_completion_date
+    - install_completion uses exact stage match
     - all other stages use exact stage match
     """
     if stage_name == "install_completion":
-        return or_(
-            Fab.current_stage == "install_completion",
-            and_(
-                Fab.current_stage == "cut_list",
-                Fab.shop_est_completion_date.isnot(None),
-            ),
-        )
+        return Fab.current_stage == "install_completion"
     if stage_name == "install_scheduling":
         return and_(
             Fab.current_stage == "install_scheduling",
@@ -410,8 +402,9 @@ async def create_fab(
         if (
             fab_dict.get("template_needed") is False
             and fab_dict.get("drafting_needed") is False
+            and fab_dict.get("slab_smith_ag_needed") is False
+            and fab_dict.get("slab_smith_cust_needed") is False
             and fab_dict.get("sct_needed") is False
-            and fab_dict.get("final_programming_needed") is False
         ):
             current_stage = "cut_list"
             next_stage = get_next_stage(
@@ -1120,6 +1113,9 @@ async def get_fabs_with_shop_est_completion(
 ):
     """Get list of FABs that have a shop_est_completion_date set, with full FAB details."""
 
+    # Align with dashboard widgets: default to active FABs unless caller specifies status_id.
+    effective_status_id = status_id if status_id is not None else 1
+
     # Step 1: Apply templating filters to get FAB IDs
     templating_fab_ids = await _apply_templating_filters(
         db,
@@ -1161,7 +1157,7 @@ async def get_fabs_with_shop_est_completion(
     stage_for_query = None if current_stage == "install_scheduling" else current_stage
 
     query = _build_fab_list_query(
-        job_id, fab_type, sales_person_id, status_id, stage_for_query, next_stage,
+        job_id, fab_type, sales_person_id, effective_status_id, stage_for_query, next_stage,
         None,  # search is handled below
         templating_fab_ids, latest_templating, shop_date_start, shop_date_end,
         template_completed_start, template_completed_end, predraft_completed_start, predraft_completed_end,
@@ -1235,8 +1231,7 @@ async def get_fabs_with_shop_est_completion(
         count_query = count_query.where(Fab.fab_type.ilike(f"%{fab_type}%"))
     if sales_person_id is not None:
         count_query = count_query.where(Fab.sales_person_id == sales_person_id)
-    if status_id is not None:
-        count_query = count_query.where(Fab.status_id == status_id)
+    count_query = count_query.where(Fab.status_id == effective_status_id)
     if current_stage:
         if current_stage == "install_scheduling":
             count_query = count_query.where(
@@ -1348,8 +1343,7 @@ async def get_fabs_with_shop_est_completion(
             stage_totals_query = stage_totals_query.where(Fab.fab_type.ilike(f"%{fab_type}%"))
         if sales_person_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.sales_person_id == sales_person_id)
-        if status_id is not None:
-            stage_totals_query = stage_totals_query.where(Fab.status_id == status_id)
+        stage_totals_query = stage_totals_query.where(Fab.status_id == effective_status_id)
 
         if current_stage == "pre_draft_review":
             date_start, date_end = template_completed_start, template_completed_end
