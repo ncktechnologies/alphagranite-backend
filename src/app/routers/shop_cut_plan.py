@@ -1579,6 +1579,10 @@ def _next_business_start(value: datetime) -> datetime:
         )
         return _next_business_start(next_day)
 
+    lunch_start, lunch_end = _lunch_window_for_day(cursor)
+    if lunch_start <= cursor < lunch_end:
+        return lunch_end
+
     return cursor
 
 
@@ -1594,6 +1598,12 @@ def _is_valid_business_interval(start: datetime, end: datetime) -> bool:
 
     day_start, day_end = _business_window_for_day(start)
     if not (start >= day_start and end <= day_end):
+        return False
+
+    lunch_start, lunch_end = _lunch_window_for_day(start)
+    if lunch_start <= start < lunch_end:
+        return False
+    if lunch_start < end <= lunch_end:
         return False
 
     return True
@@ -1631,7 +1641,11 @@ def _advance_after_invalid_interval(cursor: datetime, slot_minutes: int) -> date
     Advance cursor after an invalid candidate interval by one slot,
     then snap to the next weekday if needed.
     """
-    next_cursor = cursor + timedelta(minutes=slot_minutes)
+    lunch_start, lunch_end = _lunch_window_for_day(cursor)
+    if lunch_start <= cursor < lunch_end:
+        next_cursor = lunch_end
+    else:
+        next_cursor = cursor + timedelta(minutes=slot_minutes)
     next_cursor = _align_to_slot(next_cursor, slot_minutes)
     return _next_business_start(next_cursor)
 
