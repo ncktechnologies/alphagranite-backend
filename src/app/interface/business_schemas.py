@@ -1414,6 +1414,8 @@ class InstallerJobTimerActionRequest(BaseModel):
 class InstallerJobTimerCommandRequest(BaseModel):
     note: Optional[str] = None
     timestamp: Optional[datetime] = None
+    sqft_installed: Optional[float] = None
+    sqft_not_installed: Optional[float] = None
 
 
 class InstallerJobTimerEventResponse(BaseModel):
@@ -1436,6 +1438,8 @@ class InstallerJobTimerSessionResponse(BaseModel):
     stopped_at: Optional[datetime] = None
     total_work_seconds: int
     total_pause_seconds: int
+    sqft_installed: Optional[float] = None
+    sqft_not_installed: Optional[float] = None
 
 
 class InstallerJobTimerStateResponse(BaseModel):
@@ -1465,6 +1469,8 @@ class TemplaterJobTimerActionRequest(BaseModel):
 class TemplaterJobTimerCommandRequest(BaseModel):
     note: Optional[str] = None
     timestamp: Optional[datetime] = None
+    sqft_templated: Optional[float] = None
+    sqft_not_templated: Optional[float] = None
 
 
 class TemplaterJobTimerEventResponse(BaseModel):
@@ -1487,6 +1493,8 @@ class TemplaterJobTimerSessionResponse(BaseModel):
     stopped_at: Optional[datetime] = None
     total_work_seconds: int
     total_pause_seconds: int
+    sqft_templated: Optional[float] = None
+    sqft_not_templated: Optional[float] = None
 
 
 class TemplaterJobTimerStateResponse(BaseModel):
@@ -1517,6 +1525,7 @@ class EarliestAvailabilityRequest(BaseModel):
     start_from: Optional[datetime] = None
     slot_minutes: int = 30
     search_horizon_days: int = 30
+    max_proposals_per_request: int = 3
 
 
 # ============ CNC DRAFTING SCHEMAS ============
@@ -1654,4 +1663,3 @@ class CNCDraftingSessionHistoryResponse(BaseModel):
     fab_id: int
     sessions: List[CNCDraftingSessionResponse]
     total_sessions: int
-    max_proposals_per_request: int = 3

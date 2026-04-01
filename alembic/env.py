@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Optional
 from logging.config import fileConfig
 
 from sqlalchemy import pool
@@ -14,7 +15,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 load_dotenv()
 
 # Import SQLModel for SQLModel.metadata
-from sqlmodel import SQLModel
+from sqlmodel import Field, SQLModel
 
 # Import your models to register them with SQLModel.metadata
 from src.app.database.user import User
@@ -22,20 +23,52 @@ from src.app.database.file import File
 from src.app.database.role import Role
 from src.app.database.status import Status
 from src.app.database.user_role import UserRole
-from src.app.database.user_role import UserRole
 from src.app.database.department import Department
 from src.app.database.permission import Permission
 from src.app.database.audit_trail import AuditTrail
-# Import other models so SQLModel.metadata includes them for autogenerate
 from src.app.database.action_menu import ActionMenu
 from src.app.database.role_permission import RolePermission
-# Import business models from generated schemas to avoid duplicates
-from src.app.interface.generated_schemas import (
-    # PlanningSection, WorkStation,
-     Templating, SlabSmith, ShopPlanning, 
-)
-# Import any additional models here as needed
+from src.app.database.fab import Fab
+from src.app.database.business_job import BusinessJob
+from src.app.database.account import Account
+from src.app.database.edge import Edge
+from src.app.database.fab_notes import FabNotes
+from src.app.database.fab_type import FabType
+from src.app.database.job_note import JobNote
+from src.app.database.planning_section import PlanningSection
+from src.app.database.work_station import WorkStation
+from src.app.database.stone_color import StoneColor
+from src.app.database.stone_thickness import StoneThickness
+from src.app.database.stone_type import StoneType
+from src.app.database.shop_cut_plan import ShopCutPlan
+from src.app.database.shop_cut_plan_timer_event import ShopCutPlanTimerEvent
+from src.app.database.shop_cut_plan_timer_session import ShopCutPlanTimerSession
+from src.app.database.shop_notes import ShopNotes
+from src.app.database.shop_planning import ShopPlanning
+from src.app.database.shop_planning_planning_section import ShopPlanningPlanningSection
+from src.app.database.password_reset_otp import PasswordResetOTP
+from src.app.database.operator_job_timer_event import OperatorJobTimerEvent
+from src.app.database.operator_job_timer_session import OperatorJobTimerSession
+from src.app.database.templater_job_timer_session import TemplaterJobTimerSession
+from src.app.database.templater_job_timer_event import TemplaterJobTimerEvent
+from src.app.database.installer_job_timer_session import InstallerJobTimerSession
+from src.app.database.installer_job_timer_event import InstallerJobTimerEvent
 
+_is_company_placeholder = False
+
+
+# Models defined in generated_schemas (includes re-exports from database/*.py thin wrappers)
+from src.app.interface.generated_schemas import (
+    Templating, SlabSmith,
+    Drafting, DraftingSession, DraftingSessionNote,
+    PreDraftReview, SalesCT, CutList,
+    JobTechnicianWorkflow, FinalProgramming,
+    ShopPlanningSection, OperationWorkflow,
+    WJProgramming, WJScheduling, ResurfaceScheduling,
+    Revision, CostOfStone,
+    InstallScheduling, InstallCompletion,
+    CNCDrafting, CNCDraftingSession, CNCDraftingSessionNote,
+)
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
@@ -65,6 +98,12 @@ if config.config_file_name is not None:
 # Set up target metadata for autogenerate support
 target_metadata = SQLModel.metadata
 
+
+def include_object(object_, name, type_, reflected, compare_to):
+    if type_ == "table" and name == "companies" and _is_company_placeholder:
+        return False
+    return True
+
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
@@ -87,6 +126,7 @@ def run_migrations_offline() -> None:
     context.configure(
         url=url,
         target_metadata=target_metadata,
+        include_object=include_object,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -110,7 +150,9 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection,
+            target_metadata=target_metadata,
+            include_object=include_object,
         )
 
         with context.begin_transaction():

@@ -68,6 +68,8 @@ def _serialize_installer_job_timer_session(session: InstallerJobTimerSession) ->
         "stopped_at": session.stopped_at.isoformat() if session.stopped_at else None,
         "total_work_seconds": session.total_work_seconds,
         "total_pause_seconds": session.total_pause_seconds,
+        "sqft_installed": session.sqft_installed,
+        "sqft_not_installed": session.sqft_not_installed,
     }
 
 
@@ -94,6 +96,8 @@ def _serialize_templater_job_timer_session(session: TemplaterJobTimerSession) ->
         "stopped_at": session.stopped_at.isoformat() if session.stopped_at else None,
         "total_work_seconds": session.total_work_seconds,
         "total_pause_seconds": session.total_pause_seconds,
+        "sqft_templated": session.sqft_templated,
+        "sqft_not_templated": session.sqft_not_templated,
     }
 
 
@@ -162,6 +166,8 @@ async def start_installer_job_timer(
         current_run_start_at=now,
         created_at=now,
         created_by=current_user.id,
+        sqft_installed=payload.sqft_installed if payload else None,
+        sqft_not_installed=payload.sqft_not_installed if payload else None,
     )
     
     db.add(new_session)
@@ -222,6 +228,10 @@ async def pause_installer_job_timer(
     session.current_pause_start_at = now
     session.updated_at = now
     session.updated_by = current_user.id
+    if payload and payload.sqft_installed is not None:
+        session.sqft_installed = payload.sqft_installed
+    if payload and payload.sqft_not_installed is not None:
+        session.sqft_not_installed = payload.sqft_not_installed
     
     await db.commit()
     await db.refresh(session)
@@ -280,6 +290,10 @@ async def resume_installer_job_timer(
     session.current_run_start_at = now
     session.updated_at = now
     session.updated_by = current_user.id
+    if payload and payload.sqft_installed is not None:
+        session.sqft_installed = payload.sqft_installed
+    if payload and payload.sqft_not_installed is not None:
+        session.sqft_not_installed = payload.sqft_not_installed
     
     await db.commit()
     await db.refresh(session)
@@ -343,6 +357,10 @@ async def stop_installer_job_timer(
     session.stopped_at = now
     session.updated_at = now
     session.updated_by = current_user.id
+    if payload and payload.sqft_installed is not None:
+        session.sqft_installed = payload.sqft_installed
+    if payload and payload.sqft_not_installed is not None:
+        session.sqft_not_installed = payload.sqft_not_installed
     
     await db.commit()
     await db.refresh(session)
@@ -514,6 +532,8 @@ async def start_templater_job_timer(
         current_run_start_at=now,
         created_at=now,
         created_by=current_user.id,
+        sqft_templated=payload.sqft_templated if payload else None,
+        sqft_not_templated=payload.sqft_not_templated if payload else None,
     )
     
     db.add(new_session)
@@ -574,6 +594,10 @@ async def pause_templater_job_timer(
     session.current_pause_start_at = now
     session.updated_at = now
     session.updated_by = current_user.id
+    if payload and payload.sqft_templated is not None:
+        session.sqft_templated = payload.sqft_templated
+    if payload and payload.sqft_not_templated is not None:
+        session.sqft_not_templated = payload.sqft_not_templated
     
     await db.commit()
     await db.refresh(session)
@@ -632,6 +656,10 @@ async def resume_templater_job_timer(
     session.current_run_start_at = now
     session.updated_at = now
     session.updated_by = current_user.id
+    if payload and payload.sqft_templated is not None:
+        session.sqft_templated = payload.sqft_templated
+    if payload and payload.sqft_not_templated is not None:
+        session.sqft_not_templated = payload.sqft_not_templated
     
     await db.commit()
     await db.refresh(session)
@@ -695,6 +723,10 @@ async def stop_templater_job_timer(
     session.stopped_at = now
     session.updated_at = now
     session.updated_by = current_user.id
+    if payload and payload.sqft_templated is not None:
+        session.sqft_templated = payload.sqft_templated
+    if payload and payload.sqft_not_templated is not None:
+        session.sqft_not_templated = payload.sqft_not_templated
     
     await db.commit()
     await db.refresh(session)

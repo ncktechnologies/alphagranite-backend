@@ -20,6 +20,8 @@ class InstallerJobTimerSession(SQLModel, table=True):
 
     total_work_seconds: int = Field(default=0)
     total_pause_seconds: int = Field(default=0)
+    sqft_installed: Optional[float] = Field(default=None)
+    sqft_not_installed: Optional[float] = Field(default=None)
 
     created_at: datetime = Field(default_factory=datetime.now)
     created_by: int = Field(foreign_key="users.id")
