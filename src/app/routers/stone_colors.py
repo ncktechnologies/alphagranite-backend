@@ -195,3 +195,18 @@ async def delete_stone_color(
     await db.commit()
 
     return success_response(None, "Stone color deleted successfully")
+
+
+#Get stone color by stone type
+@router.get("/stone-types/{stone_type_id}/stone-colors", response_model=SuccessResponse[List[StoneColorResponse]])
+async def get_stone_colors_by_type(
+    stone_type_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get all stone colors for a specific stone type"""
+
+    result = await db.execute(select(StoneColor).where(StoneColor.stone_type_id == stone_type_id))
+    colors = result.scalars().all()
+
+    return success_response(colors, "Stone colors fetched successfully")
