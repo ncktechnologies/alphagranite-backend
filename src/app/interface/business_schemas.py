@@ -161,12 +161,14 @@ class StoneThicknessResponse(BaseModel):
 
 # Stone Color Schemas
 class StoneColorCreate(BaseModel):
+    stone_type_id: int = Field(..., gt=0)
     name: str = Field(..., min_length=1, max_length=255)
     color_code: Optional[str] = Field(None, max_length=50)
     description: Optional[str] = None
 
 
 class StoneColorUpdate(BaseModel):
+    stone_type_id: Optional[int] = Field(None, gt=0)
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     color_code: Optional[str] = Field(None, max_length=50)
     description: Optional[str] = None
@@ -175,6 +177,7 @@ class StoneColorUpdate(BaseModel):
 
 class StoneColorResponse(BaseModel):
     id: int
+    stone_type_id: Optional[int]
     name: str
     color_code: Optional[str]
     description: Optional[str]

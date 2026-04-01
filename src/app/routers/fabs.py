@@ -60,6 +60,20 @@ FAB_STAGES = [
 BASE_URL = os.getenv("BASE_URL", "https://api.ag.easybusiness.ng")
 PUNCHOUT_REDIRECT_FAB_TYPES = ("PUNCHOUT-AG", "PUNCHOUT-BILLABLE")
 
+
+def _install_to_schedule_filter():
+    return or_(
+        and_(
+            Fab.current_stage == "install_scheduling",
+            ~Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+        ),
+        and_(
+            Fab.current_stage == "resurface_scheduling",
+            Fab.shop_date_schedule.isnot(None),
+        ),
+    )
+
+
 def _add_total_cut_lnft(fab_dict: dict) -> None:
     # Uses wj_linft (existing model field), with fallback to wj_lnft if present.
     saw_cut_lnft = float(fab_dict.get("saw_cut_lnft") or 0.0)
@@ -360,6 +374,8 @@ async def create_fab(
     stone_color = await db.get(StoneColor, fab_data.stone_color_id)
     if not stone_color:
         return error_response("Stone color not found", 404)
+    if stone_color.stone_type_id is not None and stone_color.stone_type_id != fab_data.stone_type_id:
+        return error_response("Stone color does not belong to the selected stone type", 400)
     
     # Stone thickness validation
     stone_thickness = await db.get(StoneThickness, fab_data.stone_thickness_id)
@@ -1154,7 +1170,8 @@ async def get_fabs_with_shop_est_completion(
         elif search_type == "job_name":
             search_filter = BusinessJob.name.ilike(f"%{search_value}%")
 
-    stage_for_query = None if current_stage == "install_scheduling" else current_stage
+    effective_current_stage = current_stage or "install_scheduling"
+    stage_for_query = None if effective_current_stage == "install_scheduling" else effective_current_stage
 
     query = _build_fab_list_query(
         job_id, fab_type, sales_person_id, effective_status_id, stage_for_query, next_stage,
@@ -1165,21 +1182,13 @@ async def get_fabs_with_shop_est_completion(
         date_filter
     )
 
-    if current_stage == "install_scheduling":
-        query = query.where(
-            or_(
-                _stage_filter_condition(current_stage),
-                Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
-            )
-        )
+    if effective_current_stage == "install_scheduling":
+        query = query.where(_install_to_schedule_filter())
+    elif current_stage:
+        query = query.where(_stage_filter_condition(current_stage))
 
-    # Include records that already have shop_est_completion_date or belong to
-    # punchout FAB types that should be handled in this endpoint.
-    shop_est_or_punchout_filter = or_(
-        Fab.shop_est_completion_date.isnot(None),
-        Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
-    )
-    query = query.where(shop_est_or_punchout_filter)
+    shop_est_completion_filter = Fab.shop_est_completion_date.isnot(None)
+    query = query.where(shop_est_completion_filter)
 
     # Apply search filter if present
     if search_filter is not None:
@@ -1222,7 +1231,7 @@ async def get_fabs_with_shop_est_completion(
     count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
     count_query = count_query.outerjoin(latest_templating, sa.literal(True))
 
-    count_query = count_query.where(shop_est_or_punchout_filter)
+    count_query = count_query.where(shop_est_completion_filter)
 
     # Apply all basic filters to count query
     if job_id is not None:
@@ -1232,38 +1241,32 @@ async def get_fabs_with_shop_est_completion(
     if sales_person_id is not None:
         count_query = count_query.where(Fab.sales_person_id == sales_person_id)
     count_query = count_query.where(Fab.status_id == effective_status_id)
-    if current_stage:
-        if current_stage == "install_scheduling":
-            count_query = count_query.where(
-                or_(
-                    _stage_filter_condition(current_stage),
-                    Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
-                )
-            )
-        else:
-            count_query = count_query.where(_stage_filter_condition(current_stage))
+    if effective_current_stage == "install_scheduling":
+        count_query = count_query.where(_install_to_schedule_filter())
+    elif current_stage:
+        count_query = count_query.where(_stage_filter_condition(current_stage))
     if next_stage:
         count_query = count_query.where(Fab.next_stage == next_stage)
 
     # Apply stage-specific date filtering to count
-    if current_stage:
-        if current_stage == "pre_draft_review":
+    if effective_current_stage:
+        if effective_current_stage == "pre_draft_review":
             date_start, date_end = template_completed_start, template_completed_end
-        elif current_stage == "templating":
+        elif effective_current_stage == "templating":
             date_start, date_end = schedule_start_date, schedule_due_date
-        elif current_stage == "drafting":
+        elif effective_current_stage == "drafting":
             date_start, date_end = predraft_completed_start, predraft_completed_end
-        elif current_stage == "sales_ct":
+        elif effective_current_stage == "sales_ct":
             date_start, date_end = draft_completed_start, draft_completed_end
-        elif current_stage == "revision":
+        elif effective_current_stage == "revision":
             date_start, date_end = sct_completed_start, sct_completed_end
-        elif current_stage == "cut_list":
+        elif effective_current_stage == "cut_list":
             date_start, date_end = shop_date_start, shop_date_end
         else:
             date_start, date_end = None, None
 
         count_query = _apply_stage_specific_date_filter(
-            count_query, current_stage, date_filter, date_start, date_end
+            count_query, effective_current_stage, date_filter, date_start, date_end
         )
     else:
         if shop_date_start:
@@ -1314,7 +1317,7 @@ async def get_fabs_with_shop_est_completion(
 
     # Step 8: Calculate stage totals if needed
     stage_totals = None
-    if current_stage:
+    if effective_current_stage:
         stage_totals_query = select(
             func.sum(Fab.total_sqft).label("total_sqft"),
             func.sum(Fab.wj_linft).label("wj_linft"),
@@ -1325,17 +1328,12 @@ async def get_fabs_with_shop_est_completion(
             func.sum(Fab.no_of_pieces).label("no_of_pieces")
         ).select_from(Fab)
 
-        if current_stage == "install_scheduling":
-            stage_totals_query = stage_totals_query.where(
-                or_(
-                    _stage_filter_condition(current_stage),
-                    Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
-                )
-            )
-        else:
+        if effective_current_stage == "install_scheduling":
+            stage_totals_query = stage_totals_query.where(_install_to_schedule_filter())
+        elif current_stage:
             stage_totals_query = stage_totals_query.where(_stage_filter_condition(current_stage))
 
-        stage_totals_query = stage_totals_query.where(shop_est_or_punchout_filter)
+        stage_totals_query = stage_totals_query.where(shop_est_completion_filter)
 
         if job_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.job_id == job_id)
@@ -1345,23 +1343,23 @@ async def get_fabs_with_shop_est_completion(
             stage_totals_query = stage_totals_query.where(Fab.sales_person_id == sales_person_id)
         stage_totals_query = stage_totals_query.where(Fab.status_id == effective_status_id)
 
-        if current_stage == "pre_draft_review":
+        if effective_current_stage == "pre_draft_review":
             date_start, date_end = template_completed_start, template_completed_end
-        elif current_stage == "templating":
+        elif effective_current_stage == "templating":
             date_start, date_end = schedule_start_date, schedule_due_date
-        elif current_stage == "drafting":
+        elif effective_current_stage == "drafting":
             date_start, date_end = predraft_completed_start, predraft_completed_end
-        elif current_stage == "sales_ct":
+        elif effective_current_stage == "sales_ct":
             date_start, date_end = draft_completed_start, draft_completed_end
-        elif current_stage == "revision":
+        elif effective_current_stage == "revision":
             date_start, date_end = sct_completed_start, sct_completed_end
-        elif current_stage == "cut_list":
+        elif effective_current_stage == "cut_list":
             date_start, date_end = shop_date_start, shop_date_end
         else:
             date_start, date_end = None, None
 
         stage_totals_query = _apply_stage_specific_date_filter(
-            stage_totals_query, current_stage, date_filter, date_start, date_end
+            stage_totals_query, effective_current_stage, date_filter, date_start, date_end
         )
 
         if search_filter is not None:
@@ -1382,7 +1380,7 @@ async def get_fabs_with_shop_est_completion(
 
         if totals_row:
             stage_totals = {
-                "stage": current_stage,
+                "stage": effective_current_stage,
                 "total_sqft": float(totals_row[0]) if totals_row[0] else 0.0,
                 "wj_linft": float(totals_row[1]) if totals_row[1] else 0.0,
                 "edging_linft": float(totals_row[2]) if totals_row[2] else 0.0,
@@ -1630,8 +1628,19 @@ async def update_fab(
     
     if fab_data.stone_color_id:
         stone_color_result = await db.execute(select(StoneColor).where(StoneColor.id == fab_data.stone_color_id))
-        if not stone_color_result.scalar_one_or_none():
+        stone_color = stone_color_result.scalar_one_or_none()
+        if not stone_color:
             raise HTTPException(status_code=404, detail="Stone color not found")
+
+        effective_stone_type_id = fab_data.stone_type_id or fab.stone_type_id
+        if stone_color.stone_type_id is not None and stone_color.stone_type_id != effective_stone_type_id:
+            raise HTTPException(status_code=400, detail="Stone color does not belong to the selected stone type")
+
+    elif fab_data.stone_type_id and fab.stone_color_id:
+        stone_color_result = await db.execute(select(StoneColor).where(StoneColor.id == fab.stone_color_id))
+        stone_color = stone_color_result.scalar_one_or_none()
+        if stone_color and stone_color.stone_type_id is not None and stone_color.stone_type_id != fab_data.stone_type_id:
+            raise HTTPException(status_code=400, detail="Existing stone color does not belong to the selected stone type")
     
     if fab_data.stone_thickness_id:
         thickness_result = await db.execute(select(StoneThickness).where(StoneThickness.id == fab_data.stone_thickness_id))
