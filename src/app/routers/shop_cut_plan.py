@@ -1178,6 +1178,60 @@ def _compute_lunch_adjusted_end(start: datetime, hours: float) -> datetime:
     return naive_end
 
 
+def _compute_business_rollover_end(start: datetime, hours: float) -> datetime:
+    """Return the end time after consuming working hours across business days.
+
+    The calculation honors the 7 AM - 4 PM workday, skips the 12 PM - 1 PM
+    lunch break, and continues any remaining duration on the next business day.
+    """
+    remaining_seconds = float(hours) * 3600
+    if remaining_seconds <= 0:
+        return start
+
+    cursor = _next_business_start(start)
+
+    while True:
+        day_start, day_end = _business_window_for_day(cursor)
+        lunch_start, lunch_end = _lunch_window_for_day(cursor)
+
+        if cursor < day_start:
+            cursor = day_start
+            continue
+
+        if lunch_start <= cursor < lunch_end:
+            cursor = lunch_end
+            continue
+
+        if cursor >= day_end:
+            next_day = (cursor + timedelta(days=1)).replace(
+                hour=BUSINESS_START_HOUR,
+                minute=0,
+                second=0,
+                microsecond=0,
+            )
+            cursor = _next_business_start(next_day)
+            continue
+
+        block_end = lunch_start if cursor < lunch_start else day_end
+        available_seconds = (block_end - cursor).total_seconds()
+
+        if remaining_seconds <= available_seconds:
+            return cursor + timedelta(seconds=remaining_seconds)
+
+        remaining_seconds -= available_seconds
+
+        if block_end == lunch_start:
+            cursor = lunch_end
+        else:
+            next_day = (cursor + timedelta(days=1)).replace(
+                hour=BUSINESS_START_HOUR,
+                minute=0,
+                second=0,
+                microsecond=0,
+            )
+            cursor = _next_business_start(next_day)
+
+
 def _compute_schedule_end_time_iso(
     scheduled_start: Optional[datetime],
     estimated_hours: Optional[float]
@@ -1636,6 +1690,18 @@ def _validate_manual_schedule_interval(start: Optional[datetime], estimated_hour
         )
 
 
+def _is_valid_business_start(start: datetime) -> bool:
+    if not _is_business_day(start):
+        return False
+
+    day_start, day_end = _business_window_for_day(start)
+    if not (day_start <= start < day_end):
+        return False
+
+    lunch_start, lunch_end = _lunch_window_for_day(start)
+    return not (lunch_start <= start < lunch_end)
+
+
 def _advance_after_invalid_interval(cursor: datetime, slot_minutes: int) -> datetime:
     """
     Advance cursor after an invalid candidate interval by one slot,
@@ -1833,11 +1899,11 @@ async def get_earliest_availability(
                 cursor = search_end
 
             while cursor < search_end and len(proposals) < payload.max_proposals_per_request:
-                candidate_end = _compute_lunch_adjusted_end(cursor, duration_hours)
+                candidate_end = _compute_business_rollover_end(cursor, duration_hours)
                 if candidate_end > search_end:
                     break
 
-                if not _is_valid_business_interval(cursor, candidate_end):
+                if not _is_valid_business_start(cursor):
                     cursor = _advance_after_invalid_interval(cursor, payload.slot_minutes)
                     continue
 
