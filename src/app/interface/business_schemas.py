@@ -1201,6 +1201,40 @@ class FinalProgrammingComplete(BaseModel):
     wj_time_minutes: Optional[int] = Field(None, gt=0, description="Waterjet time in minutes")
 
 
+class FinalProgrammingCreate(BaseModel):
+    """Schema for creating a final programming record with full model fields"""
+    drafter_id: int = Field(..., gt=0, description="Assigned programmer ID")
+    fab_id: int = Field(..., gt=0, description="FAB ID")
+    scheduled_start_date: datetime = Field(..., description="Scheduled start date")
+    scheduled_end_date: datetime = Field(..., description="Scheduled end date")
+    drafter_start_date: Optional[datetime] = Field(None, description="Actual drafter start date")
+    drafter_end_date: Optional[datetime] = Field(None, description="Actual drafter end date")
+    is_completed: bool = Field(False, description="Whether final programming is completed")
+    status_id: int = Field(..., gt=0, description="Status ID")
+    file_ids: Optional[str] = Field(None, description="Comma-separated file IDs")
+    no_of_piece_drafted: Optional[str] = Field(None, description="Number of pieces drafted")
+    total_sqft_required_to_draft: str = Field(..., min_length=1, description="Required sqft to draft")
+    total_sqft_drafted: Optional[str] = Field(None, description="Completed sqft drafted")
+    notes: Optional[List[str]] = Field(None, description="List of notes")
+
+
+class FinalProgrammingUpdate(BaseModel):
+    """Schema for updating a final programming record with full model fields"""
+    drafter_id: Optional[int] = Field(None, gt=0, description="Assigned programmer ID")
+    fab_id: Optional[int] = Field(None, gt=0, description="FAB ID")
+    scheduled_start_date: Optional[datetime] = Field(None, description="Scheduled start date")
+    scheduled_end_date: Optional[datetime] = Field(None, description="Scheduled end date")
+    drafter_start_date: Optional[datetime] = Field(None, description="Actual drafter start date")
+    drafter_end_date: Optional[datetime] = Field(None, description="Actual drafter end date")
+    is_completed: Optional[bool] = Field(None, description="Whether final programming is completed")
+    status_id: Optional[int] = Field(None, gt=0, description="Status ID")
+    file_ids: Optional[str] = Field(None, description="Comma-separated file IDs")
+    no_of_piece_drafted: Optional[str] = Field(None, description="Number of pieces drafted")
+    total_sqft_required_to_draft: Optional[str] = Field(None, min_length=1, description="Required sqft to draft")
+    total_sqft_drafted: Optional[str] = Field(None, description="Completed sqft drafted")
+    notes: Optional[List[str]] = Field(None, description="List of notes")
+
+
 # SlabSmith Session Schemas
 class SlabSmithSessionUpdate(BaseModel):
     """Schema for SlabSmith session actions (start, pause, resume, end)"""

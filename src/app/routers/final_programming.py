@@ -8,7 +8,10 @@ from src.app.database import get_db
 from src.app.database.fab import Fab
 from src.app.database.fab_notes import FabNotes
 from src.app.database.user import User
+from src.app.interface.generated_schemas import FinalProgramming
 from src.app.interface.business_schemas import (
+    FinalProgrammingCreate,
+    FinalProgrammingUpdate,
     FinalProgrammingSessionUpdate,
     FinalProgrammingScheduleShopDate,
     FinalProgrammingComplete,
@@ -24,6 +27,193 @@ router = APIRouter(
 
 # In-memory storage for session tracking (in production, use database table)
 programming_sessions = {}
+
+
+def _final_programming_response_data(final_programming: FinalProgramming) -> dict:
+    return {
+        "id": final_programming.id,
+        "drafter_id": final_programming.drafter_id,
+        "fab_id": final_programming.fab_id,
+        "scheduled_start_date": final_programming.scheduled_start_date.isoformat() if final_programming.scheduled_start_date else None,
+        "scheduled_end_date": final_programming.scheduled_end_date.isoformat() if final_programming.scheduled_end_date else None,
+        "drafter_start_date": final_programming.drafter_start_date.isoformat() if final_programming.drafter_start_date else None,
+        "drafter_end_date": final_programming.drafter_end_date.isoformat() if final_programming.drafter_end_date else None,
+        "is_completed": final_programming.is_completed,
+        "status_id": final_programming.status_id,
+        "created_at": final_programming.created_at.isoformat() if final_programming.created_at else None,
+        "updated_at": final_programming.updated_at.isoformat() if final_programming.updated_at else None,
+        "updated_by": final_programming.updated_by,
+        "file_ids": final_programming.file_ids,
+        "no_of_piece_drafted": final_programming.no_of_piece_drafted,
+        "total_sqft_required_to_draft": final_programming.total_sqft_required_to_draft,
+        "total_sqft_drafted": final_programming.total_sqft_drafted,
+        "notes": final_programming.notes,
+    }
+
+
+@router.post("", response_model=dict, status_code=status.HTTP_201_CREATED)
+async def create_final_programming(
+    payload: FinalProgrammingCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Create a final programming record with full model data."""
+
+    fab_result = await db.execute(select(Fab).where(Fab.id == payload.fab_id))
+    if not fab_result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"FAB with ID {payload.fab_id} not found",
+        )
+
+    drafter_result = await db.execute(select(User).where(User.id == payload.drafter_id))
+    if not drafter_result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Drafter with ID {payload.drafter_id} not found",
+        )
+
+    final_programming = FinalProgramming(
+        drafter_id=payload.drafter_id,
+        fab_id=payload.fab_id,
+        scheduled_start_date=payload.scheduled_start_date,
+        scheduled_end_date=payload.scheduled_end_date,
+        drafter_start_date=payload.drafter_start_date,
+        drafter_end_date=payload.drafter_end_date,
+        is_completed=payload.is_completed,
+        status_id=payload.status_id,
+        created_at=datetime.now(),
+        updated_at=None,
+        updated_by=None,
+        file_ids=payload.file_ids,
+        no_of_piece_drafted=payload.no_of_piece_drafted,
+        total_sqft_required_to_draft=payload.total_sqft_required_to_draft,
+        total_sqft_drafted=payload.total_sqft_drafted,
+        notes=payload.notes,
+    )
+
+    db.add(final_programming)
+    await db.commit()
+    await db.refresh(final_programming)
+
+    return {
+        "success": True,
+        "message": "Final programming created successfully",
+        "data": _final_programming_response_data(final_programming),
+    }
+
+
+@router.put("/{fp_id}", response_model=dict)
+async def update_final_programming_record(
+    fp_id: int,
+    payload: FinalProgrammingUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update a final programming record with full model fields."""
+
+    result = await db.execute(select(FinalProgramming).where(FinalProgramming.id == fp_id))
+    final_programming = result.scalar_one_or_none()
+
+    if not final_programming:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Final programming with ID {fp_id} not found",
+        )
+
+    if payload.fab_id is not None:
+        fab_result = await db.execute(select(Fab).where(Fab.id == payload.fab_id))
+        if not fab_result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"FAB with ID {payload.fab_id} not found",
+            )
+
+    if payload.drafter_id is not None:
+        drafter_result = await db.execute(select(User).where(User.id == payload.drafter_id))
+        if not drafter_result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Drafter with ID {payload.drafter_id} not found",
+            )
+
+    update_data = payload.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(final_programming, field, value)
+
+    final_programming.updated_at = datetime.now()
+    final_programming.updated_by = current_user.id
+
+    await db.commit()
+    await db.refresh(final_programming)
+
+    return {
+        "success": True,
+        "message": "Final programming updated successfully",
+        "data": _final_programming_response_data(final_programming),
+    }
+
+
+@router.put("/fab/{fab_id}", response_model=dict)
+async def update_final_programming_by_fab_id(
+    fab_id: int,
+    payload: FinalProgrammingUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update the latest final programming record by FAB ID."""
+
+    fab_result = await db.execute(select(Fab).where(Fab.id == fab_id))
+    if not fab_result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"FAB with ID {fab_id} not found",
+        )
+
+    result = await db.execute(
+        select(FinalProgramming)
+        .where(FinalProgramming.fab_id == fab_id)
+        .order_by(FinalProgramming.created_at.desc(), FinalProgramming.id.desc())
+        .limit(1)
+    )
+    final_programming = result.scalar_one_or_none()
+
+    if not final_programming:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No final programming record found for FAB ID {fab_id}",
+        )
+
+    if payload.fab_id is not None and payload.fab_id != fab_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="fab_id in payload must match path fab_id",
+        )
+
+    if payload.drafter_id is not None:
+        drafter_result = await db.execute(select(User).where(User.id == payload.drafter_id))
+        if not drafter_result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Drafter with ID {payload.drafter_id} not found",
+            )
+
+    update_data = payload.model_dump(exclude_unset=True)
+    update_data.pop("fab_id", None)
+    for field, value in update_data.items():
+        setattr(final_programming, field, value)
+
+    final_programming.updated_at = datetime.now()
+    final_programming.updated_by = current_user.id
+
+    await db.commit()
+    await db.refresh(final_programming)
+
+    return {
+        "success": True,
+        "message": "Final programming updated successfully by fab_id",
+        "data": _final_programming_response_data(final_programming),
+    }
 
 
 @router.post("/{fab_id}/session", response_model=dict)
