@@ -472,6 +472,7 @@ async def get_fabs(
     fab_type: Optional[str] = Query(None, description="Filter by fab type"),
     sales_person_id: Optional[int] = Query(None, description="Filter by sales person ID"),
     templater_id: Optional[int] = Query(None, description="Filter by templater/technician ID"),
+    drafter_id: Optional[int] = Query(None, description="Filter by drafter/programmer ID"),
     status_id: Optional[int] = Query(None, description="Filter by status ID"),
     current_stage: Optional[str] = Query(None, description="Filter by current stage"),
     next_stage: Optional[str] = Query(None, description="Filter by next stage"),
@@ -541,7 +542,8 @@ async def get_fabs(
         templating_fab_ids, latest_templating, shop_date_start, shop_date_end,
         template_completed_start, template_completed_end, predraft_completed_start, predraft_completed_end,
         draft_completed_start, draft_completed_end, sct_completed_start, sct_completed_end,
-        date_filter
+        date_filter,
+        drafter_id,
     )
 
     # Apply search filter if present
@@ -603,6 +605,8 @@ async def get_fabs(
         count_query = count_query.where(Fab.fab_type.ilike(f"%{fab_type}%"))
     if sales_person_id is not None:
         count_query = count_query.where(Fab.sales_person_id == sales_person_id)
+    if drafter_id is not None:
+        count_query = count_query.where(Fab.drafter_id == drafter_id)
     if status_id is not None:
         count_query = count_query.where(Fab.status_id == status_id)
     if current_stage:
@@ -699,6 +703,8 @@ async def get_fabs(
             stage_totals_query = stage_totals_query.where(Fab.fab_type.ilike(f"%{fab_type}%"))
         if sales_person_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.sales_person_id == sales_person_id)
+        if drafter_id is not None:
+            stage_totals_query = stage_totals_query.where(Fab.drafter_id == drafter_id)
         if status_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.status_id == status_id)
 
@@ -779,6 +785,7 @@ async def get_fabs_for_cnc_widget(
     fab_type: Optional[str] = Query(None, description="Filter by fab type"),
     sales_person_id: Optional[int] = Query(None, description="Filter by sales person ID"),
     templater_id: Optional[int] = Query(None, description="Filter by templater/technician ID"),
+    drafter_id: Optional[int] = Query(None, description="Filter by drafter/programmer ID"),
     status_id: Optional[int] = Query(None, description="Filter by status ID"),
     current_stage: Optional[str] = Query(None, description="Filter by current stage"),
     next_stage: Optional[str] = Query(None, description="Filter by next stage"),
@@ -849,7 +856,8 @@ async def get_fabs_for_cnc_widget(
         templating_fab_ids, latest_templating, shop_date_start, shop_date_end,
         template_completed_start, template_completed_end, predraft_completed_start, predraft_completed_end,
         draft_completed_start, draft_completed_end, sct_completed_start, sct_completed_end,
-        date_filter
+        date_filter,
+        drafter_id,
     )
 
     if current_stage == "install_scheduling":
@@ -915,6 +923,8 @@ async def get_fabs_for_cnc_widget(
         count_query = count_query.where(Fab.fab_type.ilike(f"%{fab_type}%"))
     if sales_person_id is not None:
         count_query = count_query.where(Fab.sales_person_id == sales_person_id)
+    if drafter_id is not None:
+        count_query = count_query.where(Fab.drafter_id == drafter_id)
     if status_id is not None:
         count_query = count_query.where(Fab.status_id == status_id)
     if current_stage:
@@ -1028,6 +1038,8 @@ async def get_fabs_for_cnc_widget(
             stage_totals_query = stage_totals_query.where(Fab.fab_type.ilike(f"%{fab_type}%"))
         if sales_person_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.sales_person_id == sales_person_id)
+        if drafter_id is not None:
+            stage_totals_query = stage_totals_query.where(Fab.drafter_id == drafter_id)
         if status_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.status_id == status_id)
 
@@ -2117,6 +2129,7 @@ async def get_pending_final_programming_fabs(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
     job_id: Optional[int] = Query(None, description="Filter by job ID"),
+    drafter_id: Optional[int] = Query(None, description="Filter by drafter/programmer ID"),
     status_id: Optional[int] = Query(None, description="Filter by status ID"),
     shop_date_start: Optional[date] = Query(None, description="Filter by shop_date_schedule on or after this date (YYYY-MM-DD)"),  # NEW
     shop_date_end: Optional[date] = Query(None, description="Filter by shop_date_schedule on or before this date (YYYY-MM-DD)"),  # NEW
@@ -2207,6 +2220,8 @@ async def get_pending_final_programming_fabs(
     # Apply optional filters
     if job_id:
         query = query.where(Fab.job_id == job_id)
+    if drafter_id is not None:
+        query = query.where(Fab.drafter_id == drafter_id)
     if status_id:
         query = query.where(Fab.status_id == status_id)
     
@@ -2258,6 +2273,8 @@ async def get_pending_final_programming_fabs(
     )
     if job_id:
         count_query = count_query.where(Fab.job_id == job_id)
+    if drafter_id is not None:
+        count_query = count_query.where(Fab.drafter_id == drafter_id)
     if status_id:
         count_query = count_query.where(Fab.status_id == status_id)
     if shop_date_start:
@@ -2725,7 +2742,8 @@ def _build_fab_list_query(
     draft_completed_end: Optional[date] = None,
     sct_completed_start: Optional[date] = None,
     sct_completed_end: Optional[date] = None,
-    date_filter: Optional[str] = None
+    date_filter: Optional[str] = None,
+    drafter_id: Optional[int] = None,
 ) -> select:
     """Build the main FAB list query with all joins."""
     from sqlalchemy.orm import aliased
@@ -2780,6 +2798,8 @@ def _build_fab_list_query(
         query = query.where(Fab.fab_type.ilike(f"%{fab_type}%"))
     if sales_person_id is not None:
         query = query.where(Fab.sales_person_id == sales_person_id)
+    if drafter_id is not None:
+        query = query.where(Fab.drafter_id == drafter_id)
     if status_id is not None:
         query = query.where(Fab.status_id == status_id)
     if current_stage:
