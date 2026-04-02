@@ -54,7 +54,8 @@ FAB_STAGES = [
     "revision",                # Stage 11: Revisions
     "cost_of_stone",            # Stage 12: Cost of Stone
     "install_scheduling",       # Stage 13: Install Scheduling
-    "install_completion"        # Stage 14: Install Completion (final stage)
+    "install_completion",        # Stage 14: Install Completion (final stage)
+    "cnc",           # Stage 15: CNC programming if needed
 ]
 
 BASE_URL = os.getenv("BASE_URL", "https://api.ag.easybusiness.ng")
@@ -406,10 +407,9 @@ async def create_fab(
     fab_dict["fab_type"] = fab_type  # persist uppercase globally
 
     if fab_type in PUNCHOUT_REDIRECT_FAB_TYPES:
-        # Punchout FABs should be handled via the shop-est-completion flow,
-        # not shown in install_scheduling lists.
-        current_stage = "cut_list"
-        next_stage = get_next_stage("cut_list")
+        # Punchout FABs should start directly in install scheduling.
+        current_stage = "install_scheduling"
+        next_stage = get_next_stage("install_scheduling")
     elif fab_type == "RESURFACE":
         current_stage = "resurface_scheduling"
         next_stage = get_next_stage("resurface_scheduling")
