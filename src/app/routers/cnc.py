@@ -1,7 +1,7 @@
 from typing import List, Optional
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import APIRouter, Depends, Form, HTTPException, status
+from fastapi import APIRouter, Depends, File as FileUpload, Form, HTTPException, Request, UploadFile, status
 from sqlalchemy import select
 import logging
 from datetime import datetime, timezone
@@ -22,6 +22,7 @@ from src.app.interface.business_schemas import (
     CNCDraftingSessionHistoryResponse,
 )
 from src.app.middleware.jwt_auth import get_current_user
+from src.app.service.file import FileService
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import error_response, success_response, strip_timezone, utc_now
 
@@ -575,19 +576,32 @@ async def get_cnc_drafting_by_fab(
 @router.post("/CNC/{cnc_id}/add-file", response_model=SuccessResponse[None])
 async def add_file_to_cnc_drafting(
     cnc_id: int,
-    file_id: int,
+    request: Request,
+    file: UploadFile = FileUpload(...),
     file_design: Optional[str] = Form(None),
     stage_name: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Add a file to a CNC drafting entry"""
+    """Upload a file and attach it to a CNC drafting entry"""
 
     result = await db.execute(select(CNCDrafting).where(CNCDrafting.id == cnc_id))
     cnc = result.scalar_one_or_none()
 
     if not cnc:
         raise error_response("CNC drafting not found", 404)
+
+    file_data = await FileService.upload_file(
+        db=db,
+        file=file,
+        user_id=current_user.id,
+        directory="uploads",
+        file_design=file_design,
+        stage_name=stage_name,
+        fab_id=cnc.fab_id,
+        request=request,
+    )
+    file_id = file_data["id"]
 
     if cnc.file_ids:
         file_ids_list = cnc.file_ids.split(",")
