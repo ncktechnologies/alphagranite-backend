@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func, or_
 import sqlalchemy as sa
@@ -489,6 +489,7 @@ async def get_pending_slabsmith_fab_ids(
     type: Optional[str] = None,
     date_filter: Optional[str] = None,
     fab_type: Optional[str] = None,
+    drafter_id: Optional[int] = Query(None, description="Filter by drafter/programmer ID"),
     skip: int = 0,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
@@ -566,6 +567,9 @@ async def get_pending_slabsmith_fab_ids(
     # FAB Type filter
     if fab_type:
         filters.append(Fab.fab_type.ilike(f"%{fab_type}%"))
+
+    if drafter_id is not None:
+        filters.append(Fab.drafter_id == drafter_id)
 
     # Build latest templating subquery (for consistent FAB payload)
     latest_templating = (

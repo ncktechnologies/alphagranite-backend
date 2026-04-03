@@ -1,6 +1,7 @@
 from typing import List, Optional
 from datetime import datetime
-from fastapi import APIRouter, Depends, Form, Query
+from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,29 +16,40 @@ from src.app.database.user import User
 router = APIRouter()
 
 
+class PlanningSectionCreateRequest(BaseModel):
+    plan_name: str
+    plan_description: Optional[str] = None
+    is_active: bool = True
+    status_id: int = 1
+
+
+class PlanningSectionUpdateRequest(BaseModel):
+    plan_name: str
+    plan_description: Optional[str] = None
+    is_active: Optional[bool] = None
+    status_id: int
+
+
 @router.post("/planning-section", response_model=SuccessResponse[PlanningSectionSchema])  # required
 async def create_planning_section(
-    plan_name: str = Form(...),
-    plan_description: Optional[str] = Form(None),
-    is_active: bool = Form(True),
-    status_id: int = Form(1),
+    payload: PlanningSectionCreateRequest,
     db: AsyncSession = Depends(get_db),
     created_by: int = 1,
 ):
-    if status_id not in (0, 1):
+    if payload.status_id not in (0, 1):
         raise error_response("status_id must be 0 (inactive) or 1 (active)", 400)
 
     result = await db.execute(
-        select(PlanningSectionSchema).where(PlanningSectionSchema.plan_name == plan_name)
+        select(PlanningSectionSchema).where(PlanningSectionSchema.plan_name == payload.plan_name)
     )
     if result.scalar_one_or_none():
         raise error_response("Plan name must be unique", 400)
 
     section = PlanningSectionSchema(
-        plan_name=plan_name,
-        plan_description=plan_description,
-        is_active=is_active,
-        status_id=status_id,
+        plan_name=payload.plan_name,
+        plan_description=payload.plan_description,
+        is_active=payload.is_active,
+        status_id=payload.status_id,
         created_by=created_by,
         created_at=datetime.now(),
     )
@@ -50,14 +62,11 @@ async def create_planning_section(
 @router.put("/planning-section/{section_id}", response_model=SuccessResponse[PlanningSectionSchema])  # required
 async def update_planning_section(
     section_id: int,
-    plan_name: str = Form(...),
-    plan_description: Optional[str] = Form(None),
-    is_active: Optional[bool] = Form(None),
-    status_id: int = Form(...),
+    payload: PlanningSectionUpdateRequest,
     db: AsyncSession = Depends(get_db),
     updated_by: int = 1,
 ):
-    if status_id not in (0, 1):
+    if payload.status_id not in (0, 1):
         raise error_response("status_id must be 0 (inactive) or 1 (active)", 400)
 
     section = await db.get(PlanningSectionSchema, section_id)
@@ -66,18 +75,18 @@ async def update_planning_section(
 
     result = await db.execute(
         select(PlanningSectionSchema).where(
-            PlanningSectionSchema.plan_name == plan_name,
+            PlanningSectionSchema.plan_name == payload.plan_name,
             PlanningSectionSchema.id != section_id,
         )
     )
     if result.scalar_one_or_none():
         raise error_response("Plan name must be unique", 400)
 
-    section.plan_name = plan_name
-    section.plan_description = plan_description
-    if is_active is not None:
-        section.is_active = is_active
-    section.status_id = status_id
+    section.plan_name = payload.plan_name
+    section.plan_description = payload.plan_description
+    if payload.is_active is not None:
+        section.is_active = payload.is_active
+    section.status_id = payload.status_id
     section.updated_by = updated_by
     section.updated_at = datetime.now()
 
