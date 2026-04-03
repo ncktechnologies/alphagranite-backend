@@ -1199,8 +1199,11 @@ async def get_fabs_with_shop_est_completion(
     elif current_stage:
         query = query.where(_stage_filter_condition(current_stage))
 
-    shop_est_completion_filter = Fab.shop_est_completion_date.isnot(None)
-    query = query.where(shop_est_completion_filter)
+    shop_est_or_install_filter = or_(
+        Fab.shop_est_completion_date.isnot(None),
+        Fab.current_stage == "install_scheduling",
+    )
+    query = query.where(shop_est_or_install_filter)
 
     # Apply search filter if present
     if search_filter is not None:
@@ -1243,7 +1246,7 @@ async def get_fabs_with_shop_est_completion(
     count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
     count_query = count_query.outerjoin(latest_templating, sa.literal(True))
 
-    count_query = count_query.where(shop_est_completion_filter)
+    count_query = count_query.where(shop_est_or_install_filter)
 
     # Apply all basic filters to count query
     if job_id is not None:
@@ -1345,7 +1348,7 @@ async def get_fabs_with_shop_est_completion(
         elif current_stage:
             stage_totals_query = stage_totals_query.where(_stage_filter_condition(current_stage))
 
-        stage_totals_query = stage_totals_query.where(shop_est_completion_filter)
+        stage_totals_query = stage_totals_query.where(shop_est_or_install_filter)
 
         if job_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.job_id == job_id)
