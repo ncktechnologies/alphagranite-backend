@@ -1194,8 +1194,10 @@ async def get_fabs_with_shop_est_completion(
         date_filter
     )
 
+    install_shop_est_stage_filter = Fab.current_stage == "install_scheduling"
+
     if effective_current_stage == "install_scheduling":
-        query = query.where(_install_to_schedule_filter())
+        query = query.where(install_shop_est_stage_filter)
     elif current_stage:
         query = query.where(_stage_filter_condition(current_stage))
 
@@ -1257,7 +1259,7 @@ async def get_fabs_with_shop_est_completion(
         count_query = count_query.where(Fab.sales_person_id == sales_person_id)
     count_query = count_query.where(Fab.status_id == effective_status_id)
     if effective_current_stage == "install_scheduling":
-        count_query = count_query.where(_install_to_schedule_filter())
+        count_query = count_query.where(install_shop_est_stage_filter)
     elif current_stage:
         count_query = count_query.where(_stage_filter_condition(current_stage))
     if next_stage:
@@ -1344,7 +1346,7 @@ async def get_fabs_with_shop_est_completion(
         ).select_from(Fab)
 
         if effective_current_stage == "install_scheduling":
-            stage_totals_query = stage_totals_query.where(_install_to_schedule_filter())
+            stage_totals_query = stage_totals_query.where(install_shop_est_stage_filter)
         elif current_stage:
             stage_totals_query = stage_totals_query.where(_stage_filter_condition(current_stage))
 
