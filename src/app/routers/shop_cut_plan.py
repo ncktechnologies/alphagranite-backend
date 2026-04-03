@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Body
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, and_, or_, cast, String
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from typing import List, Optional, Dict, Tuple
 from pydantic import BaseModel
 from collections import Counter
@@ -251,15 +251,26 @@ async def get_all_shop_plans(
     cut_type: Optional[str] = None,
     month: Optional[int] = None,
     year: Optional[int] = None,
+    view: str = "week",
+    reference_date: Optional[date] = None,
     skip: int = 0,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    now = datetime.now()
-    target_month = month or now.month
-    target_year = year or now.year
-    _validate_month_year(target_month, target_year)
+    normalized_view = (view or "week").strip().lower()
+    if reference_date is not None:
+        target_date = reference_date
+    elif month is not None or year is not None:
+        now = datetime.now()
+        target_month = month or now.month
+        target_year = year or now.year
+        _validate_month_year(target_month, target_year)
+        target_date = date(target_year, target_month, 1)
+    else:
+        target_date = date.today()
+
+    range_start, range_end = _build_calendar_window(normalized_view, target_date)
 
     query = _build_shop_plans_query()
     query = _apply_shop_plan_filters(
@@ -273,11 +284,16 @@ async def get_all_shop_plans(
         status_id=status_id,
         cut_type=cut_type,
     )
-    query = _apply_month_scope(query, target_month, target_year)
+    query = query.where(
+        ShopCutPlan.scheduled_start_date.is_not(None),
+        ShopCutPlan.scheduled_start_date < range_end,
+    )
 
-    total = await _get_total_count(db, query)
-    plans = await _fetch_ordered_plans(db, query, skip, limit)
-    serialized_plans, grouped_plans = await _serialize_and_group_plans(db, plans)
+    plans = await _fetch_all_ordered_plans(db, query)
+    plans = [plan for plan in plans if _task_overlaps_window(plan, range_start, range_end)]
+    total = len(plans)
+    paginated_plans = plans[skip:skip + limit]
+    serialized_plans, grouped_plans = await _serialize_and_group_plans(db, paginated_plans)
 
     return {
         "success": True,
@@ -286,8 +302,10 @@ async def get_all_shop_plans(
             "total": total,
             "page": (skip // limit) + 1 if limit > 0 else 1,
             "per_page": limit,
-            "month": target_month,
-            "year": target_year,
+            "month": target_date.month,
+            "year": target_date.year,
+            "view": normalized_view,
+            "reference_date": target_date.isoformat(),
             "plans": serialized_plans,
             "grouped_plans": grouped_plans
         }
@@ -1251,6 +1269,43 @@ def _validate_month_year(month: int, year: int) -> None:
         raise HTTPException(status_code=400, detail="year must be between 1900 and 9999")
 
 
+def _build_calendar_window(view: str, reference_date: date) -> tuple[datetime, datetime]:
+    start_of_day = datetime.combine(reference_date, datetime.min.time())
+
+    if view == "day":
+        return start_of_day, start_of_day + timedelta(days=1)
+
+    if view == "week":
+        week_start = start_of_day - timedelta(days=reference_date.weekday())
+        return week_start, week_start + timedelta(days=7)
+
+    if view == "month":
+        month_start = start_of_day.replace(day=1)
+        if month_start.month == 12:
+            next_month = month_start.replace(year=month_start.year + 1, month=1)
+        else:
+            next_month = month_start.replace(month=month_start.month + 1)
+        return month_start, next_month
+
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="view must be one of: day, week, month")
+
+
+def _task_overlaps_window(plan: ShopCutPlan, range_start: datetime, range_end: datetime) -> bool:
+    if not plan.scheduled_start_date:
+        return False
+
+    task_start = plan.scheduled_start_date
+    if plan.estimated_hours is None:
+        task_end = task_start
+    else:
+        try:
+            task_end = task_start + timedelta(hours=float(plan.estimated_hours))
+        except (TypeError, ValueError):
+            task_end = task_start
+
+    return task_start < range_end and task_end >= range_start
+
+
 def _build_shop_plans_query():
     return (
         select(ShopCutPlan)
@@ -1328,6 +1383,17 @@ async def _fetch_ordered_plans(db: AsyncSession, query, skip: int, limit: int):
             ShopCutPlan.scheduled_start_date.is_(None).desc(),
             ShopCutPlan.scheduled_start_date.asc()
         ).offset(skip).limit(limit)
+    )
+    return result.scalars().all()
+
+
+async def _fetch_all_ordered_plans(db: AsyncSession, query):
+    result = await db.execute(
+        query.order_by(
+            ShopCutPlan.scheduled_start_date.asc(),
+            ShopCutPlan.sequence.asc(),
+            ShopCutPlan.id.asc(),
+        )
     )
     return result.scalars().all()
 
