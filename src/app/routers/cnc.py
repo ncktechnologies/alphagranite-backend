@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from src.app.database import get_db
 from src.app.database.user import User
 from src.app.database.fab import Fab
+from src.app.database.business_job import BusinessJob
 from src.app.database.cnc import CNCDrafting, CNCDraftingSession, CNCDraftingSessionNote
 from src.app.database.file import File
 from src.app.interface.business_schemas import (
@@ -69,6 +70,26 @@ async def manage_cnc_session(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="An active CNC session already exists for this fab. Complete it first or mark as revision.",
+            )
+
+        # Prevent multiple simultaneous running timers for the same drafter at this stage
+        conflict_result = await db.execute(
+            select(CNCDraftingSession, BusinessJob)
+            .join(Fab, Fab.id == CNCDraftingSession.fab_id)
+            .join(BusinessJob, BusinessJob.id == Fab.job_id)
+            .where(
+                CNCDraftingSession.drafter_id == session_data.drafter_id,
+                CNCDraftingSession.status == "drafting",
+                CNCDraftingSession.fab_id != fab_id,
+            )
+            .limit(1)
+        )
+        conflict_row = conflict_result.first()
+        if conflict_row:
+            conflict_session, conflict_job = conflict_row
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Timer on Job #{conflict_job.job_number} and Fab_id {conflict_session.fab_id} is already running. Stop or pause it before starting another.",
             )
 
         session = CNCDraftingSession(

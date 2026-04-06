@@ -1113,15 +1113,27 @@ async def _process_current_operator_job_timer_action(
             fab_id=fab_id,
             job_id=job_id,
         )
-        active_any_session = await _get_active_operator_job_session(db, operator_id=operator_id)
-
         if normalized_action == "start":
             if active_session:
                 raise HTTPException(status_code=400, detail="An active timer session already exists for this job")
-            if active_any_session and active_any_session.job_id != job_id:
+
+            # Prevent multiple simultaneous running timers for the same operator at this stage
+            cross_conflict_result = await db.execute(
+                select(OperatorJobTimerSession, BusinessJob)
+                .join(BusinessJob, BusinessJob.id == OperatorJobTimerSession.job_id)
+                .where(
+                    OperatorJobTimerSession.operator_id == operator_id,
+                    OperatorJobTimerSession.status == "running",
+                    OperatorJobTimerSession.job_id != job_id,
+                )
+                .limit(1)
+            )
+            cross_conflict = cross_conflict_result.first()
+            if cross_conflict:
+                c_session, c_job = cross_conflict
                 raise HTTPException(
-                    status_code=409,
-                    detail=f"Operator already has an active timer on job {active_any_session.job_id}",
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Timer on Job #{c_job.job_number} and Fab_id {c_session.fab_id} is already running. Stop or pause it before starting another.",
                 )
 
             session = OperatorJobTimerSession(

@@ -1243,6 +1243,88 @@ async def get_fabs_with_shop_est_completion(
         f["estimated_completion_date"] = estimated_completion_date
         f["percentage_completion"] = percentage_completion
 
+    # Step 6.2: Group fabs by month → day using estimated_completion_date
+    def _build_completion_date_groups(fab_list: list) -> list:
+        """Group fabs by estimated_completion_date: month → day with sqft/revenue subtotals."""
+        month_buckets: dict = {}
+
+        for f in fab_list:
+            ecd = f.get("estimated_completion_date")
+            if ecd:
+                try:
+                    dt = datetime.fromisoformat(ecd)
+                    month_key = dt.strftime("%Y-%m")
+                    month_label = dt.strftime("%B %Y")   # e.g. "April 2026"
+                    day_key = f"{dt.month}/{dt.day}/{dt.year}"  # e.g. "4/10/2026"
+                except Exception:
+                    month_key = "unknown"
+                    month_label = "Unknown"
+                    day_key = "Unknown"
+            else:
+                month_key = "unscheduled"
+                month_label = "Unscheduled"
+                day_key = "Unscheduled"
+
+            if month_key not in month_buckets:
+                month_buckets[month_key] = {"month_label": month_label, "days": {}}
+            if day_key not in month_buckets[month_key]["days"]:
+                month_buckets[month_key]["days"][day_key] = []
+            month_buckets[month_key]["days"][day_key].append(f)
+
+        def _revenue(fab) -> float:
+            jd = fab.get("job_details") or {}
+            pv = jd.get("project_value")
+            try:
+                return float(pv) if pv is not None else 0.0
+            except (TypeError, ValueError):
+                return 0.0
+
+        def _sqft(fab) -> float:
+            v = fab.get("total_sqft")
+            try:
+                return float(v) if v is not None else 0.0
+            except (TypeError, ValueError):
+                return 0.0
+
+        result = []
+        for month_key in sorted(month_buckets.keys()):
+            bucket = month_buckets[month_key]
+            days_list = []
+            month_total_sqft = 0.0
+            month_total_revenue = 0.0
+
+            day_keys = bucket["days"].keys()
+            # Sort real dates first; unknown/unscheduled last
+            def _day_sort_key(dk):
+                try:
+                    return (0, datetime.strptime(dk, "%m/%d/%Y"))
+                except Exception:
+                    return (1, datetime.min)
+
+            for day_key in sorted(day_keys, key=_day_sort_key):
+                day_fabs = bucket["days"][day_key]
+                day_total_sqft = sum(_sqft(f) for f in day_fabs)
+                day_total_revenue = sum(_revenue(f) for f in day_fabs)
+                month_total_sqft += day_total_sqft
+                month_total_revenue += day_total_revenue
+                days_list.append({
+                    "date": day_key,
+                    "total_sqft": round(day_total_sqft, 4),
+                    "total_revenue": round(day_total_revenue, 2),
+                    "fabs": day_fabs,
+                })
+
+            result.append({
+                "month": bucket["month_label"],
+                "total_sqft": round(month_total_sqft, 4),
+                "total_revenue": round(month_total_revenue, 2),
+                "days": days_list,
+            })
+
+        return result
+
+    completion_date_groups = _build_completion_date_groups(fabs)
+
     # Step 7: Get total count
     count_query = select(func.count(Fab.id)).select_from(Fab)
     count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
@@ -1413,7 +1495,8 @@ async def get_fabs_with_shop_est_completion(
         "total": total,
         "page": page,
         "per_page": limit,
-        "data": fabs
+        "data": fabs,
+        "grouped_by_estimated_completion": completion_date_groups,
     }
 
     if stage_totals:
