@@ -594,7 +594,7 @@ async def get_cnc_drafting_by_fab(
     return success_response(cnc, "CNC drafting fetched successfully")
 
 
-@router.post("/CNC/{cnc_id}/add-file", response_model=SuccessResponse[None])
+@router.post("/CNC/{cnc_id}/add-file", response_model=SuccessResponse[dict])
 async def add_file_to_cnc_drafting(
     cnc_id: int,
     request: Request,
