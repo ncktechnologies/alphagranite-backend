@@ -202,6 +202,8 @@ async def create_shop_plans(
             user_result = await db.execute(select(User).where(User.id == plan.user_id))
             plan_operator = user_result.scalar_one_or_none()
 
+            scheduled_end = _compute_lunch_adjusted_end(plan.scheduled_start_date, plan.estimated_hours) if plan.scheduled_start_date else None
+
             plans_payload.append({
                 "id": plan.id,
                 "sequence": plan.sequence,
@@ -213,6 +215,7 @@ async def create_shop_plans(
                 "estimated_hours": plan.estimated_hours,
                 "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
                 "scheduled_end_date": _compute_schedule_end_time_iso(plan.scheduled_start_date, plan.estimated_hours),
+                "scheduled_time": _format_scheduled_time_range(plan.scheduled_start_date, scheduled_end),
                 "work_percentage": plan.work_percentage,
                 "notes": plan.notes,
             })
@@ -1262,6 +1265,42 @@ def _compute_schedule_end_time_iso(
         return None
 
 
+def _format_scheduled_time_range(
+    start: Optional[datetime],
+    end: Optional[datetime]
+) -> Optional[str]:
+    """Format scheduled time range as human-readable string.
+    
+    Same day:     "Apr 10, 10:00 AM – 2:30 PM"
+    Different day: "Apr 10, 10:00 AM – Apr 11, 2:30 PM"
+    """
+    if not start or not end:
+        return None
+    
+    try:
+        # Normalize to naive datetimes if needed
+        if start.tzinfo:
+            start = start.replace(tzinfo=None)
+        if end.tzinfo:
+            end = end.replace(tzinfo=None)
+        
+        # Format time portion (e.g., "10:00 AM", "2:30 PM")
+        start_time = start.strftime("%-I:%M %p").lstrip("0")  # "10:00 AM" or "2:30 PM" (not "02:30")
+        end_time = end.strftime("%-I:%M %p").lstrip("0")
+        
+        # Format date portion (e.g., "Apr 10")
+        start_date = start.strftime("%b %-d").replace(" 0", " ")  # "Apr 10" not "Apr 010"
+        end_date = end.strftime("%b %-d").replace(" 0", " ")
+        
+        # Check if same day
+        if start.date() == end.date():
+            return f"{start_date}, {start_time} – {end_time}"
+        else:
+            return f"{start_date}, {start_time} – {end_date}, {end_time}"
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
 def _validate_month_year(month: int, year: int) -> None:
     if month < 1 or month > 12:
         raise HTTPException(status_code=400, detail="month must be between 1 and 12")
@@ -1978,7 +2017,8 @@ async def get_earliest_availability(
                 if overlap is None:
                     proposals.append({
                         "start": cursor.isoformat(),
-                        "end": candidate_end.isoformat()
+                        "end": candidate_end.isoformat(),
+                        "scheduled_time": _format_scheduled_time_range(cursor, candidate_end)
                     })
                     cursor = cursor + step
                     cursor = _align_to_slot(cursor, payload.slot_minutes)
