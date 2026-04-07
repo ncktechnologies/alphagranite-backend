@@ -132,6 +132,13 @@ async def get_active_planning_sections(db: AsyncSession = Depends(get_db)):
     return success_response(sections, "Active planning sections retrieved successfully")
 
 
+@router.get("/planning-section", response_model=SuccessResponse[List[PlanningSectionSchema]])
+async def get_all_planning_sections(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(PlanningSectionSchema))
+    sections = result.scalars().all()
+    return success_response(sections, "Planning sections retrieved successfully")
+
+
 @router.get(
     "/planning-section/{planning_section_id}/workstations",
     response_model=SuccessResponse[dict],

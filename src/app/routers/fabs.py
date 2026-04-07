@@ -130,6 +130,59 @@ def _compute_fab_progress_fields(plans: List[dict]) -> tuple[Optional[str], floa
     estimated_completion_date = latest_end_dt.isoformat() if latest_end_dt else None
     return estimated_completion_date, avg_percent
 
+
+async def _transition_completed_cutlist_fabs_to_shop(
+    db: AsyncSession,
+    updated_by: Optional[int],
+) -> None:
+    rows = (
+        await db.execute(
+            select(
+                ShopCutPlan.fab_id,
+                PlanningSection.plan_name,
+                ShopCutPlan.work_percentage,
+            )
+            .join(Fab, Fab.id == ShopCutPlan.fab_id)
+            .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
+            .where(
+                Fab.current_stage == "cut_list",
+                func.lower(func.trim(PlanningSection.plan_name)).in_(["cut", "wj"]),
+            )
+        )
+    ).all()
+
+    completed_sections_by_fab: dict[int, set[str]] = defaultdict(set)
+    for fab_id, plan_name, work_percentage in rows:
+        normalized_name = (plan_name or "").strip().lower()
+        if normalized_name in {"cut", "wj"} and int(work_percentage or 0) >= 100:
+            completed_sections_by_fab[fab_id].add(normalized_name)
+
+    eligible_fab_ids = [
+        fab_id
+        for fab_id, completed_sections in completed_sections_by_fab.items()
+        if {"cut", "wj"}.issubset(completed_sections)
+    ]
+
+    if not eligible_fab_ids:
+        return
+
+    fabs_to_update = (
+        await db.execute(select(Fab).where(Fab.id.in_(eligible_fab_ids)))
+    ).scalars().all()
+
+    updated = False
+    for fab in fabs_to_update:
+        if fab.current_stage != "cut_list":
+            continue
+        fab.current_stage = "shop"
+        fab.next_stage = None
+        fab.updated_at = utc_now()
+        fab.updated_by = updated_by
+        updated = True
+
+    if updated:
+        await db.commit()
+
 def _stage_filter_condition(stage_name: str):
     """
     Stage visibility rule:
@@ -496,6 +549,9 @@ async def get_fabs(
     current_user: User = Depends(get_current_user)
 ):
     """Get list of fabs with optional filtering and pagination"""
+
+    if current_stage == "cut_list":
+        await _transition_completed_cutlist_fabs_to_shop(db, current_user.id)
 
     # Step 1: Apply templating filters to get FAB IDs
     templating_fab_ids = await _apply_templating_filters(
@@ -1246,6 +1302,88 @@ async def get_fabs_with_shop_est_completion(
         f["estimated_completion_date"] = estimated_completion_date
         f["percentage_completion"] = percentage_completion
 
+    # Step 6.2: Group fabs by month → day using estimated_completion_date
+    def _build_completion_date_groups(fab_list: list) -> list:
+        """Group fabs by estimated_completion_date: month → day with sqft/revenue subtotals."""
+        month_buckets: dict = {}
+
+        for f in fab_list:
+            ecd = f.get("estimated_completion_date")
+            if ecd:
+                try:
+                    dt = datetime.fromisoformat(ecd)
+                    month_key = dt.strftime("%Y-%m")
+                    month_label = dt.strftime("%B %Y")   # e.g. "April 2026"
+                    day_key = f"{dt.month}/{dt.day}/{dt.year}"  # e.g. "4/10/2026"
+                except Exception:
+                    month_key = "unknown"
+                    month_label = "Unknown"
+                    day_key = "Unknown"
+            else:
+                month_key = "unscheduled"
+                month_label = "Unscheduled"
+                day_key = "Unscheduled"
+
+            if month_key not in month_buckets:
+                month_buckets[month_key] = {"month_label": month_label, "days": {}}
+            if day_key not in month_buckets[month_key]["days"]:
+                month_buckets[month_key]["days"][day_key] = []
+            month_buckets[month_key]["days"][day_key].append(f)
+
+        def _revenue(fab) -> float:
+            jd = fab.get("job_details") or {}
+            pv = jd.get("project_value")
+            try:
+                return float(pv) if pv is not None else 0.0
+            except (TypeError, ValueError):
+                return 0.0
+
+        def _sqft(fab) -> float:
+            v = fab.get("total_sqft")
+            try:
+                return float(v) if v is not None else 0.0
+            except (TypeError, ValueError):
+                return 0.0
+
+        result = []
+        for month_key in sorted(month_buckets.keys()):
+            bucket = month_buckets[month_key]
+            days_list = []
+            month_total_sqft = 0.0
+            month_total_revenue = 0.0
+
+            day_keys = bucket["days"].keys()
+            # Sort real dates first; unknown/unscheduled last
+            def _day_sort_key(dk):
+                try:
+                    return (0, datetime.strptime(dk, "%m/%d/%Y"))
+                except Exception:
+                    return (1, datetime.min)
+
+            for day_key in sorted(day_keys, key=_day_sort_key):
+                day_fabs = bucket["days"][day_key]
+                day_total_sqft = sum(_sqft(f) for f in day_fabs)
+                day_total_revenue = sum(_revenue(f) for f in day_fabs)
+                month_total_sqft += day_total_sqft
+                month_total_revenue += day_total_revenue
+                days_list.append({
+                    "date": day_key,
+                    "total_sqft": round(day_total_sqft, 4),
+                    "total_revenue": round(day_total_revenue, 2),
+                    "fabs": day_fabs,
+                })
+
+            result.append({
+                "month": bucket["month_label"],
+                "total_sqft": round(month_total_sqft, 4),
+                "total_revenue": round(month_total_revenue, 2),
+                "days": days_list,
+            })
+
+        return result
+
+    completion_date_groups = _build_completion_date_groups(fabs)
+
     # Step 7: Get total count
     count_query = select(func.count(Fab.id)).select_from(Fab)
     count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
@@ -1416,7 +1554,8 @@ async def get_fabs_with_shop_est_completion(
         "total": total,
         "page": page,
         "per_page": limit,
-        "data": fabs
+        "data": fabs,
+        "grouped_by_estimated_completion": completion_date_groups,
     }
 
     if stage_totals:

@@ -142,18 +142,23 @@ async def start_installer_job_timer(
         if not fab_result.scalar_one_or_none():
             raise error_response("Fab not found", 404)
     
-    # Check if there's already an active timer
-    active_result = await db.execute(
-        select(InstallerJobTimerSession).where(
-            InstallerJobTimerSession.job_id == job_id,
+    # Check if there's already a running timer for this installer at this stage
+    conflict_result = await db.execute(
+        select(InstallerJobTimerSession, BusinessJob)
+        .join(BusinessJob, BusinessJob.id == InstallerJobTimerSession.job_id)
+        .where(
             InstallerJobTimerSession.installer_id == installer_id,
-            InstallerJobTimerSession.status.in_(["running", "paused"]),
+            InstallerJobTimerSession.status == "running",
         )
+        .limit(1)
     )
-    active_session = active_result.scalar_one_or_none()
-    
-    if active_session:
-        raise error_response("An active timer already exists for this installer and job", 400)
+    conflict_row = conflict_result.first()
+    if conflict_row:
+        conflict_session, conflict_job = conflict_row
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Timer on Job #{conflict_job.job_number} and Fab_id {conflict_session.fab_id} is already running. Stop or pause it before starting another.",
+        )
     
     # Create new session
     now = datetime.now()
@@ -508,18 +513,23 @@ async def start_templater_job_timer(
         if not fab_result.scalar_one_or_none():
             raise error_response("Fab not found", 404)
     
-    # Check if there's already an active timer
-    active_result = await db.execute(
-        select(TemplaterJobTimerSession).where(
-            TemplaterJobTimerSession.job_id == job_id,
+    # Check if there's already a running timer for this templater at this stage
+    conflict_result = await db.execute(
+        select(TemplaterJobTimerSession, BusinessJob)
+        .join(BusinessJob, BusinessJob.id == TemplaterJobTimerSession.job_id)
+        .where(
             TemplaterJobTimerSession.templater_id == templater_id,
-            TemplaterJobTimerSession.status.in_(["running", "paused"]),
+            TemplaterJobTimerSession.status == "running",
         )
+        .limit(1)
     )
-    active_session = active_result.scalar_one_or_none()
-    
-    if active_session:
-        raise error_response("An active timer already exists for this templater and job", 400)
+    conflict_row = conflict_result.first()
+    if conflict_row:
+        conflict_session, conflict_job = conflict_row
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Timer on Job #{conflict_job.job_number} and Fab_id {conflict_session.fab_id} is already running. Stop or pause it before starting another.",
+        )
     
     # Create new session
     now = datetime.now()

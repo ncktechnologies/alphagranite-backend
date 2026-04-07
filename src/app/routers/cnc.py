@@ -1,7 +1,7 @@
 from typing import List, Optional
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import APIRouter, Depends, Form, HTTPException, status
+from fastapi import APIRouter, Depends, File as FileUpload, Form, HTTPException, Request, UploadFile, status
 from sqlalchemy import select
 import logging
 from datetime import datetime, timezone
@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from src.app.database import get_db
 from src.app.database.user import User
 from src.app.database.fab import Fab
+from src.app.database.business_job import BusinessJob
 from src.app.database.cnc import CNCDrafting, CNCDraftingSession, CNCDraftingSessionNote
 from src.app.database.file import File
 from src.app.interface.business_schemas import (
@@ -22,6 +23,7 @@ from src.app.interface.business_schemas import (
     CNCDraftingSessionHistoryResponse,
 )
 from src.app.middleware.jwt_auth import get_current_user
+from src.app.service.file import FileService
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import error_response, success_response, strip_timezone, utc_now
 
@@ -68,6 +70,26 @@ async def manage_cnc_session(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="An active CNC session already exists for this fab. Complete it first or mark as revision.",
+            )
+
+        # Prevent multiple simultaneous running timers for the same drafter at this stage
+        conflict_result = await db.execute(
+            select(CNCDraftingSession, BusinessJob)
+            .join(Fab, Fab.id == CNCDraftingSession.fab_id)
+            .join(BusinessJob, BusinessJob.id == Fab.job_id)
+            .where(
+                CNCDraftingSession.drafter_id == session_data.drafter_id,
+                CNCDraftingSession.status == "drafting",
+                CNCDraftingSession.fab_id != fab_id,
+            )
+            .limit(1)
+        )
+        conflict_row = conflict_result.first()
+        if conflict_row:
+            conflict_session, conflict_job = conflict_row
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Timer on Job #{conflict_job.job_number} and Fab_id {conflict_session.fab_id} is already running. Stop or pause it before starting another.",
             )
 
         session = CNCDraftingSession(
@@ -415,33 +437,61 @@ async def create_cnc_drafting(
         raise error_response("Drafter not found", 404)
 
     fab_ids = [item.fab_id for item in drafting_data.items]
+    if len(set(fab_ids)) != len(fab_ids):
+        raise error_response("Duplicate fab_id values found in request items", 400)
+
     fabs_result = await db.execute(select(Fab).where(Fab.id.in_(fab_ids)))
     fabs = fabs_result.scalars().all()
+    found_fab_ids = {fab.id for fab in fabs}
+    missing_fab_ids = sorted(set(fab_ids) - found_fab_ids)
+    if missing_fab_ids:
+        raise error_response(f"One or more fab IDs not found: {missing_fab_ids}", 404)
 
-    if len(fabs) != len(fab_ids):
-        raise error_response("One or more fab IDs not found", 404)
+    existing_result = await db.execute(
+        select(CNCDrafting).where(CNCDrafting.fab_id.in_(fab_ids))
+    )
+    existing_by_fab = {row.fab_id: row for row in existing_result.scalars().all()}
 
     entries = []
+    created_count = 0
+    updated_count = 0
     for item in drafting_data.items:
-        cnc = CNCDrafting(
-            fab_id=item.fab_id,
-            drafter_id=drafting_data.drafter_id,
-            scheduled_start_date=strip_timezone(item.scheduled_start_date),
-            scheduled_end_date=strip_timezone(item.scheduled_end_date),
-            total_sqft_required_to_draft=str(item.total_sqft_required_to_draft),
-            status_id=1,
-            is_completed=False,
-            created_at=strip_timezone(utc_now()),
-        )
+        existing = existing_by_fab.get(item.fab_id)
+
+        if existing:
+            existing.drafter_id = drafting_data.drafter_id
+            existing.scheduled_start_date = strip_timezone(item.scheduled_start_date)
+            existing.scheduled_end_date = strip_timezone(item.scheduled_end_date)
+            existing.total_sqft_required_to_draft = str(item.total_sqft_required_to_draft)
+            existing.updated_at = strip_timezone(utc_now())
+            existing.updated_by = current_user.id
+            cnc = existing
+            updated_count += 1
+        else:
+            cnc = CNCDrafting(
+                fab_id=item.fab_id,
+                drafter_id=drafting_data.drafter_id,
+                scheduled_start_date=strip_timezone(item.scheduled_start_date),
+                scheduled_end_date=strip_timezone(item.scheduled_end_date),
+                total_sqft_required_to_draft=str(item.total_sqft_required_to_draft),
+                status_id=1,
+                is_completed=False,
+                created_at=strip_timezone(utc_now()),
+            )
+            db.add(cnc)
+            created_count += 1
+
         entries.append(cnc)
-        db.add(cnc)
 
     await db.commit()
 
     for cnc in entries:
         await db.refresh(cnc)
 
-    return success_response(entries, f"CNC drafting created successfully for {len(entries)} fabs")
+    return success_response(
+        entries,
+        f"CNC drafting processed successfully for {len(entries)} fabs (created: {created_count}, updated: {updated_count})",
+    )
 
 
 @router.put("/CNC/{cnc_id}", response_model=SuccessResponse[CNCDraftingResponse])
@@ -572,22 +622,35 @@ async def get_cnc_drafting_by_fab(
     return success_response(cnc, "CNC drafting fetched successfully")
 
 
-@router.post("/CNC/{cnc_id}/add-file", response_model=SuccessResponse[None])
+@router.post("/CNC/{cnc_id}/add-file", response_model=SuccessResponse[dict])
 async def add_file_to_cnc_drafting(
     cnc_id: int,
-    file_id: int,
+    request: Request,
+    file: UploadFile = FileUpload(...),
     file_design: Optional[str] = Form(None),
     stage_name: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Add a file to a CNC drafting entry"""
+    """Upload a file and attach it to a CNC drafting entry"""
 
     result = await db.execute(select(CNCDrafting).where(CNCDrafting.id == cnc_id))
     cnc = result.scalar_one_or_none()
 
     if not cnc:
         raise error_response("CNC drafting not found", 404)
+
+    file_data = await FileService.upload_file(
+        db=db,
+        file=file,
+        user_id=current_user.id,
+        directory="uploads",
+        file_design=file_design,
+        stage_name=stage_name,
+        fab_id=cnc.fab_id,
+        request=request,
+    )
+    file_id = file_data["id"]
 
     if cnc.file_ids:
         file_ids_list = cnc.file_ids.split(",")

@@ -432,6 +432,8 @@ async def get_job_media(
             "id": file.id,
             "name": file.name,
             "file_type": file.file_type,
+            "file_design": file.file_design,
+            "stage_name": file.stage_name,
             "file_size": file.file_size,
             "file_url": file_url,
             "uploaded_by": file.uploaded_by,

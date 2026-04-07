@@ -31,9 +31,8 @@ async def create_employee(
     last_name: str = Form(...),
     email: str = Form(...),
     department: int = Form(...),
-    phone: str = Form(None),
+    phone: Optional[str] = Form(None),
     gender: str = Form(None),
-    home_address: str = Form(None),
     role_id: Optional[int] = Form(None),
     profile_image: UploadFile = File(None),
     background_tasks: BackgroundTasks = BackgroundTasks(),
@@ -87,7 +86,7 @@ async def create_employee(
         phone=phone if phone and phone != "string" else None,
         department=department,
         gender=gender if gender and gender != "string" else None,
-        home_address=home_address if home_address and home_address != "string" else None,
+        home_address=None,
         profile_image_id=profile_image_id,
         role_id=role_id
     )
