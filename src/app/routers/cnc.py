@@ -437,33 +437,61 @@ async def create_cnc_drafting(
         raise error_response("Drafter not found", 404)
 
     fab_ids = [item.fab_id for item in drafting_data.items]
+    if len(set(fab_ids)) != len(fab_ids):
+        raise error_response("Duplicate fab_id values found in request items", 400)
+
     fabs_result = await db.execute(select(Fab).where(Fab.id.in_(fab_ids)))
     fabs = fabs_result.scalars().all()
+    found_fab_ids = {fab.id for fab in fabs}
+    missing_fab_ids = sorted(set(fab_ids) - found_fab_ids)
+    if missing_fab_ids:
+        raise error_response(f"One or more fab IDs not found: {missing_fab_ids}", 404)
 
-    if len(fabs) != len(fab_ids):
-        raise error_response("One or more fab IDs not found", 404)
+    existing_result = await db.execute(
+        select(CNCDrafting).where(CNCDrafting.fab_id.in_(fab_ids))
+    )
+    existing_by_fab = {row.fab_id: row for row in existing_result.scalars().all()}
 
     entries = []
+    created_count = 0
+    updated_count = 0
     for item in drafting_data.items:
-        cnc = CNCDrafting(
-            fab_id=item.fab_id,
-            drafter_id=drafting_data.drafter_id,
-            scheduled_start_date=strip_timezone(item.scheduled_start_date),
-            scheduled_end_date=strip_timezone(item.scheduled_end_date),
-            total_sqft_required_to_draft=str(item.total_sqft_required_to_draft),
-            status_id=1,
-            is_completed=False,
-            created_at=strip_timezone(utc_now()),
-        )
+        existing = existing_by_fab.get(item.fab_id)
+
+        if existing:
+            existing.drafter_id = drafting_data.drafter_id
+            existing.scheduled_start_date = strip_timezone(item.scheduled_start_date)
+            existing.scheduled_end_date = strip_timezone(item.scheduled_end_date)
+            existing.total_sqft_required_to_draft = str(item.total_sqft_required_to_draft)
+            existing.updated_at = strip_timezone(utc_now())
+            existing.updated_by = current_user.id
+            cnc = existing
+            updated_count += 1
+        else:
+            cnc = CNCDrafting(
+                fab_id=item.fab_id,
+                drafter_id=drafting_data.drafter_id,
+                scheduled_start_date=strip_timezone(item.scheduled_start_date),
+                scheduled_end_date=strip_timezone(item.scheduled_end_date),
+                total_sqft_required_to_draft=str(item.total_sqft_required_to_draft),
+                status_id=1,
+                is_completed=False,
+                created_at=strip_timezone(utc_now()),
+            )
+            db.add(cnc)
+            created_count += 1
+
         entries.append(cnc)
-        db.add(cnc)
 
     await db.commit()
 
     for cnc in entries:
         await db.refresh(cnc)
 
-    return success_response(entries, f"CNC drafting created successfully for {len(entries)} fabs")
+    return success_response(
+        entries,
+        f"CNC drafting processed successfully for {len(entries)} fabs (created: {created_count}, updated: {updated_count})",
+    )
 
 
 @router.put("/CNC/{cnc_id}", response_model=SuccessResponse[CNCDraftingResponse])
