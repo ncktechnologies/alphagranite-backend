@@ -18,7 +18,7 @@ async def get_fab_types(
     current_user: User = Depends(get_current_user)
 ):
     """Get list of available fabrication types"""
-    result = await db.execute(select(FabType))
+    result = await db.execute(select(FabType).order_by(FabType.name.asc()))
     fab_types = result.scalars().all()
     return fab_types
 
