@@ -2,6 +2,8 @@ from datetime import datetime
 from typing import List, Optional
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.app.database import get_db
@@ -18,6 +20,20 @@ from src.app.utils.helpers import success_response, error_response
 router = APIRouter()
 
 
+async def _sync_stone_types_id_sequence(db: AsyncSession) -> None:
+    await db.execute(
+        text(
+            """
+            SELECT setval(
+                pg_get_serial_sequence('stone_types', 'id'),
+                COALESCE((SELECT MAX(id) FROM stone_types), 1),
+                true
+            )
+            """
+        )
+    )
+
+
 @router.post("/stone-types", response_model=SuccessResponse[StoneTypeResponse], status_code=201)
 async def create_stone_type(
     stone_type_data: StoneTypeCreate,
@@ -30,18 +46,39 @@ async def create_stone_type(
     type_check = await db.execute(select(StoneType).where(StoneType.name == stone_type_data.name))
     if type_check.scalar_one_or_none():
         raise error_response("Stone type already exists", 400)
-    
-    # Create stone type
-    stone_type = StoneType(
-        name=stone_type_data.name,
-        description=stone_type_data.description,
-        status_id=1,  # Active status
-        created_by=current_user.id,
-        created_at=datetime.now()
-    )
-    
+
+    if current_user.id is None:
+        raise error_response("Authenticated user is missing an ID", 400)
+
+    created_by = current_user.id
+
+    def build_stone_type() -> StoneType:
+        return StoneType(
+            name=stone_type_data.name,
+            description=stone_type_data.description,
+            status_id=1,
+            created_by=created_by,
+            created_at=datetime.now()
+        )
+
+    stone_type = build_stone_type()
     db.add(stone_type)
-    await db.commit()
+
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+
+        if "stone_types_pkey" not in str(exc):
+            raise
+
+        await _sync_stone_types_id_sequence(db)
+        await db.commit()
+
+        stone_type = build_stone_type()
+        db.add(stone_type)
+        await db.commit()
+
     await db.refresh(stone_type)
     
     return success_response(stone_type, "Stone type created successfully")
