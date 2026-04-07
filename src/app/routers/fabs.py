@@ -130,6 +130,59 @@ def _compute_fab_progress_fields(plans: List[dict]) -> tuple[Optional[str], floa
     estimated_completion_date = latest_end_dt.isoformat() if latest_end_dt else None
     return estimated_completion_date, avg_percent
 
+
+async def _transition_completed_cutlist_fabs_to_shop(
+    db: AsyncSession,
+    updated_by: Optional[int],
+) -> None:
+    rows = (
+        await db.execute(
+            select(
+                ShopCutPlan.fab_id,
+                PlanningSection.plan_name,
+                ShopCutPlan.work_percentage,
+            )
+            .join(Fab, Fab.id == ShopCutPlan.fab_id)
+            .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
+            .where(
+                Fab.current_stage == "cut_list",
+                func.lower(func.trim(PlanningSection.plan_name)).in_(["cut", "wj"]),
+            )
+        )
+    ).all()
+
+    completed_sections_by_fab: dict[int, set[str]] = defaultdict(set)
+    for fab_id, plan_name, work_percentage in rows:
+        normalized_name = (plan_name or "").strip().lower()
+        if normalized_name in {"cut", "wj"} and int(work_percentage or 0) >= 100:
+            completed_sections_by_fab[fab_id].add(normalized_name)
+
+    eligible_fab_ids = [
+        fab_id
+        for fab_id, completed_sections in completed_sections_by_fab.items()
+        if {"cut", "wj"}.issubset(completed_sections)
+    ]
+
+    if not eligible_fab_ids:
+        return
+
+    fabs_to_update = (
+        await db.execute(select(Fab).where(Fab.id.in_(eligible_fab_ids)))
+    ).scalars().all()
+
+    updated = False
+    for fab in fabs_to_update:
+        if fab.current_stage != "cut_list":
+            continue
+        fab.current_stage = "shop"
+        fab.next_stage = None
+        fab.updated_at = utc_now()
+        fab.updated_by = updated_by
+        updated = True
+
+    if updated:
+        await db.commit()
+
 def _stage_filter_condition(stage_name: str):
     """
     Stage visibility rule:
@@ -496,6 +549,9 @@ async def get_fabs(
     current_user: User = Depends(get_current_user)
 ):
     """Get list of fabs with optional filtering and pagination"""
+
+    if current_stage == "cut_list":
+        await _transition_completed_cutlist_fabs_to_shop(db, current_user.id)
 
     # Step 1: Apply templating filters to get FAB IDs
     templating_fab_ids = await _apply_templating_filters(
