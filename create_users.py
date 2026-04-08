@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+"""
+Script to create user/employee accounts in the database.
+Run from project root: python create_users.py
+"""
+
+import asyncio
+import bcrypt
+from uuid import uuid4
+from datetime import datetime
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+
+from src.app.database.user import User
+from src.app.database.role import Role
+from src.app.database.user_role import UserRole
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Database connection
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/alphagranite")
+
+# Users to create
+USERS_DATA = [
+    {
+        "first_name": "Gustavo",
+        "last_name": "Sandoval",
+        "username": "gsandoval",
+        "email": "chuks@carpediemts.com",
+        "password": "Sandoval123!",
+        "is_super_admin": True,
+        "department": 1,
+        "roles": ["Admin"]
+    },
+    {
+        "first_name": "Luis",
+        "last_name": "Becerril",
+        "username": "lbecerril",
+        "email": "chuks@carpediemts.com",
+        "password": "Becerril123!",
+        "is_super_admin": False,
+        "department": 1,
+        "roles": ["Saw 1 or Saw 2 Operator"]
+    },
+    {
+        "first_name": "Fernando",
+        "last_name": "Valencia",
+        "username": "fvalencia",
+        "email": "chuks@carpediemts.com",
+        "password": "Valencia123!",
+        "is_super_admin": False,
+        "department": 1,
+        "roles": ["Saw 2 or Saw 1 Operator"]
+    },
+    {
+        "first_name": "Jasiel",
+        "last_name": "Pena",
+        "username": "jpena",
+        "email": "chuks@carpediemts.com",
+        "password": "Pena123!",
+        "is_super_admin": False,
+        "department": 1,
+        "roles": ["Marmo or CNC Operator"]
+    },
+    {
+        "first_name": "Victor",
+        "last_name": "Juarez",
+        "username": "vjuarez",
+        "email": "chuks@carpediemts.com",
+        "password": "Juarez123!",
+        "is_super_admin": False,
+        "department": 1,
+        "roles": ["Water Jet Operator"]
+    },
+    {
+        "first_name": "Faustino",
+        "last_name": "Velasco",
+        "username": "fvelasco",
+        "email": "chuks@carpediemts.com",
+        "password": "Velasco123!",
+        "is_super_admin": False,
+        "department": 1,
+        "roles": ["Miter or Hand Work Station"]
+    },
+    {
+        "first_name": "Alejandro",
+        "last_name": "Ramirez",
+        "username": "aramirez",
+        "email": "chuks@carpediemts.com",
+        "password": "Ramirez123!",
+        "is_super_admin": False,
+        "department": 1,
+        "roles": ["Miter or Hand Work Station"]
+    },
+    {
+        "first_name": "Rufino",
+        "last_name": "Marcelino",
+        "username": "rmarcelino",
+        "email": "chuks@carpediemts.com",
+        "password": "Marcelino123!",
+        "is_super_admin": False,
+        "department": 1,
+        "roles": ["Hand Work Station"]
+    },
+    {
+        "first_name": "Virgilio",
+        "last_name": "Denova",
+        "username": "vdenova",
+        "email": "chuks@carpediemts.com",
+        "password": "Denova123!",
+        "is_super_admin": False,
+        "department": 1,
+        "roles": ["Miter or Hand Work Station"]
+    },
+    {
+        "first_name": "Jose",
+        "last_name": "Corona",
+        "username": "jcorona",
+        "email": "chuks@carpediemts.com",
+        "password": "Corona123!",
+        "is_super_admin": False,
+        "department": 1,
+        "roles": ["Slab Polisher and CNC Operator"]
+    },
+    {
+        "first_name": "Juan",
+        "last_name": "Zuniga",
+        "username": "jzuniga",
+        "email": "chuks@carpediemts.com",
+        "password": "Zuniga123!",
+        "is_super_admin": False,
+        "department": 1,
+        "roles": ["Miter or Hand Work Station"]
+    },
+]
+
+
+def hash_password(password: str) -> str:
+    """Hash password using bcrypt (same as in employee.py)"""
+    password_bytes = password.encode('utf-8')[:72]
+    hashed_password = bcrypt.hashpw(password_bytes, bcrypt.gensalt()).decode('utf-8')
+    return hashed_password
+
+
+async def create_users():
+    """Create users in the database"""
+    engine = create_async_engine(DATABASE_URL, echo=False)
+    
+    async_session = sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
+    
+    async with async_session() as session:
+        try:
+            print("Starting user creation...")
+            
+            # Get or create roles
+            roles_dict = {}
+            for user_data in USERS_DATA:
+                for role_name in user_data["roles"]:
+                    if role_name not in roles_dict:
+                        # Try to find existing role
+                        result = await session.execute(
+                            select(Role).where(Role.name == role_name)
+                        )
+                        role = result.scalar_one_or_none()
+                        if not role:
+                            print(f"  ⚠️  Role '{role_name}' not found. Please create it first.")
+                            print(f"     SQL: INSERT INTO roles (name, description, status, created_at, updated_at) VALUES ('{role_name}', '', 1, NOW(), NOW());")
+                            roles_dict[role_name] = None
+                        else:
+                            roles_dict[role_name] = role.id
+                            print(f"  ✓ Found role: {role_name} (ID: {role.id})")
+            
+            # Create users
+            created_count = 0
+            for user_data in USERS_DATA:
+                username = user_data["username"]
+                
+                # Check if user already exists
+                result = await session.execute(
+                    select(User).where(User.username == username)
+                )
+                existing_user = result.scalar_one_or_none()
+                
+                if existing_user:
+                    print(f"  ⚠️  User '{username}' already exists. Skipping...")
+                    continue
+                
+                # Create user
+                hashed_pwd = hash_password(user_data["password"])
+                new_user = User(
+                    username=username,
+                    employee_id=uuid4(),
+                    email=user_data["email"],
+                    first_name=user_data["first_name"],
+                    last_name=user_data["last_name"],
+                    password=hashed_pwd,
+                    is_super_admin=user_data["is_super_admin"],
+                    department=user_data["department"],
+                    status=1,
+                    is_first_login=True,
+                    created_at=datetime.now(),
+                    updated_at=datetime.now()
+                )
+                
+                session.add(new_user)
+                await session.flush()  # Flush to get the user ID
+                
+                print(f"  ✓ Created user: {user_data['first_name']} {user_data['last_name']} ({username})")
+                
+                # Assign roles
+                for role_name in user_data["roles"]:
+                    role_id = roles_dict.get(role_name)
+                    if role_id:
+                        user_role = UserRole(
+                            user_id=new_user.id,
+                            role_id=role_id,
+                            created_at=datetime.now(),
+                            update_at=datetime.now()
+                        )
+                        session.add(user_role)
+                        print(f"    → Assigned role: {role_name}")
+                    else:
+                        print(f"    ⚠️  Could not assign role: {role_name} (not found)")
+                
+                created_count += 1
+            
+            await session.commit()
+            print(f"\n✅ Successfully created {created_count} user(s)!")
+            
+        except Exception as e:
+            await session.rollback()
+            print(f"❌ Error: {str(e)}")
+            raise
+        finally:
+            await engine.dispose()
+
+
+if __name__ == "__main__":
+    asyncio.run(create_users())
