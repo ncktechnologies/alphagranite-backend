@@ -143,6 +143,20 @@ async def create_users():
         try:
             print("Starting user creation...")
             
+            # First, get the schema of the users table to find all NOT NULL columns
+            schema_result = await session.execute(
+                text("""
+                    SELECT column_name, is_nullable, column_default
+                    FROM information_schema.columns
+                    WHERE table_name = 'users'
+                    ORDER BY ordinal_position
+                """)
+            )
+            columns_info = schema_result.fetchall()
+            print("\nUsers table schema:")
+            for col_name, is_nullable, col_default in columns_info:
+                print(f"  {col_name}: nullable={is_nullable}, default={col_default}")
+            
             # Create users
             created_count = 0
             for user_data in USERS_DATA:
@@ -168,10 +182,12 @@ async def create_users():
                     text("""
                         INSERT INTO users 
                         (username, employee_id, email, first_name, last_name, password, 
-                         is_super_admin, department, status, is_first_login, failed_login_attempts, is_locked, created_at, updated_at)
+                         is_super_admin, department, status, is_first_login, failed_login_attempts, is_locked, 
+                         email_notifications_enabled, created_at, updated_at)
                         VALUES 
                         (:username, :employee_id, :email, :first_name, :last_name, :password,
-                         :is_super_admin, :department, :status, :is_first_login, :failed_login_attempts, :is_locked, :created_at, :updated_at)
+                         :is_super_admin, :department, :status, :is_first_login, :failed_login_attempts, :is_locked,
+                         :email_notifications_enabled, :created_at, :updated_at)
                     """),
                     {
                         "username": username,
@@ -186,6 +202,7 @@ async def create_users():
                         "is_first_login": True,
                         "failed_login_attempts": 0,
                         "is_locked": False,
+                        "email_notifications_enabled": True,
                         "created_at": now,
                         "updated_at": now
                     }
