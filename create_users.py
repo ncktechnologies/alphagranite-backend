@@ -17,7 +17,7 @@ import os
 
 
 # Database connection
-DATABASE_URL = "postgresql://admin:Admin%40Gr%40n1%2Be%21@93.114.128.181:5432/alpha_granite_staging"
+DATABASE_URL = "postgresql+asyncpg://admin:Admin%40Gr%40n1%2Be%21@93.114.128.181:5432/alpha_granite_staging"
 
 # Users to create
 USERS_DATA = [
