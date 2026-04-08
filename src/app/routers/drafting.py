@@ -590,6 +590,7 @@ async def update_drafting(
         'mentions': 'mentions',
         'drafter_start_date': 'drafter_start_date',
         'drafter_end_date': 'drafter_end_date',
+        'drafter_id': 'drafter_id',
     }
     
     for field, value in update_data.items():
