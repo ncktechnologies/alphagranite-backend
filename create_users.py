@@ -14,6 +14,7 @@ from sqlalchemy.orm import sessionmaker
 
 from src.app.database.user import User
 from src.app.database.department import Department
+from src.app.database.user_role import UserRole
 import os
 
 
