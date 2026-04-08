@@ -168,10 +168,10 @@ async def create_users():
                     text("""
                         INSERT INTO users 
                         (username, employee_id, email, first_name, last_name, password, 
-                         is_super_admin, department, status, is_first_login, created_at, updated_at)
+                         is_super_admin, department, status, is_first_login, failed_login_attempts, created_at, updated_at)
                         VALUES 
                         (:username, :employee_id, :email, :first_name, :last_name, :password,
-                         :is_super_admin, :department, :status, :is_first_login, :created_at, :updated_at)
+                         :is_super_admin, :department, :status, :is_first_login, :failed_login_attempts, :created_at, :updated_at)
                     """),
                     {
                         "username": username,
@@ -184,6 +184,7 @@ async def create_users():
                         "department": user_data["department"],
                         "status": 1,
                         "is_first_login": True,
+                        "failed_login_attempts": 0,
                         "created_at": now,
                         "updated_at": now
                     }
