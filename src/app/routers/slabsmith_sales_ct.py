@@ -388,7 +388,7 @@ async def set_review_needed_yes(
         count = int(sales_ct.current_revision_count) + 1
         sales_ct.current_revision_count = str(count)
     else:
-        sales_ct.current_revision_count = "1"
+        sales_ct.current_revision_count = "0"
     
     if file_ids:
         sales_ct.file_ids = file_ids
