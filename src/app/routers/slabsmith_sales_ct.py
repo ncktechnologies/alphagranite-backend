@@ -13,6 +13,7 @@ from src.app.database.fab import Fab
 from src.app.database.slab_smith import SlabSmith
 from src.app.database.sales_ct import SalesCT
 from src.app.database.business_job import BusinessJob
+from src.app.interface.generated_schemas import Revision
 
 from src.app.interface.business_schemas import (
     SlabSmithCreate,
@@ -461,8 +462,16 @@ async def get_sales_ct_by_fab(
     
     if not sales_ct:
         raise error_response("Sales CT not found for this fab", 404)
-    
-    return success_response(serialize_datetime_fields(sales_ct), "Sales CT fetched successfully")
+
+    revision_count_result = await db.execute(
+        select(func.count(Revision.id)).where(Revision.fab_id == fab_id)
+    )
+    revision_count = int(revision_count_result.scalar() or 0)
+
+    data = serialize_datetime_fields(sales_ct)
+    data["current_revision_count"] = str(revision_count)
+
+    return success_response(data, "Sales CT fetched successfully")
 
 @router.get("/sales-ct", response_model=SuccessResponse[List[SalesCTResponse]])
 async def get_all_sales_ct(
