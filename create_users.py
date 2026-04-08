@@ -13,8 +13,6 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
 from src.app.database.user import User
-from src.app.database.role import Role
-from src.app.database.user_role import UserRole
 import os
 from dotenv import load_dotenv
 
@@ -32,8 +30,7 @@ USERS_DATA = [
         "email": "chuks@carpediemts.com",
         "password": "Sandoval123!",
         "is_super_admin": True,
-        "department": 1,
-        "roles": ["Admin"]
+        "department": 1
     },
     {
         "first_name": "Luis",
@@ -42,8 +39,7 @@ USERS_DATA = [
         "email": "chuks@carpediemts.com",
         "password": "Becerril123!",
         "is_super_admin": False,
-        "department": 1,
-        "roles": ["Saw 1 or Saw 2 Operator"]
+        "department": 1
     },
     {
         "first_name": "Fernando",
@@ -52,8 +48,7 @@ USERS_DATA = [
         "email": "chuks@carpediemts.com",
         "password": "Valencia123!",
         "is_super_admin": False,
-        "department": 1,
-        "roles": ["Saw 2 or Saw 1 Operator"]
+        "department": 1
     },
     {
         "first_name": "Jasiel",
@@ -62,8 +57,7 @@ USERS_DATA = [
         "email": "chuks@carpediemts.com",
         "password": "Pena123!",
         "is_super_admin": False,
-        "department": 1,
-        "roles": ["Marmo or CNC Operator"]
+        "department": 1
     },
     {
         "first_name": "Victor",
@@ -72,8 +66,7 @@ USERS_DATA = [
         "email": "chuks@carpediemts.com",
         "password": "Juarez123!",
         "is_super_admin": False,
-        "department": 1,
-        "roles": ["Water Jet Operator"]
+        "department": 1
     },
     {
         "first_name": "Faustino",
@@ -82,8 +75,7 @@ USERS_DATA = [
         "email": "chuks@carpediemts.com",
         "password": "Velasco123!",
         "is_super_admin": False,
-        "department": 1,
-        "roles": ["Miter or Hand Work Station"]
+        "department": 1
     },
     {
         "first_name": "Alejandro",
@@ -92,8 +84,7 @@ USERS_DATA = [
         "email": "chuks@carpediemts.com",
         "password": "Ramirez123!",
         "is_super_admin": False,
-        "department": 1,
-        "roles": ["Miter or Hand Work Station"]
+        "department": 1
     },
     {
         "first_name": "Rufino",
@@ -102,8 +93,7 @@ USERS_DATA = [
         "email": "chuks@carpediemts.com",
         "password": "Marcelino123!",
         "is_super_admin": False,
-        "department": 1,
-        "roles": ["Hand Work Station"]
+        "department": 1
     },
     {
         "first_name": "Virgilio",
@@ -112,8 +102,7 @@ USERS_DATA = [
         "email": "chuks@carpediemts.com",
         "password": "Denova123!",
         "is_super_admin": False,
-        "department": 1,
-        "roles": ["Miter or Hand Work Station"]
+        "department": 1
     },
     {
         "first_name": "Jose",
@@ -122,8 +111,7 @@ USERS_DATA = [
         "email": "chuks@carpediemts.com",
         "password": "Corona123!",
         "is_super_admin": False,
-        "department": 1,
-        "roles": ["Slab Polisher and CNC Operator"]
+        "department": 1
     },
     {
         "first_name": "Juan",
@@ -132,8 +120,7 @@ USERS_DATA = [
         "email": "chuks@carpediemts.com",
         "password": "Zuniga123!",
         "is_super_admin": False,
-        "department": 1,
-        "roles": ["Miter or Hand Work Station"]
+        "department": 1
     },
 ]
 
@@ -156,24 +143,6 @@ async def create_users():
     async with async_session() as session:
         try:
             print("Starting user creation...")
-            
-            # Get or create roles
-            roles_dict = {}
-            for user_data in USERS_DATA:
-                for role_name in user_data["roles"]:
-                    if role_name not in roles_dict:
-                        # Try to find existing role
-                        result = await session.execute(
-                            select(Role).where(Role.name == role_name)
-                        )
-                        role = result.scalar_one_or_none()
-                        if not role:
-                            print(f"  ⚠️  Role '{role_name}' not found. Please create it first.")
-                            print(f"     SQL: INSERT INTO roles (name, description, status, created_at, updated_at) VALUES ('{role_name}', '', 1, NOW(), NOW());")
-                            roles_dict[role_name] = None
-                        else:
-                            roles_dict[role_name] = role.id
-                            print(f"  ✓ Found role: {role_name} (ID: {role.id})")
             
             # Create users
             created_count = 0
@@ -211,22 +180,6 @@ async def create_users():
                 await session.flush()  # Flush to get the user ID
                 
                 print(f"  ✓ Created user: {user_data['first_name']} {user_data['last_name']} ({username})")
-                
-                # Assign roles
-                for role_name in user_data["roles"]:
-                    role_id = roles_dict.get(role_name)
-                    if role_id:
-                        user_role = UserRole(
-                            user_id=new_user.id,
-                            role_id=role_id,
-                            created_at=datetime.now(),
-                            update_at=datetime.now()
-                        )
-                        session.add(user_role)
-                        print(f"    → Assigned role: {role_name}")
-                    else:
-                        print(f"    ⚠️  Could not assign role: {role_name} (not found)")
-                
                 created_count += 1
             
             await session.commit()
