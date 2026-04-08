@@ -1,5 +1,6 @@
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func
 from fastapi import APIRouter, Depends
 
 from src.app.database import get_db
@@ -9,6 +10,7 @@ from src.app.database.templating import Templating
 from src.app.database.drafting import Drafting
 from src.app.database.slab_smith import SlabSmith
 from src.app.database.sales_ct import SalesCT
+from src.app.interface.generated_schemas import Revision
 from src.app.database.stone_type import StoneType
 from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness
@@ -150,13 +152,18 @@ async def get_fab_detail_by_stage(
         sales_ct_result = await db.execute(select(SalesCT).where(SalesCT.fab_id == fab_id))
         sales_ct = sales_ct_result.scalar_one_or_none()
         if sales_ct:
+            revision_count_result = await db.execute(
+                select(func.count(Revision.id)).where(Revision.fab_id == fab_id)
+            )
+            current_revision_count = int(revision_count_result.scalar() or 0)
+
             stage_data = {
                 "type": "sales_ct",
                 "id": sales_ct.id,
                 "is_revision_needed": sales_ct.is_revision_needed,
                 "is_revision_completed": sales_ct.is_revision_completed,
                 "no_of_revisions": sales_ct.no_of_revisions,
-                "current_revision_count": sales_ct.current_revision_count,
+                "current_revision_count": current_revision_count,
                 "status_id": sales_ct.status_id,
                 "created_at": sales_ct.created_at,
                 "updated_at": sales_ct.updated_at,
