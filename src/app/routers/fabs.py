@@ -1650,6 +1650,7 @@ async def get_fab(
         latest_templating.c.schedule_start_date.label("templating_schedule_start_date"),
         latest_templating.c.schedule_due_date.label("templating_schedule_due_date"),
         latest_templating.c.notes.label("templating_notes"),
+        latest_templating.c.actual_end_date.label("templating_actual_end_date"),
         TechnicianUser.first_name.label("technician_first_name"),
         TechnicianUser.last_name.label("technician_last_name"),
         BusinessJob,  # Include full BusinessJob object
