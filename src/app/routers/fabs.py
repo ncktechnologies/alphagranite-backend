@@ -2565,28 +2565,27 @@ async def get_all_stages(
     current_user: User = Depends(get_current_user)
 ):
     """Get all workflow stages with FAB count for each stage"""
-    from sqlalchemy import func, case, and_, or_
+    from sqlalchemy import func, and_, or_
     
-    # Get count of FABs for each stage with special logic for final_programming
-    stage_counts_query = select(
-        case(
-            # If current_stage is cut_list AND shop_date_schedule is set AND final_programming_complete is False,
-            # count it as final_programming instead of cut_list
-            (
-                and_(
-                    Fab.current_stage == "cut_list",
-                    Fab.shop_date_schedule.isnot(None),
-                    Fab.final_programming_complete.is_(False)
-                ),
-                "final_programming"
-            ),
-            else_=Fab.current_stage
-        ).label("effective_stage"),
-        func.count(Fab.id).label('count')
-    ).group_by("effective_stage")
-    
+    # Base stage counts by actual current_stage for non-overridden stages.
+    stage_counts_query = (
+        select(Fab.current_stage, func.count(Fab.id).label("count"))
+        .group_by(Fab.current_stage)
+    )
+
     result = await db.execute(stage_counts_query)
     stage_counts_dict = {row[0]: row[1] for row in result.all()}
+
+    # Keep cut_list/final_programming counts aligned with get_fabs stage filters.
+    final_programming_count_result = await db.execute(
+        select(func.count(Fab.id)).where(_stage_filter_condition("final_programming"))
+    )
+    stage_counts_dict["final_programming"] = final_programming_count_result.scalar() or 0
+
+    cut_list_count_result = await db.execute(
+        select(func.count(Fab.id)).where(_stage_filter_condition("cut_list"))
+    )
+    stage_counts_dict["cut_list"] = cut_list_count_result.scalar() or 0
     
     # NEW: slab_smith_request count should mirror /stages/slabsmith/pending
     slabsmith_pending_filters = [
