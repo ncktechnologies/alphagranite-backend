@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
 from src.app.database.user import User
+from src.app.database.department import Department
 import os
 
 
