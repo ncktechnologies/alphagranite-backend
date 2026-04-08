@@ -152,6 +152,21 @@ def _compute_fab_progress_fields(plans: List[dict]) -> tuple[Optional[str], floa
     return estimated_completion_date, avg_percent
 
 
+def _coalesce_shop_est_completion_date(
+    shop_est_completion_date: Optional[str],
+    estimated_completion_date: Optional[str],
+) -> Optional[str]:
+    """Use stored shop estimate date first; otherwise derive it from latest plan completion date."""
+    if shop_est_completion_date:
+        return shop_est_completion_date
+    if not estimated_completion_date:
+        return None
+    try:
+        return datetime.fromisoformat(estimated_completion_date).date().isoformat()
+    except Exception:
+        return None
+
+
 async def _transition_completed_cutlist_fabs_to_shop(
     db: AsyncSession,
     updated_by: Optional[int],
@@ -666,6 +681,10 @@ async def get_fabs(
         estimated_completion_date, percentage_completion = _compute_fab_progress_fields(plans)
         f["estimated_completion_date"] = estimated_completion_date
         f["percentage_completion"] = percentage_completion
+        f["shop_est_completion_date"] = _coalesce_shop_est_completion_date(
+            f.get("shop_est_completion_date"),
+            estimated_completion_date,
+        )
 
     # Step 6.2: Batch load resurface scheduling and attach per FAB
     resurface_scheduling_map = await _batch_load_resurface_scheduling_responses(db, fab_ids)
@@ -993,6 +1012,10 @@ async def get_fabs_for_cnc_widget(
         estimated_completion_date, percentage_completion = _compute_fab_progress_fields(plans)
         f["estimated_completion_date"] = estimated_completion_date
         f["percentage_completion"] = percentage_completion
+        f["shop_est_completion_date"] = _coalesce_shop_est_completion_date(
+            f.get("shop_est_completion_date"),
+            estimated_completion_date,
+        )
 
     # Step 7: Get total count
     count_query = select(func.count(Fab.id)).select_from(Fab)
