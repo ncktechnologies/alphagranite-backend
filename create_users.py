@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Database connection
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/alphagranite")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:Admin%40Gr%40n1%2Be%21@93.114.128.181:5432/alpha_granite_staging")
 
 # Users to create
 USERS_DATA = [
