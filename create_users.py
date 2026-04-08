@@ -8,15 +8,14 @@ import asyncio
 import bcrypt
 from uuid import uuid4
 from datetime import datetime
-from sqlalchemy import select
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
-from src.app.database.user import User
-from src.app.database.department import Department
-from src.app.database.user_role import UserRole
 import os
+from dotenv import load_dotenv
 
+load_dotenv()
 
 # Database connection
 DATABASE_URL = "postgresql+asyncpg://admin:Admin%40Gr%40n1%2Be%21@93.114.128.181:5432/alpha_granite_staging"
@@ -149,9 +148,10 @@ async def create_users():
             for user_data in USERS_DATA:
                 username = user_data["username"]
                 
-                # Check if user already exists
+                # Check if user already exists using raw SQL
                 result = await session.execute(
-                    select(User).where(User.username == username)
+                    text("SELECT id FROM users WHERE username = :username"),
+                    {"username": username}
                 )
                 existing_user = result.scalar_one_or_none()
                 
@@ -159,25 +159,35 @@ async def create_users():
                     print(f"  ⚠️  User '{username}' already exists. Skipping...")
                     continue
                 
-                # Create user
+                # Create user with raw SQL
                 hashed_pwd = hash_password(user_data["password"])
-                new_user = User(
-                    username=username,
-                    employee_id=uuid4(),
-                    email=user_data["email"],
-                    first_name=user_data["first_name"],
-                    last_name=user_data["last_name"],
-                    password=hashed_pwd,
-                    is_super_admin=user_data["is_super_admin"],
-                    department=user_data["department"],
-                    status=1,
-                    is_first_login=True,
-                    created_at=datetime.now(),
-                    updated_at=datetime.now()
-                )
+                employee_id = str(uuid4())
+                now = datetime.now()
                 
-                session.add(new_user)
-                await session.flush()  # Flush to get the user ID
+                await session.execute(
+                    text("""
+                        INSERT INTO users 
+                        (username, employee_id, email, first_name, last_name, password, 
+                         is_super_admin, department, status, is_first_login, created_at, updated_at)
+                        VALUES 
+                        (:username, :employee_id, :email, :first_name, :last_name, :password,
+                         :is_super_admin, :department, :status, :is_first_login, :created_at, :updated_at)
+                    """),
+                    {
+                        "username": username,
+                        "employee_id": employee_id,
+                        "email": user_data["email"],
+                        "first_name": user_data["first_name"],
+                        "last_name": user_data["last_name"],
+                        "password": hashed_pwd,
+                        "is_super_admin": user_data["is_super_admin"],
+                        "department": user_data["department"],
+                        "status": 1,
+                        "is_first_login": True,
+                        "created_at": now,
+                        "updated_at": now
+                    }
+                )
                 
                 print(f"  ✓ Created user: {user_data['first_name']} {user_data['last_name']} ({username})")
                 created_count += 1
