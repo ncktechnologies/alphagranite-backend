@@ -318,8 +318,16 @@ async def create_sales_ct(
     except IntegrityError:
         await db.rollback()
         raise error_response("Sales CT already exists for this FAB", 409)
-    
-    return success_response(serialize_datetime_fields(sales_ct), "Sales CT created successfully")
+
+    revision_count_result = await db.execute(
+        select(func.count(Revision.id)).where(Revision.fab_id == sales_ct.fab_id)
+    )
+    revision_count = int(revision_count_result.scalar() or 0)
+
+    data = serialize_datetime_fields(sales_ct)
+    data["current_revision_count"] = str(revision_count)
+
+    return success_response(data, "Sales CT created successfully")
 
 
 @router.put("/sales-ct/{sales_ct_id}/review-no", response_model=SuccessResponse[None])
@@ -486,9 +494,28 @@ async def get_all_sales_ct(
         .order_by(Fab.sales_ct_completed_date.asc().nulls_last())
     )
     sales_cts = [row[0] for row in result.all()]
+
+    fab_ids = [sct.fab_id for sct in sales_cts if sct.fab_id is not None]
+    revision_counts = {}
+    if fab_ids:
+        counts_result = await db.execute(
+            select(Revision.fab_id, func.count(Revision.id))
+            .where(Revision.fab_id.in_(fab_ids))
+            .group_by(Revision.fab_id)
+        )
+        revision_counts = {
+            fab_id: int(count or 0)
+            for fab_id, count in counts_result.all()
+        }
+
+    data = []
+    for sct in sales_cts:
+        item = serialize_datetime_fields(sct)
+        item["current_revision_count"] = str(revision_counts.get(sct.fab_id, 0))
+        data.append(item)
     
     return success_response(
-        [serialize_datetime_fields(sct) for sct in sales_cts],
+        data,
         "Sales CT entries fetched successfully"
     )
 
