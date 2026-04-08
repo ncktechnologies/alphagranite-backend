@@ -88,11 +88,27 @@ def _pending_final_programming_filter():
 
 
 def _effective_cut_list_filter():
+    incomplete_cut_or_wj_plan_exists = (
+        select(ShopCutPlan.id)
+        .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
+        .where(
+            ShopCutPlan.fab_id == Fab.id,
+            func.lower(func.trim(PlanningSection.plan_name)).in_(["cut", "wj"]),
+            func.coalesce(ShopCutPlan.work_percentage, 0) < 100,
+        )
+        .exists()
+    )
+
     return and_(
         Fab.current_stage == "cut_list",
         or_(
             Fab.shop_date_schedule.is_(None),
             Fab.final_programming_complete.is_(True),
+            and_(
+                Fab.next_stage == "final_programming",
+                Fab.cutlist_complete.is_(True),
+                incomplete_cut_or_wj_plan_exists,
+            ),
         ),
     )
 
