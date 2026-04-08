@@ -6,6 +6,7 @@ from sqlalchemy.future import select
 from sqlalchemy import func, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from src.app.database.shop_cut_plan import ShopCutPlan
 from src.app.database.work_station import WorkStation
@@ -1712,7 +1713,7 @@ async def get_fab(
         # Just created (no updates yet)
         message = f"FAB {fab_dict['id']} submitted successfully for review!"
     
-    return success_response(fab_dict, message)
+    return success_response(jsonable_encoder(fab_dict), message)
 
 
 @router.put("/fabs/{fab_id}", response_model=SuccessResponse[FabResponse])
