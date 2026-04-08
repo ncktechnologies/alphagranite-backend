@@ -169,7 +169,8 @@ async def update_cut_list(
         # Handle cutlist_complete — triggers move to shop stage
         if update_data.cutlist_complete is not None:
             fab.cutlist_complete = update_data.cutlist_complete
-            if update_data.cutlist_complete is True and fab.current_stage == "cut_list":
+            if update_data.cutlist_complete is True:
+                fab.current_stage = "cut_list"
                 fab.next_stage = "shop"
         
         fab.updated_at = datetime.now()

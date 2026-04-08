@@ -66,7 +66,7 @@ async def get_stone_thicknesses(
         query = query.where(StoneThickness.status_id == status_id)
     
     # Apply pagination
-    query = query.offset(skip).limit(limit).order_by(StoneThickness.thickness_mm.asc())
+    query = query.offset(skip).limit(limit).order_by(StoneThickness.thickness_mm.desc())
     
     result = await db.execute(query)
     thicknesses = result.scalars().all()

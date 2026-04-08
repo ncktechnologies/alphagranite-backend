@@ -572,6 +572,7 @@ class DraftingUpdate(BaseModel):
     mentions: Optional[str] = None
     is_completed: Optional[bool] = None
     status_id: Optional[int] = None
+    drafter_id: Optional[int] = Field(None, gt=0, description="Assign/reassign drafter")
     
     @field_validator('drafter_start_date', 'drafter_end_date', mode='before')
     @classmethod
@@ -1556,6 +1557,7 @@ class TemplaterJobTimerHistoryResponse(BaseModel):
     events: List[TemplaterJobTimerEventResponse]
 
 class EarliestAvailabilityItem(BaseModel):
+    sequence: int
     planning_section_id: int 
     operator_id: int
     workstation_id: int

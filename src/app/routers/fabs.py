@@ -6,6 +6,7 @@ from sqlalchemy.future import select
 from sqlalchemy import func, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from src.app.database.shop_cut_plan import ShopCutPlan
 from src.app.database.work_station import WorkStation
@@ -75,6 +76,64 @@ def _install_to_schedule_filter():
     )
 
 
+def _pending_final_programming_filter():
+    return or_(
+        Fab.current_stage == "final_programming",
+        and_(
+            Fab.current_stage == "cut_list",
+            Fab.shop_date_schedule.isnot(None),
+            Fab.final_programming_complete.is_(False),
+        ),
+    )
+
+
+def _effective_cut_list_filter():
+    cut_or_wj_plan_exists = (
+        select(ShopCutPlan.id)
+        .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
+        .where(
+            ShopCutPlan.fab_id == Fab.id,
+            func.lower(func.trim(PlanningSection.plan_name)).in_(["cut", "wj"]),
+        )
+        .exists()
+    )
+
+    incomplete_cut_or_wj_plan_exists = (
+        select(ShopCutPlan.id)
+        .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
+        .where(
+            ShopCutPlan.fab_id == Fab.id,
+            func.lower(func.trim(PlanningSection.plan_name)).in_(["cut", "wj"]),
+            func.coalesce(ShopCutPlan.work_percentage, 0) < 100,
+        )
+        .exists()
+    )
+
+    needs_cut_list_visibility_by_plan = or_(
+        ~cut_or_wj_plan_exists,
+        incomplete_cut_or_wj_plan_exists,
+    )
+
+    return or_(
+        and_(
+            Fab.current_stage == "cut_list",
+            or_(
+                Fab.shop_date_schedule.is_(None),
+                Fab.final_programming_complete.is_(True),
+                and_(
+                    Fab.next_stage == "final_programming",
+                    Fab.cutlist_complete.is_(True),
+                    needs_cut_list_visibility_by_plan,
+                ),
+            ),
+        ),
+        and_(
+            Fab.current_stage == "shop",
+            needs_cut_list_visibility_by_plan,
+        ),
+    )
+
+
 def _add_total_cut_lnft(fab_dict: dict) -> None:
     # Uses wj_linft (existing model field), with fallback to wj_lnft if present.
     saw_cut_lnft = float(fab_dict.get("saw_cut_lnft") or 0.0)
@@ -129,6 +188,21 @@ def _compute_fab_progress_fields(plans: List[dict]) -> tuple[Optional[str], floa
     avg_percent = round((total_percent / stage_count), 2) if stage_count > 0 else 0.0
     estimated_completion_date = latest_end_dt.isoformat() if latest_end_dt else None
     return estimated_completion_date, avg_percent
+
+
+def _coalesce_shop_est_completion_date(
+    shop_est_completion_date: Optional[str],
+    estimated_completion_date: Optional[str],
+) -> Optional[str]:
+    """Use stored shop estimate date first; otherwise derive it from latest plan completion date."""
+    if shop_est_completion_date:
+        return shop_est_completion_date
+    if not estimated_completion_date:
+        return None
+    try:
+        return datetime.fromisoformat(estimated_completion_date).date().isoformat()
+    except Exception:
+        return None
 
 
 async def _transition_completed_cutlist_fabs_to_shop(
@@ -187,6 +261,9 @@ def _stage_filter_condition(stage_name: str):
     """
     Stage visibility rule:
     - install_completion uses exact stage match
+    - install_scheduling uses its redirected visibility rule
+    - final_programming includes pending cut_list FABs with a shop date
+    - cut_list excludes FABs counted as pending final_programming
     - all other stages use exact stage match
     """
     if stage_name == "install_completion":
@@ -196,6 +273,10 @@ def _stage_filter_condition(stage_name: str):
             Fab.current_stage == "install_scheduling",
             ~Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
         )
+    if stage_name == "final_programming":
+        return _pending_final_programming_filter()
+    if stage_name == "cut_list":
+        return _effective_cut_list_filter()
     return Fab.current_stage == stage_name
 
 
@@ -638,6 +719,10 @@ async def get_fabs(
         estimated_completion_date, percentage_completion = _compute_fab_progress_fields(plans)
         f["estimated_completion_date"] = estimated_completion_date
         f["percentage_completion"] = percentage_completion
+        f["shop_est_completion_date"] = _coalesce_shop_est_completion_date(
+            f.get("shop_est_completion_date"),
+            estimated_completion_date,
+        )
 
     # Step 6.2: Batch load resurface scheduling and attach per FAB
     resurface_scheduling_map = await _batch_load_resurface_scheduling_responses(db, fab_ids)
@@ -968,6 +1053,10 @@ async def get_fabs_for_cnc_widget(
         estimated_completion_date, percentage_completion = _compute_fab_progress_fields(plans)
         f["estimated_completion_date"] = estimated_completion_date
         f["percentage_completion"] = percentage_completion
+        f["shop_est_completion_date"] = _coalesce_shop_est_completion_date(
+            f.get("shop_est_completion_date"),
+            estimated_completion_date,
+        )
 
     # Step 7: Get total count
     count_query = select(func.count(Fab.id)).select_from(Fab)
@@ -1578,7 +1667,6 @@ async def get_fab(
     # Use a join query to get all related data in one go
     # Use aliased User for sales_person, technician, drafter, and drafter_assigned_by to avoid conflicts
     from sqlalchemy.orm import aliased
-    from sqlalchemy import and_
     TechnicianUser = aliased(User)
     DrafterUser = aliased(User)
     DrafterAssignedByUser = aliased(User)
@@ -1603,6 +1691,7 @@ async def get_fab(
         latest_templating.c.schedule_start_date.label("templating_schedule_start_date"),
         latest_templating.c.schedule_due_date.label("templating_schedule_due_date"),
         latest_templating.c.notes.label("templating_notes"),
+        latest_templating.c.actual_end_date.label("templating_actual_end_date"),
         TechnicianUser.first_name.label("technician_first_name"),
         TechnicianUser.last_name.label("technician_last_name"),
         BusinessJob,  # Include full BusinessJob object
@@ -1635,118 +1724,28 @@ async def get_fab(
     
     if not row:
         return error_response("Fab not found", 404)
-    
-    # Unpack the row
-    fab = row[0]
-    sales_person_first_name = row[1]
-    sales_person_last_name = row[2]
-    stone_type_name = row[3]
-    stone_color_name = row[4]
-    stone_thickness_value = row[5]
-    edge_name = row[6]
-    templating_schedule_start_date = row[7]
-    templating_schedule_due_date = row[8]
-    templating_notes = row[9]
-    technician_first_name = row[10]
-    technician_last_name = row[11]
-    business_job = row[12]
-    account_name = row[13]
-    account_number = row[14]
-    account_contact_person = row[15]
-    account_email = row[16]
-    account_phone = row[17]
-    drafter_first_name = row[18]
-    drafter_last_name = row[19]
-    drafter_assigned_by_first_name = row[20]
-    drafter_assigned_by_last_name = row[21]
-    
-    # Convert to dict and add related names (handle datetime, date, and Decimal serialization)
-    fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
-                for k, v in fab.__dict__.items() if not k.startswith('_')}
-    
-    # Ensure notes is always a list
-    if fab_dict.get("notes") and not isinstance(fab_dict["notes"], list):
-        fab_dict["notes"] = [fab_dict["notes"]] if fab_dict["notes"] else None
-    
-    fab_dict["sales_person_name"] = f"{sales_person_first_name} {sales_person_last_name}" if sales_person_first_name else None
-    fab_dict["stone_type_name"] = stone_type_name
-    fab_dict["stone_color_name"] = stone_color_name
-    fab_dict["stone_thickness_value"] = stone_thickness_value
-    fab_dict["edge_name"] = edge_name
-    
-    # Add job details as a dictionary
-    if business_job:
-        job_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
-                   for k, v in business_job.__dict__.items() if not k.startswith('_')}
-        fab_dict["job_details"] = job_dict
-        fab_dict["account_id"] = business_job.account_id
-    else:
-        fab_dict["job_details"] = None
-        fab_dict["account_id"] = None
 
-    # Add account data
-    fab_dict["account_name"] = account_name
-    fab_dict["account_number"] = account_number
-    fab_dict["account_contact_person"] = account_contact_person
-    fab_dict["account_email"] = account_email
-    fab_dict["account_phone"] = account_phone
-    
-    # Add templating data
-    fab_dict["templating_schedule_start_date"] = templating_schedule_start_date.isoformat() if templating_schedule_start_date else None
-    fab_dict["templating_schedule_due_date"] = templating_schedule_due_date.isoformat() if templating_schedule_due_date else None
-    fab_dict["templating_notes"] = templating_notes
-    fab_dict["technician_name"] = f"{technician_first_name} {technician_last_name}" if technician_first_name else None
-    
-    # Add drafter information
-    fab_dict["drafter_name"] = f"{drafter_first_name} {drafter_last_name}" if drafter_first_name else None
-    fab_dict["drafter_assigned_by_name"] = f"{drafter_assigned_by_first_name} {drafter_assigned_by_last_name}" if drafter_assigned_by_first_name else None
-    
-    # Add next stage
-    fab_dict["next_stage"] = get_next_stage(
-        fab_dict.get("current_stage"),
-        drafting_needed=fab_dict.get("drafting_needed"),
-        slab_smith_ag_needed=fab_dict.get("slab_smith_ag_needed"),
-        slab_smith_cust_needed=fab_dict.get("slab_smith_cust_needed"),
-    )
-    
-    _add_total_cut_lnft(fab_dict)
+    fab_dict = _convert_fab_row_to_dict(row)
 
-    # Fetch fab_notes
-    fab_notes = await get_fab_notes(db, fab_id)
-    fab_dict["fab_notes"] = fab_notes
-    
-    # Fetch draft data
-    draft_data = await get_draft_data(db, fab_id)
-    fab_dict["draft_data"] = draft_data
+    # Reuse the same enrichment path as get_fabs so single-item and list payloads match.
+    await _batch_load_fab_related_data(db, [fab_dict])
 
-    # Fetch CNC data
-    cnc_data = await get_cnc_data(db, fab_id)
-    fab_dict["cnc_data"] = cnc_data
-    
-    # Fetch Sales CT data
-    sales_ct_data = await get_sales_ct_data(db, fab_id)
-    fab_dict["sales_ct_data"] = sales_ct_data
-    
-    # Fetch SlabSmith data
-    slabsmith_data = await get_slabsmith_data(db, fab_id)
-    fab_dict["slabsmith_data"] = slabsmith_data
-    
-    # Fetch latest revision
-    revisions = await _batch_load_latest_revisions(db, [fab_id])
-    fab_dict["latest_revision"] = revisions.get(fab_id)
-    
-    # Fetch drafting session
-    sessions = await _batch_load_drafting_sessions(db, [fab_id])
-    fab_dict["drafting_session"] = sessions.get(fab_id)
-    
-    # Add stage completion status and stage-specific data
-    stage_info = await get_stage_completion_data(db, fab_id, fab_dict.get("current_stage"))
-    fab_dict["is_complete"] = stage_info["is_complete"]
-    fab_dict["stage_data"] = stage_info["stage_data"]
-    
-    # Attach plans for this FAB
     plans_map = await get_plans_map_for_fabs(db, [fab_id])
-    fab_dict["plans"] = plans_map.get(fab_id, [])
+    plans = plans_map.get(fab_id, [])
+    fab_dict["plans"] = plans
+    estimated_completion_date, percentage_completion = _compute_fab_progress_fields(plans)
+    fab_dict["estimated_completion_date"] = estimated_completion_date
+    fab_dict["percentage_completion"] = percentage_completion
+    fab_dict["shop_est_completion_date"] = _coalesce_shop_est_completion_date(
+        fab_dict.get("shop_est_completion_date"),
+        estimated_completion_date,
+    )
+
+    resurface_scheduling_map = await _batch_load_resurface_scheduling_responses(db, [fab_id])
+    fab_dict["resurface_scheduling"] = resurface_scheduling_map.get(fab_id)
+
+    install_scheduling_map = await _batch_load_install_scheduling_responses(db, [fab_id])
+    fab_dict["install_details"] = install_scheduling_map.get(fab_id)
     
     # Determine success message based on stage
     message = "Fab fetched successfully"
@@ -1754,7 +1753,7 @@ async def get_fab(
         # Just created (no updates yet)
         message = f"FAB {fab_dict['id']} submitted successfully for review!"
     
-    return success_response(fab_dict, message)
+    return success_response(jsonable_encoder(fab_dict), message)
 
 
 @router.put("/fabs/{fab_id}", response_model=SuccessResponse[FabResponse])
@@ -2569,28 +2568,27 @@ async def get_all_stages(
     current_user: User = Depends(get_current_user)
 ):
     """Get all workflow stages with FAB count for each stage"""
-    from sqlalchemy import func, case, and_, or_
+    from sqlalchemy import func, and_, or_
     
-    # Get count of FABs for each stage with special logic for final_programming
-    stage_counts_query = select(
-        case(
-            # If current_stage is cut_list AND shop_date_schedule is set AND final_programming_complete is False,
-            # count it as final_programming instead of cut_list
-            (
-                and_(
-                    Fab.current_stage == "cut_list",
-                    Fab.shop_date_schedule.isnot(None),
-                    Fab.final_programming_complete == False
-                ),
-                "final_programming"
-            ),
-            else_=Fab.current_stage
-        ).label("effective_stage"),
-        func.count(Fab.id).label('count')
-    ).group_by("effective_stage")
-    
+    # Base stage counts by actual current_stage for non-overridden stages.
+    stage_counts_query = (
+        select(Fab.current_stage, func.count(Fab.id).label("count"))
+        .group_by(Fab.current_stage)
+    )
+
     result = await db.execute(stage_counts_query)
     stage_counts_dict = {row[0]: row[1] for row in result.all()}
+
+    # Keep cut_list/final_programming counts aligned with get_fabs stage filters.
+    final_programming_count_result = await db.execute(
+        select(func.count(Fab.id)).where(_stage_filter_condition("final_programming"))
+    )
+    stage_counts_dict["final_programming"] = final_programming_count_result.scalar() or 0
+
+    cut_list_count_result = await db.execute(
+        select(func.count(Fab.id)).where(_stage_filter_condition("cut_list"))
+    )
+    stage_counts_dict["cut_list"] = cut_list_count_result.scalar() or 0
     
     # NEW: slab_smith_request count should mirror /stages/slabsmith/pending
     slabsmith_pending_filters = [
@@ -2638,25 +2636,12 @@ async def get_all_stages(
             # For final_programming: include both actual final_programming FABs 
             # AND cut_list FABs that meet the criteria
             fab_ids_query = select(Fab.id).where(
-                or_(
-                    Fab.current_stage == "final_programming",
-                    and_(
-                        Fab.current_stage == "cut_list",
-                        Fab.shop_date_schedule.isnot(None),
-                        Fab.final_programming_complete == False
-                    )
-                )
+                _stage_filter_condition(stage_name)
             ).order_by(Fab.id.desc()).limit(10)
         elif stage_name == "cut_list":
             # For cut_list: EXCLUDE FABs that should be counted as final_programming
             fab_ids_query = select(Fab.id).where(
-                and_(
-                    Fab.current_stage == "cut_list",
-                    or_(
-                        Fab.shop_date_schedule.is_(None),
-                        Fab.final_programming_complete == True
-                    )
-                )
+                _stage_filter_condition(stage_name)
             ).order_by(Fab.id.desc()).limit(10)
         elif stage_name == "slab_smith_request":
             fab_count = slabsmith_pending_count
@@ -3237,6 +3222,11 @@ def _convert_fab_row_to_dict(row: tuple) -> dict:
     )    
     fab_dict["final_programming_complete"] = fab.final_programming_complete
     fab_dict["final_programming_completed_date"] = fab.final_programming_completed_date
+    fab_dict["shop_est_completion_date"] = (
+        fab.shop_est_completion_date.date().isoformat()
+        if fab.shop_est_completion_date
+        else None
+    )
     
     _add_total_cut_lnft(fab_dict)
 
