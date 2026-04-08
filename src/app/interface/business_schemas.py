@@ -470,6 +470,11 @@ class TemplatingScheduleUpdate(BaseModel):
         from_attributes = True
 
 
+class TemplatingReviewChecklistUpdate(BaseModel):
+    """Schema for updating templating review checklist only"""
+    review_checklist: dict = Field(..., description="FAB review checklist with checkbox states")
+
+
 class TemplatingCompleteRequest(BaseModel):
     actual_sqft: Optional[str] = Field(None, description="Actual square footage measured")
     actual_start_date: Optional[datetime] = Field(None, description="Actual start date of work")
