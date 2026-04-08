@@ -1557,6 +1557,7 @@ class TemplaterJobTimerHistoryResponse(BaseModel):
     events: List[TemplaterJobTimerEventResponse]
 
 class EarliestAvailabilityItem(BaseModel):
+    sequence: int
     planning_section_id: int 
     operator_id: int
     workstation_id: int

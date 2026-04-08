@@ -1895,6 +1895,13 @@ async def get_earliest_availability(
         if payload.max_proposals_per_request <= 0:
             raise HTTPException(status_code=400, detail="max_proposals_per_request must be > 0")
 
+        ordered_requests = sorted(payload.requests, key=lambda r: r.sequence)
+        sequences = [r.sequence for r in ordered_requests]
+        if any(seq <= 0 for seq in sequences):
+            raise HTTPException(status_code=400, detail="sequence must be greater than 0")
+        if len(sequences) != len(set(sequences)):
+            raise HTTPException(status_code=400, detail="sequence values must be unique")
+
         start_from = _normalize_naive_dt(payload.start_from) if payload.start_from else datetime.now().replace(second=0, microsecond=0)
         start_from = _align_to_slot(start_from, payload.slot_minutes)
         start_from = _next_business_start(start_from)
@@ -1903,8 +1910,8 @@ async def get_earliest_availability(
         search_end = start_from + timedelta(days=payload.search_horizon_days)
         step = timedelta(minutes=payload.slot_minutes)
 
-        operator_ids = {r.operator_id for r in payload.requests}
-        workstation_ids = {r.workstation_id for r in payload.requests}
+        operator_ids = {r.operator_id for r in ordered_requests}
+        workstation_ids = {r.workstation_id for r in ordered_requests}
 
         # Validate operators/workstations exist and build id->name maps
         user_rows = (
@@ -1935,7 +1942,7 @@ async def get_earliest_availability(
             raise HTTPException(status_code=404, detail=f"Workstation(s) not found: {missing_ws}")
 
         # Validate planning sections and build id->name map
-        section_ids = {r.planning_section_id for r in payload.requests}
+        section_ids = {r.planning_section_id for r in ordered_requests}
         ps_rows = (await db.execute(
             select(PlanningSection.id, PlanningSection.plan_name)
             .where(PlanningSection.id.in_(list(section_ids)))
@@ -1984,7 +1991,7 @@ async def get_earliest_availability(
         dependency_start = start_from
         chain_blocked = False
 
-        for req in payload.requests:
+        for req in ordered_requests:
             duration_hours = float(req.estimated_hours or 0)
             if duration_hours <= 0:
                 raise HTTPException(
@@ -2033,6 +2040,7 @@ async def get_earliest_availability(
                 chain_blocked = True
 
             results.append({
+                "sequence": req.sequence,
                 "planning_section_id": req.planning_section_id,
                 "plan_name": ps_map.get(req.planning_section_id),
                 "operator_id": req.operator_id,
