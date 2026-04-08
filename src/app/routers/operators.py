@@ -137,6 +137,30 @@ async def _get_operator_task_files(
     return [_serialize_operator_task_file(file, base_url, operator_id) for file in files]
 
 
+async def _get_fab_connected_files(
+    *,
+    db: AsyncSession,
+    operator_id: int,
+    fab_id: int,
+    base_url: str,
+) -> list[dict]:
+    """Return all files directly or indirectly associated with a FAB."""
+    fab_task_ids_subquery = select(ShopCutPlan.id).where(ShopCutPlan.fab_id == fab_id)
+
+    file_result = await db.execute(
+        select(File)
+        .where(
+            or_(
+                File.fab_id == fab_id,
+                File.task_id.in_(fab_task_ids_subquery),
+            )
+        )
+        .order_by(File.created_at.desc(), File.id.desc())
+    )
+    files = file_result.scalars().all()
+    return [_serialize_operator_task_file(file, base_url, operator_id) for file in files]
+
+
 def _serialize_workstation(ws: WorkStation, operators_by_id: dict = None, sections_by_id: dict = None) -> dict:
     operators_by_id = operators_by_id or {}
     sections_by_id = sections_by_id or {}
@@ -743,10 +767,10 @@ async def get_workstation_task_by_id(
         run_time=_current_session_run_time(active_session, as_of) if active_session else None,
     )
 
-    task["files"] = await _get_operator_task_files(
+    task["files"] = await _get_fab_connected_files(
         db=db,
         operator_id=operator_id,
-        task_id=task_id,
+        fab_id=task_row[1].id,
         base_url=FileService.get_base_url(request),
     )
 

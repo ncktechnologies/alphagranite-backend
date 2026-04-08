@@ -3249,6 +3249,11 @@ def _convert_fab_row_to_dict(row: tuple) -> dict:
     )    
     fab_dict["final_programming_complete"] = fab.final_programming_complete
     fab_dict["final_programming_completed_date"] = fab.final_programming_completed_date
+    fab_dict["shop_est_completion_date"] = (
+        fab.shop_est_completion_date.date().isoformat()
+        if fab.shop_est_completion_date
+        else None
+    )
     
     _add_total_cut_lnft(fab_dict)
 
