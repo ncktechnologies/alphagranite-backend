@@ -13,6 +13,7 @@ from src.app.database.fab import Fab
 from src.app.database.slab_smith import SlabSmith
 from src.app.database.sales_ct import SalesCT
 from src.app.database.business_job import BusinessJob
+from src.app.interface.generated_schemas import Revision
 
 from src.app.interface.business_schemas import (
     SlabSmithCreate,
@@ -317,8 +318,16 @@ async def create_sales_ct(
     except IntegrityError:
         await db.rollback()
         raise error_response("Sales CT already exists for this FAB", 409)
-    
-    return success_response(serialize_datetime_fields(sales_ct), "Sales CT created successfully")
+
+    revision_count_result = await db.execute(
+        select(func.count(Revision.id)).where(Revision.fab_id == sales_ct.fab_id)
+    )
+    revision_count = int(revision_count_result.scalar() or 0)
+
+    data = serialize_datetime_fields(sales_ct)
+    data["current_revision_count"] = str(revision_count)
+
+    return success_response(data, "Sales CT created successfully")
 
 
 @router.put("/sales-ct/{sales_ct_id}/review-no", response_model=SuccessResponse[None])
@@ -387,7 +396,7 @@ async def set_review_needed_yes(
         count = int(sales_ct.current_revision_count) + 1
         sales_ct.current_revision_count = str(count)
     else:
-        sales_ct.current_revision_count = "1"
+        sales_ct.current_revision_count = "0"
     
     if file_ids:
         sales_ct.file_ids = file_ids
@@ -461,8 +470,16 @@ async def get_sales_ct_by_fab(
     
     if not sales_ct:
         raise error_response("Sales CT not found for this fab", 404)
-    
-    return success_response(serialize_datetime_fields(sales_ct), "Sales CT fetched successfully")
+
+    revision_count_result = await db.execute(
+        select(func.count(Revision.id)).where(Revision.fab_id == fab_id)
+    )
+    revision_count = int(revision_count_result.scalar() or 0)
+
+    data = serialize_datetime_fields(sales_ct)
+    data["current_revision_count"] = str(revision_count)
+
+    return success_response(data, "Sales CT fetched successfully")
 
 @router.get("/sales-ct", response_model=SuccessResponse[List[SalesCTResponse]])
 async def get_all_sales_ct(
@@ -477,9 +494,28 @@ async def get_all_sales_ct(
         .order_by(Fab.sales_ct_completed_date.asc().nulls_last())
     )
     sales_cts = [row[0] for row in result.all()]
+
+    fab_ids = [sct.fab_id for sct in sales_cts if sct.fab_id is not None]
+    revision_counts = {}
+    if fab_ids:
+        counts_result = await db.execute(
+            select(Revision.fab_id, func.count(Revision.id))
+            .where(Revision.fab_id.in_(fab_ids))
+            .group_by(Revision.fab_id)
+        )
+        revision_counts = {
+            fab_id: int(count or 0)
+            for fab_id, count in counts_result.all()
+        }
+
+    data = []
+    for sct in sales_cts:
+        item = serialize_datetime_fields(sct)
+        item["current_revision_count"] = str(revision_counts.get(sct.fab_id, 0))
+        data.append(item)
     
     return success_response(
-        [serialize_datetime_fields(sct) for sct in sales_cts],
+        data,
         "Sales CT entries fetched successfully"
     )
 

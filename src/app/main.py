@@ -7,7 +7,7 @@ from src.app.middleware.request_logger import RequestLoggerMiddleware
 import os
 from fastapi import FastAPI, Depends, Request
 # New routers for business logic
-from src.app.routers import dashboard, job_extras
+from src.app.routers import dashboard, fab_details, job_extras
 from src.app.routers import operators
 from src.app.routers import workstation
 from src.app.routers import shop_planning
@@ -251,6 +251,7 @@ app.include_router(edges.router, prefix="/api/v1", tags=["Edges"])
 app.include_router(fab_types.router, prefix="/api/v1", tags=["Fab Types"])
 app.include_router(fabs.router, prefix="/api/v1", tags=["Fabs"])
 app.include_router(fab_notes.router, prefix="/api/v1", tags=["FAB Notes"])
+app.include_router(fab_details.router, prefix="/api/v1", tags=["FAB Details"])
 
 # Workflow routers (templating, drafting, etc.)
 app.include_router(templating.router, prefix="/api/v1", tags=["Templating"])

@@ -410,15 +410,8 @@ async def get_installer_job_timer_state(
     )
     latest = result.scalar_one_or_none()
     
-    # Calculate total time
-    total_seconds = 0
-    sessions_result = await db.execute(
-        select(func.coalesce(func.sum(InstallerJobTimerSession.total_work_seconds), 0)).where(
-            InstallerJobTimerSession.job_id == job_id,
-            InstallerJobTimerSession.installer_id == installer_id,
-        )
-    )
-    total_seconds = sessions_result.scalar()
+    # Calculate total time from latest session only so each new session starts at zero.
+    total_seconds = int(latest.total_work_seconds or 0) if latest else 0
     
     # Add current running time
     if latest and latest.status == "running" and latest.current_run_start_at:
@@ -781,15 +774,8 @@ async def get_templater_job_timer_state(
     )
     latest = result.scalar_one_or_none()
     
-    # Calculate total time
-    total_seconds = 0
-    sessions_result = await db.execute(
-        select(func.coalesce(func.sum(TemplaterJobTimerSession.total_work_seconds), 0)).where(
-            TemplaterJobTimerSession.job_id == job_id,
-            TemplaterJobTimerSession.templater_id == templater_id,
-        )
-    )
-    total_seconds = sessions_result.scalar()
+    # Calculate total time from latest session only so each new session starts at zero.
+    total_seconds = int(latest.total_work_seconds or 0) if latest else 0
     
     # Add current running time
     if latest and latest.status == "running" and latest.current_run_start_at:

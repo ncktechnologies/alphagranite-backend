@@ -27,7 +27,7 @@ from src.app.database.stone_thickness import StoneThickness
 from src.app.database.templating import Templating
 from src.app.database.sales_ct import SalesCT
 from src.app.database.status import Status
-from src.app.interface.generated_schemas import ResurfaceScheduling, InstallScheduling
+from src.app.interface.generated_schemas import ResurfaceScheduling, InstallScheduling, Revision
 
 from src.app.interface.business_schemas import (
     FabCreate, FabUpdate, FabResponse, FabStageUpdate, ResurfaceSchedulingResponse, InstallSchedulingResponse
@@ -3593,6 +3593,17 @@ async def _batch_load_sales_ct_data(db: AsyncSession, fab_ids: List[int]) -> dic
     
     result = await db.execute(query)
     rows = result.all()
+
+    revision_counts_query = (
+        select(Revision.fab_id, func.count(Revision.id))
+        .where(Revision.fab_id.in_(fab_ids))
+        .group_by(Revision.fab_id)
+    )
+    revision_counts_result = await db.execute(revision_counts_query)
+    revision_counts_by_fab = {
+        fab_id: int(count or 0)
+        for fab_id, count in revision_counts_result.all()
+    }
     
     # Get all file IDs
     all_file_ids = set()
@@ -3654,7 +3665,7 @@ async def _batch_load_sales_ct_data(db: AsyncSession, fab_ids: List[int]) -> dic
                 "is_revision_needed": sct.is_revision_needed,
                 "is_revision_completed": sct.is_revision_completed,
                 "no_of_revisions": sct.no_of_revisions,
-                "current_revision_count": sct.current_revision_count,
+                "current_revision_count": str(revision_counts_by_fab.get(sct.fab_id, 0)),
                 "revision_reason": sct.revision_reason,
                 "revision_type": sct.revision_type,
                 "file_ids": sct.file_ids,
@@ -4025,6 +4036,11 @@ async def get_sales_ct_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
     drafter_last = row[2]
     updater_first = row[3]
     updater_last = row[4]
+
+    revision_count_result = await db.execute(
+        select(func.count(Revision.id)).where(Revision.fab_id == fab_id)
+    )
+    revision_count = int(revision_count_result.scalar() or 0)
     
     # Get files if any
     files_data = []
@@ -4075,7 +4091,7 @@ async def get_sales_ct_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
         "is_revision_needed": sct.is_revision_needed,
         "is_revision_completed": sct.is_revision_completed,
         "no_of_revisions": sct.no_of_revisions,
-        "current_revision_count": sct.current_revision_count,
+        "current_revision_count": str(revision_count),
         "revision_reason": sct.revision_reason,
         "revision_type": sct.revision_type,
         "file_ids": sct.file_ids,
@@ -4323,9 +4339,6 @@ async def get_slabsmith_data(db: AsyncSession, fab_id: int) -> Optional[dict]:
         "updated_by": slabsmith.updated_by,
         "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
     }
-
-
-from src.app.interface.generated_schemas import Revision
 
 async def _batch_load_latest_revisions(db: AsyncSession, fab_ids: List[int]) -> dict:
     """Load the most recent revision for each FAB."""
