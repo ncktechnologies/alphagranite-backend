@@ -14,12 +14,10 @@ from sqlalchemy.orm import sessionmaker
 
 from src.app.database.user import User
 import os
-from dotenv import load_dotenv
 
-load_dotenv()
 
 # Database connection
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:Admin%40Gr%40n1%2Be%21@93.114.128.181:5432/alpha_granite_staging")
+DATABASE_URL = "postgresql://admin:Admin%40Gr%40n1%2Be%21@93.114.128.181:5432/alpha_granite_staging"
 
 # Users to create
 USERS_DATA = [
