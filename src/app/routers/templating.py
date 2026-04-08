@@ -13,6 +13,7 @@ from src.app.database.department import Department
 from src.app.interface.business_schemas import (
     TemplatingScheduleCreate,
     TemplatingScheduleUpdate,
+    TemplatingReviewChecklistUpdate,
     TemplatingCompleteRequest,
     TemplatingResponse,
     TemplatingReviewUpdate,
@@ -278,6 +279,62 @@ async def update_templating(
     )
 
     return success_response(response_data, "Templating updated successfully")
+
+
+@router.patch("/templating/{templating_id}/review-checklist", response_model=SuccessResponse[TemplatingResponse])
+async def update_templating_review_checklist(
+    templating_id: int,
+    checklist_data: TemplatingReviewChecklistUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Update templating review checklist only."""
+
+    result = await db.execute(select(Templating).where(Templating.id == templating_id))
+    templating = result.scalar_one_or_none()
+
+    if not templating:
+        raise error_response("Templating not found", 404)
+
+    templating.review_checklist = checklist_data.review_checklist
+    templating.updated_at = utc_now()
+    templating.updated_by = current_user.id
+
+    await db.commit()
+    await db.refresh(templating)
+
+    technician = await db.get(User, templating.technician_id) if templating.technician_id else None
+    status = await db.get(Status, templating.status_id)
+
+    fab_result = await db.execute(select(Fab).where(Fab.id == templating.fab_id))
+    fab = fab_result.scalar_one_or_none()
+
+    response_data = TemplatingResponse(
+        id=templating.id,
+        fab_id=templating.fab_id,
+        technician_id=templating.technician_id,
+        technician_name=f"{technician.first_name} {technician.last_name}" if technician else None,
+        schedule_start_date=_to_date(templating.schedule_start_date),
+        schedule_due_date=_to_date(templating.schedule_due_date),
+        total_sqft=templating.total_sqft,
+        actual_start_date=templating.actual_start_date,
+        actual_end_date=templating.actual_end_date,
+        duration=templating.duration,
+        notes=templating.notes,
+        review_checklist=templating.review_checklist,
+        is_templating_schedule=templating.is_templating_schedule,
+        is_completed=templating.is_completed,
+        rescheduled=templating.rescheduled,
+        status_id=templating.status_id,
+        status_name=status.name if status else None,
+        current_stage=fab.current_stage if fab else None,
+        next_stage=fab.next_stage if fab else None,
+        created_at=templating.created_at,
+        updated_at=templating.updated_at,
+        updated_by=templating.updated_by
+    )
+
+    return success_response(response_data, "Templating review checklist updated successfully")
 
 
 
