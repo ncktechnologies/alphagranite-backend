@@ -1626,7 +1626,6 @@ async def get_fab(
     # Use a join query to get all related data in one go
     # Use aliased User for sales_person, technician, drafter, and drafter_assigned_by to avoid conflicts
     from sqlalchemy.orm import aliased
-    from sqlalchemy import and_
     TechnicianUser = aliased(User)
     DrafterUser = aliased(User)
     DrafterAssignedByUser = aliased(User)
@@ -1683,118 +1682,28 @@ async def get_fab(
     
     if not row:
         return error_response("Fab not found", 404)
-    
-    # Unpack the row
-    fab = row[0]
-    sales_person_first_name = row[1]
-    sales_person_last_name = row[2]
-    stone_type_name = row[3]
-    stone_color_name = row[4]
-    stone_thickness_value = row[5]
-    edge_name = row[6]
-    templating_schedule_start_date = row[7]
-    templating_schedule_due_date = row[8]
-    templating_notes = row[9]
-    technician_first_name = row[10]
-    technician_last_name = row[11]
-    business_job = row[12]
-    account_name = row[13]
-    account_number = row[14]
-    account_contact_person = row[15]
-    account_email = row[16]
-    account_phone = row[17]
-    drafter_first_name = row[18]
-    drafter_last_name = row[19]
-    drafter_assigned_by_first_name = row[20]
-    drafter_assigned_by_last_name = row[21]
-    
-    # Convert to dict and add related names (handle datetime, date, and Decimal serialization)
-    fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
-                for k, v in fab.__dict__.items() if not k.startswith('_')}
-    
-    # Ensure notes is always a list
-    if fab_dict.get("notes") and not isinstance(fab_dict["notes"], list):
-        fab_dict["notes"] = [fab_dict["notes"]] if fab_dict["notes"] else None
-    
-    fab_dict["sales_person_name"] = f"{sales_person_first_name} {sales_person_last_name}" if sales_person_first_name else None
-    fab_dict["stone_type_name"] = stone_type_name
-    fab_dict["stone_color_name"] = stone_color_name
-    fab_dict["stone_thickness_value"] = stone_thickness_value
-    fab_dict["edge_name"] = edge_name
-    
-    # Add job details as a dictionary
-    if business_job:
-        job_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
-                   for k, v in business_job.__dict__.items() if not k.startswith('_')}
-        fab_dict["job_details"] = job_dict
-        fab_dict["account_id"] = business_job.account_id
-    else:
-        fab_dict["job_details"] = None
-        fab_dict["account_id"] = None
 
-    # Add account data
-    fab_dict["account_name"] = account_name
-    fab_dict["account_number"] = account_number
-    fab_dict["account_contact_person"] = account_contact_person
-    fab_dict["account_email"] = account_email
-    fab_dict["account_phone"] = account_phone
-    
-    # Add templating data
-    fab_dict["templating_schedule_start_date"] = templating_schedule_start_date.isoformat() if templating_schedule_start_date else None
-    fab_dict["templating_schedule_due_date"] = templating_schedule_due_date.isoformat() if templating_schedule_due_date else None
-    fab_dict["templating_notes"] = templating_notes
-    fab_dict["technician_name"] = f"{technician_first_name} {technician_last_name}" if technician_first_name else None
-    
-    # Add drafter information
-    fab_dict["drafter_name"] = f"{drafter_first_name} {drafter_last_name}" if drafter_first_name else None
-    fab_dict["drafter_assigned_by_name"] = f"{drafter_assigned_by_first_name} {drafter_assigned_by_last_name}" if drafter_assigned_by_first_name else None
-    
-    # Add next stage
-    fab_dict["next_stage"] = get_next_stage(
-        fab_dict.get("current_stage"),
-        drafting_needed=fab_dict.get("drafting_needed"),
-        slab_smith_ag_needed=fab_dict.get("slab_smith_ag_needed"),
-        slab_smith_cust_needed=fab_dict.get("slab_smith_cust_needed"),
-    )
-    
-    _add_total_cut_lnft(fab_dict)
+    fab_dict = _convert_fab_row_to_dict(row)
 
-    # Fetch fab_notes
-    fab_notes = await get_fab_notes(db, fab_id)
-    fab_dict["fab_notes"] = fab_notes
-    
-    # Fetch draft data
-    draft_data = await get_draft_data(db, fab_id)
-    fab_dict["draft_data"] = draft_data
+    # Reuse the same enrichment path as get_fabs so single-item and list payloads match.
+    await _batch_load_fab_related_data(db, [fab_dict])
 
-    # Fetch CNC data
-    cnc_data = await get_cnc_data(db, fab_id)
-    fab_dict["cnc_data"] = cnc_data
-    
-    # Fetch Sales CT data
-    sales_ct_data = await get_sales_ct_data(db, fab_id)
-    fab_dict["sales_ct_data"] = sales_ct_data
-    
-    # Fetch SlabSmith data
-    slabsmith_data = await get_slabsmith_data(db, fab_id)
-    fab_dict["slabsmith_data"] = slabsmith_data
-    
-    # Fetch latest revision
-    revisions = await _batch_load_latest_revisions(db, [fab_id])
-    fab_dict["latest_revision"] = revisions.get(fab_id)
-    
-    # Fetch drafting session
-    sessions = await _batch_load_drafting_sessions(db, [fab_id])
-    fab_dict["drafting_session"] = sessions.get(fab_id)
-    
-    # Add stage completion status and stage-specific data
-    stage_info = await get_stage_completion_data(db, fab_id, fab_dict.get("current_stage"))
-    fab_dict["is_complete"] = stage_info["is_complete"]
-    fab_dict["stage_data"] = stage_info["stage_data"]
-    
-    # Attach plans for this FAB
     plans_map = await get_plans_map_for_fabs(db, [fab_id])
-    fab_dict["plans"] = plans_map.get(fab_id, [])
+    plans = plans_map.get(fab_id, [])
+    fab_dict["plans"] = plans
+    estimated_completion_date, percentage_completion = _compute_fab_progress_fields(plans)
+    fab_dict["estimated_completion_date"] = estimated_completion_date
+    fab_dict["percentage_completion"] = percentage_completion
+    fab_dict["shop_est_completion_date"] = _coalesce_shop_est_completion_date(
+        fab_dict.get("shop_est_completion_date"),
+        estimated_completion_date,
+    )
+
+    resurface_scheduling_map = await _batch_load_resurface_scheduling_responses(db, [fab_id])
+    fab_dict["resurface_scheduling"] = resurface_scheduling_map.get(fab_id)
+
+    install_scheduling_map = await _batch_load_install_scheduling_responses(db, [fab_id])
+    fab_dict["install_details"] = install_scheduling_map.get(fab_id)
     
     # Determine success message based on stage
     message = "Fab fetched successfully"
