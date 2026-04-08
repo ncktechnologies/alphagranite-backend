@@ -75,6 +75,27 @@ def _install_to_schedule_filter():
     )
 
 
+def _pending_final_programming_filter():
+    return or_(
+        Fab.current_stage == "final_programming",
+        and_(
+            Fab.current_stage == "cut_list",
+            Fab.shop_date_schedule.isnot(None),
+            Fab.final_programming_complete.is_(False),
+        ),
+    )
+
+
+def _effective_cut_list_filter():
+    return and_(
+        Fab.current_stage == "cut_list",
+        or_(
+            Fab.shop_date_schedule.is_(None),
+            Fab.final_programming_complete.is_(True),
+        ),
+    )
+
+
 def _add_total_cut_lnft(fab_dict: dict) -> None:
     # Uses wj_linft (existing model field), with fallback to wj_lnft if present.
     saw_cut_lnft = float(fab_dict.get("saw_cut_lnft") or 0.0)
@@ -187,6 +208,9 @@ def _stage_filter_condition(stage_name: str):
     """
     Stage visibility rule:
     - install_completion uses exact stage match
+    - install_scheduling uses its redirected visibility rule
+    - final_programming includes pending cut_list FABs with a shop date
+    - cut_list excludes FABs counted as pending final_programming
     - all other stages use exact stage match
     """
     if stage_name == "install_completion":
@@ -196,6 +220,10 @@ def _stage_filter_condition(stage_name: str):
             Fab.current_stage == "install_scheduling",
             ~Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
         )
+    if stage_name == "final_programming":
+        return _pending_final_programming_filter()
+    if stage_name == "cut_list":
+        return _effective_cut_list_filter()
     return Fab.current_stage == stage_name
 
 
@@ -2577,7 +2605,7 @@ async def get_all_stages(
                 and_(
                     Fab.current_stage == "cut_list",
                     Fab.shop_date_schedule.isnot(None),
-                    Fab.final_programming_complete == False
+                    Fab.final_programming_complete.is_(False)
                 ),
                 "final_programming"
             ),
@@ -2635,25 +2663,12 @@ async def get_all_stages(
             # For final_programming: include both actual final_programming FABs 
             # AND cut_list FABs that meet the criteria
             fab_ids_query = select(Fab.id).where(
-                or_(
-                    Fab.current_stage == "final_programming",
-                    and_(
-                        Fab.current_stage == "cut_list",
-                        Fab.shop_date_schedule.isnot(None),
-                        Fab.final_programming_complete == False
-                    )
-                )
+                _stage_filter_condition(stage_name)
             ).order_by(Fab.id.desc()).limit(10)
         elif stage_name == "cut_list":
             # For cut_list: EXCLUDE FABs that should be counted as final_programming
             fab_ids_query = select(Fab.id).where(
-                and_(
-                    Fab.current_stage == "cut_list",
-                    or_(
-                        Fab.shop_date_schedule.is_(None),
-                        Fab.final_programming_complete == True
-                    )
-                )
+                _stage_filter_condition(stage_name)
             ).order_by(Fab.id.desc()).limit(10)
         elif stage_name == "slab_smith_request":
             fab_count = slabsmith_pending_count
