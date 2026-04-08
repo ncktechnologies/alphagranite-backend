@@ -192,15 +192,42 @@ def _compute_fab_progress_fields(plans: List[dict]) -> tuple[Optional[str], floa
 
 def _coalesce_shop_est_completion_date(
     shop_est_completion_date: Optional[str],
-    estimated_completion_date: Optional[str],
+    plans: List[dict],
 ) -> Optional[str]:
-    """Use stored shop estimate date first; otherwise derive it from latest plan completion date."""
+    """Use stored shop estimate date first; otherwise derive from latest shop plan scheduled end."""
     if shop_est_completion_date:
         return shop_est_completion_date
-    if not estimated_completion_date:
-        return None
+
+    latest_plan_end: Optional[datetime] = None
+    for p in plans:
+        scheduled_start = p.get("scheduled_start_date")
+        if not scheduled_start:
+            continue
+
+        try:
+            start_dt = (
+                scheduled_start
+                if isinstance(scheduled_start, datetime)
+                else datetime.fromisoformat(str(scheduled_start))
+            )
+        except Exception:
+            continue
+
+        estimated_hours = p.get("estimated_hours")
+        try:
+            candidate_end = (
+                start_dt + timedelta(hours=float(estimated_hours))
+                if estimated_hours is not None
+                else start_dt
+            )
+        except Exception:
+            candidate_end = start_dt
+
+        if latest_plan_end is None or candidate_end > latest_plan_end:
+            latest_plan_end = candidate_end
+
     try:
-        return datetime.fromisoformat(estimated_completion_date).date().isoformat()
+        return latest_plan_end.date().isoformat() if latest_plan_end else None
     except Exception:
         return None
 
@@ -721,7 +748,7 @@ async def get_fabs(
         f["percentage_completion"] = percentage_completion
         f["shop_est_completion_date"] = _coalesce_shop_est_completion_date(
             f.get("shop_est_completion_date"),
-            estimated_completion_date,
+            plans,
         )
 
     # Step 6.2: Batch load resurface scheduling and attach per FAB
@@ -1055,7 +1082,7 @@ async def get_fabs_for_cnc_widget(
         f["percentage_completion"] = percentage_completion
         f["shop_est_completion_date"] = _coalesce_shop_est_completion_date(
             f.get("shop_est_completion_date"),
-            estimated_completion_date,
+            plans,
         )
 
     # Step 7: Get total count
@@ -1738,7 +1765,7 @@ async def get_fab(
     fab_dict["percentage_completion"] = percentage_completion
     fab_dict["shop_est_completion_date"] = _coalesce_shop_est_completion_date(
         fab_dict.get("shop_est_completion_date"),
-        estimated_completion_date,
+        plans,
     )
 
     resurface_scheduling_map = await _batch_load_resurface_scheduling_responses(db, [fab_id])
