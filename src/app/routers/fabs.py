@@ -134,9 +134,8 @@ def _pending_cnc_widget_filter():
     )
 
     return and_(
-        Fab.current_stage == "cut_list",
-        Fab.cutlist_complete.is_(True),
         Fab.cnc_linft.isnot(None),
+        Fab.cnc_linft > 0,
         or_(
             latest_cnc_completed.is_(None),
             latest_cnc_completed.is_(False),
@@ -1030,7 +1029,7 @@ async def get_fabs_for_cnc_widget(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get FABs for CNC widget: cutlist_complete=True and cnc_linft has value."""
+    """Get FABs for CNC widget: cnc_linft > 0 and latest CNC draft is not completed."""
 
     # Align with dashboard widgets: default to active FABs unless caller specifies status_id.
     effective_status_id = status_id if status_id is not None else 1
