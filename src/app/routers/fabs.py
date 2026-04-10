@@ -1346,7 +1346,7 @@ async def get_fabs_with_shop_est_completion(
         elif search_type == "job_name":
             search_filter = BusinessJob.name.ilike(f"%{search_value}%")
 
-    effective_current_stage = current_stage or "install_scheduling"
+    effective_current_stage = current_stage
     stage_for_query = None if effective_current_stage == "install_scheduling" else effective_current_stage
 
     query = _build_fab_list_query(
@@ -1360,6 +1360,18 @@ async def get_fabs_with_shop_est_completion(
 
     install_shop_est_stage_filter = Fab.current_stage == "install_scheduling"
 
+    estimated_completion_exists_filter = (
+        select(ShopCutPlan.id)
+        .where(
+            ShopCutPlan.fab_id == Fab.id,
+            or_(
+                ShopCutPlan.scheduled_start_date.isnot(None),
+                ShopCutPlan.actual_end_date.isnot(None),
+            ),
+        )
+        .exists()
+    )
+
     if effective_current_stage == "install_scheduling":
         query = query.where(install_shop_est_stage_filter)
     elif current_stage:
@@ -1367,6 +1379,7 @@ async def get_fabs_with_shop_est_completion(
 
     shop_est_or_install_filter = or_(
         Fab.shop_est_completion_date.isnot(None),
+        estimated_completion_exists_filter,
         Fab.current_stage == "install_scheduling",
     )
     query = query.where(shop_est_or_install_filter)
