@@ -2654,6 +2654,43 @@ async def get_all_stages(
         .limit(10)
     )
     cnc_last_10_ids = [row[0] for row in cnc_ids_result.all()]
+
+    # Keep install_scheduling count aligned with /fabs/shop-est-completion default criteria.
+    estimated_completion_exists_filter = (
+        select(ShopCutPlan.id)
+        .where(
+            ShopCutPlan.fab_id == Fab.id,
+            or_(
+                ShopCutPlan.scheduled_start_date.isnot(None),
+                ShopCutPlan.actual_end_date.isnot(None),
+            ),
+        )
+        .exists()
+    )
+    shop_est_or_install_filter = or_(
+        Fab.shop_est_completion_date.isnot(None),
+        estimated_completion_exists_filter,
+        Fab.current_stage == "install_scheduling",
+    )
+
+    install_scheduling_count_result = await db.execute(
+        select(func.count(Fab.id)).where(
+            Fab.status_id == 1,
+            shop_est_or_install_filter,
+        )
+    )
+    install_scheduling_count = install_scheduling_count_result.scalar() or 0
+
+    install_scheduling_ids_result = await db.execute(
+        select(Fab.id)
+        .where(
+            Fab.status_id == 1,
+            shop_est_or_install_filter,
+        )
+        .order_by(Fab.id.desc())
+        .limit(10)
+    )
+    install_scheduling_last_10_ids = [row[0] for row in install_scheduling_ids_result.all()]
     
     # Build response with all defined stages
     stages_data = []
@@ -2675,6 +2712,17 @@ async def get_all_stages(
         elif stage_name == "slab_smith_request":
             fab_count = slabsmith_pending_count
             fab_ids = slabsmith_last_10_ids
+            stages_data.append({
+                "stage_name": stage_name,
+                "stage_order": idx + 1,
+                "fab_count": fab_count,
+                "last_10_fab_ids": fab_ids,
+                "next_stage": get_next_stage(stage_name)
+            })
+            continue
+        elif stage_name == "install_scheduling":
+            fab_count = install_scheduling_count
+            fab_ids = install_scheduling_last_10_ids
             stages_data.append({
                 "stage_name": stage_name,
                 "stage_order": idx + 1,

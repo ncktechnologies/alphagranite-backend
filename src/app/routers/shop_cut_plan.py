@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Body, Query
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, and_, or_, cast, String
@@ -254,6 +254,8 @@ async def get_all_shop_plans(
     cut_type: Optional[str] = None,
     month: Optional[int] = None,
     year: Optional[int] = None,
+    search: Optional[str] = Query(None, description="Search value"),
+    type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, job_name"),
     view: str = "week",
     reference_date: Optional[date] = None,
     skip: int = 0,
@@ -286,6 +288,8 @@ async def get_all_shop_plans(
         operator_id=operator_id,
         status_id=status_id,
         cut_type=cut_type,
+        search=search,
+        type=type,
     )
     query = query.where(
         ShopCutPlan.scheduled_start_date.is_not(None),
@@ -1349,6 +1353,7 @@ def _build_shop_plans_query():
     return (
         select(ShopCutPlan)
         .join(Fab, Fab.id == ShopCutPlan.fab_id)
+        .join(BusinessJob, BusinessJob.id == Fab.job_id)
         .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
     )
 
@@ -1364,12 +1369,24 @@ def _apply_shop_plan_filters(
     operator_id: Optional[int],
     status_id: Optional[int],
     cut_type: Optional[str],
+    search: Optional[str],
+    type: Optional[str],
 ):
     if fab_id is not None:
         query = query.where(ShopCutPlan.fab_id == fab_id)
 
     if search_fab_id:
         query = query.where(cast(ShopCutPlan.fab_id, String).ilike(f"%{search_fab_id.strip()}%"))
+
+    search_value = search.strip() if isinstance(search, str) else search
+    search_type = type.strip().lower() if isinstance(type, str) else None
+    if search_value and search_type:
+        if search_type == "fab_id":
+            query = query.where(cast(ShopCutPlan.fab_id, String) == search_value)
+        elif search_type == "job_number":
+            query = query.where(cast(BusinessJob.job_number, String) == search_value)
+        elif search_type == "job_name":
+            query = query.where(BusinessJob.name.ilike(f"%{search_value}%"))
 
     if workstation_id is not None:
         query = query.where(ShopCutPlan.workstation_id == workstation_id)
