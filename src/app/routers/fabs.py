@@ -115,18 +115,7 @@ def _effective_cut_list_filter():
     )
 
     return or_(
-        and_(
-            Fab.current_stage == "cut_list",
-            or_(
-                Fab.shop_date_schedule.is_(None),
-                Fab.final_programming_complete.is_(True),
-                and_(
-                    Fab.next_stage == "final_programming",
-                    Fab.cutlist_complete.is_(True),
-                    needs_cut_list_visibility_by_plan,
-                ),
-            ),
-        ),
+        Fab.current_stage == "cut_list",
         and_(
             Fab.current_stage == "shop",
             needs_cut_list_visibility_by_plan,
