@@ -124,6 +124,26 @@ def _effective_cut_list_filter():
     )
 
 
+def _pending_cnc_widget_filter():
+    latest_cnc_completed = (
+        select(CNCDrafting.is_completed)
+        .where(CNCDrafting.fab_id == Fab.id)
+        .order_by(CNCDrafting.created_at.desc(), CNCDrafting.id.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+
+    return and_(
+        Fab.current_stage == "cut_list",
+        Fab.cutlist_complete.is_(True),
+        Fab.cnc_linft.isnot(None),
+        or_(
+            latest_cnc_completed.is_(None),
+            latest_cnc_completed.is_(False),
+        ),
+    )
+
+
 def _add_total_cut_lnft(fab_dict: dict) -> None:
     # Uses wj_linft (existing model field), with fallback to wj_lnft if present.
     saw_cut_lnft = float(fab_dict.get("saw_cut_lnft") or 0.0)
@@ -1073,11 +1093,7 @@ async def get_fabs_for_cnc_widget(
             )
         )
 
-    cnc_widget_filter = and_(
-        Fab.current_stage == "cut_list",
-        Fab.cutlist_complete.is_(True),
-        Fab.cnc_linft.isnot(None),
-    )
+    cnc_widget_filter = _pending_cnc_widget_filter()
     query = query.where(cnc_widget_filter)
 
     # Apply search filter if present
@@ -2684,10 +2700,7 @@ async def get_all_stages(
     )
     slabsmith_last_10_ids = [row[0] for row in slabsmith_ids_result.all()]
 
-    cnc_widget_filters = [
-        Fab.cutlist_complete.is_(True),
-        Fab.cnc_linft.isnot(None),
-    ]
+    cnc_widget_filters = [_pending_cnc_widget_filter()]
     cnc_count_result = await db.execute(
         select(func.count(Fab.id)).where(*cnc_widget_filters)
     )
