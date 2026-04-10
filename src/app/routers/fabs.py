@@ -1074,6 +1074,7 @@ async def get_fabs_for_cnc_widget(
         )
 
     cnc_widget_filter = and_(
+        Fab.current_stage == "cut_list",
         Fab.cutlist_complete.is_(True),
         Fab.cnc_linft.isnot(None),
     )
