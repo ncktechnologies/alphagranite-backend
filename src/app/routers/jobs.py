@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File a
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from fastapi.responses import FileResponse
 import mimetypes
 import logging
@@ -102,23 +103,27 @@ async def create_job(
     try:
         # Check if job name already exists
         name_check = await db.execute(
-            select(BusinessJob).where(BusinessJob.name == job_data.name)
+            select(BusinessJob.id)
+            .where(BusinessJob.name == job_data.name)
+            .limit(1)
         )
         if name_check.scalar_one_or_none():
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Job name '{job_data.name}' already exists"
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A job with this name already exists. Please use a unique name."
             )
         
         # Check if job number already exists (if provided)
         if job_data.job_number:
             number_check = await db.execute(
-                select(BusinessJob).where(BusinessJob.job_number == job_data.job_number)
+                select(BusinessJob.id)
+                .where(BusinessJob.job_number == job_data.job_number)
+                .limit(1)
             )
             if number_check.scalar_one_or_none():
                 raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Job number '{job_data.job_number}' already exists"
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="A job with this number already exists. Please use a unique number."
                 )
         
         job = await job_crud.create_job(db, job_data, current_user.id)
@@ -127,6 +132,26 @@ async def create_job(
     except HTTPException:
         await db.rollback()
         raise
+    except IntegrityError as e:
+        await db.rollback()
+        error_text = str(getattr(e, "orig", e)).lower()
+
+        if "name" in error_text and ("unique" in error_text or "duplicate" in error_text):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A job with this name already exists. Please use a unique name."
+            )
+
+        if "job_number" in error_text and ("unique" in error_text or "duplicate" in error_text):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A job with this number already exists. Please use a unique number."
+            )
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Could not create job due to a data conflict."
+        )
     except Exception as e:
         await db.rollback()
         raise HTTPException(
