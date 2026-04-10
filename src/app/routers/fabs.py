@@ -26,6 +26,7 @@ from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness
 from src.app.database.templating import Templating
 from src.app.database.sales_ct import SalesCT
+from src.app.database.cnc import CNCDrafting
 from src.app.database.status import Status
 from src.app.interface.generated_schemas import ResurfaceScheduling, InstallScheduling, Revision
 
@@ -260,10 +261,45 @@ async def _transition_completed_cutlist_fabs_to_shop(
         await db.execute(select(Fab).where(Fab.id.in_(eligible_fab_ids)))
     ).scalars().all()
 
+    cnc_required_fab_ids = [
+        fab.id
+        for fab in fabs_to_update
+        if fab.cnc_linft is not None and fab.cnc_linft > 0
+    ]
+
+    latest_cnc_completion_by_fab: dict[int, bool] = {}
+    if cnc_required_fab_ids:
+        cnc_rows = (
+            await db.execute(
+                select(
+                    CNCDrafting.fab_id,
+                    CNCDrafting.is_completed,
+                )
+                .where(CNCDrafting.fab_id.in_(cnc_required_fab_ids))
+                .order_by(CNCDrafting.fab_id, CNCDrafting.created_at.desc(), CNCDrafting.id.desc())
+            )
+        ).all()
+
+        for fab_id, is_completed in cnc_rows:
+            # Keep only the latest CNC submission status per FAB.
+            if fab_id not in latest_cnc_completion_by_fab:
+                latest_cnc_completion_by_fab[fab_id] = bool(is_completed)
+
     updated = False
     for fab in fabs_to_update:
         if fab.current_stage != "cut_list":
             continue
+
+        if not fab.cutlist_complete:
+            continue
+
+        if fab.confirmed_date is None:
+            continue
+
+        cnc_required = fab.cnc_linft is not None and fab.cnc_linft > 0
+        if cnc_required and not latest_cnc_completion_by_fab.get(fab.id, False):
+            continue
+
         fab.current_stage = "shop"
         fab.next_stage = None
         fab.updated_at = utc_now()
