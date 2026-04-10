@@ -314,18 +314,14 @@ async def _transition_completed_cutlist_fabs_to_shop(
         if not fab.cutlist_complete:
             continue
 
-        if fab.confirmed_date is None:
-            continue
-
         cnc_required = fab.cnc_linft is not None and fab.cnc_linft > 0
         if cnc_required:
             cnc_state = latest_cnc_by_fab.get(fab.id)
             if not cnc_state:
                 continue
 
-            cnc_completed, cnc_updated_at, cnc_created_at = cnc_state
-            cnc_submitted_at = cnc_updated_at or cnc_created_at
-            if not cnc_completed or cnc_submitted_at is None or cnc_submitted_at < fab.confirmed_date:
+            cnc_completed, _cnc_updated_at, _cnc_created_at = cnc_state
+            if not cnc_completed:
                 continue
 
         fab.current_stage = "shop"

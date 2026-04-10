@@ -25,7 +25,6 @@ router = APIRouter(
 async def _has_completed_cnc_submission(
     db: AsyncSession,
     fab_id: int,
-    confirmed_at: Optional[datetime],
 ) -> bool:
     latest_cnc_result = await db.execute(
         select(CNCDrafting)
@@ -34,17 +33,7 @@ async def _has_completed_cnc_submission(
         .limit(1)
     )
     latest_cnc = latest_cnc_result.scalar_one_or_none()
-    if not latest_cnc or not latest_cnc.is_completed:
-        return False
-
-    if confirmed_at is None:
-        return False
-
-    latest_cnc_submitted_at = latest_cnc.updated_at or latest_cnc.created_at
-    if latest_cnc_submitted_at is None:
-        return False
-
-    return latest_cnc_submitted_at >= confirmed_at
+    return bool(latest_cnc and latest_cnc.is_completed)
 
 
 def _requires_cnc_programming(fab: Fab) -> bool:
@@ -65,11 +54,8 @@ async def _transition_to_shop_if_cutlist_complete(
     if not fab.cutlist_complete:
         return False
 
-    if fab.confirmed_date is None:
-        return False
-
     if _requires_cnc_programming(fab):
-        if not await _has_completed_cnc_submission(db, fab.id, fab.confirmed_date):
+        if not await _has_completed_cnc_submission(db, fab.id):
             return False
 
     fab.current_stage = "shop"

@@ -42,9 +42,6 @@ def _should_move_fab_to_shop_after_cnc_completion(fab: Fab, cnc_completed: bool)
     if not fab.cutlist_complete:
         return False
 
-    if fab.confirmed_date is None:
-        return False
-
     return fab.cnc_linft is not None and fab.cnc_linft > 0
 
 
