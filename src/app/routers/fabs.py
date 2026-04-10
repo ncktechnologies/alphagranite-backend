@@ -267,23 +267,25 @@ async def _transition_completed_cutlist_fabs_to_shop(
         if fab.cnc_linft is not None and fab.cnc_linft > 0
     ]
 
-    latest_cnc_completion_by_fab: dict[int, bool] = {}
+    latest_cnc_by_fab: dict[int, tuple[bool, Optional[datetime], Optional[datetime]]] = {}
     if cnc_required_fab_ids:
         cnc_rows = (
             await db.execute(
                 select(
                     CNCDrafting.fab_id,
                     CNCDrafting.is_completed,
+                    CNCDrafting.updated_at,
+                    CNCDrafting.created_at,
                 )
                 .where(CNCDrafting.fab_id.in_(cnc_required_fab_ids))
                 .order_by(CNCDrafting.fab_id, CNCDrafting.created_at.desc(), CNCDrafting.id.desc())
             )
         ).all()
 
-        for fab_id, is_completed in cnc_rows:
-            # Keep only the latest CNC submission status per FAB.
-            if fab_id not in latest_cnc_completion_by_fab:
-                latest_cnc_completion_by_fab[fab_id] = bool(is_completed)
+        for fab_id, is_completed, updated_at, created_at in cnc_rows:
+            # Keep only the latest CNC submission row per FAB.
+            if fab_id not in latest_cnc_by_fab:
+                latest_cnc_by_fab[fab_id] = (bool(is_completed), updated_at, created_at)
 
     updated = False
     for fab in fabs_to_update:
@@ -297,8 +299,15 @@ async def _transition_completed_cutlist_fabs_to_shop(
             continue
 
         cnc_required = fab.cnc_linft is not None and fab.cnc_linft > 0
-        if cnc_required and not latest_cnc_completion_by_fab.get(fab.id, False):
-            continue
+        if cnc_required:
+            cnc_state = latest_cnc_by_fab.get(fab.id)
+            if not cnc_state:
+                continue
+
+            cnc_completed, cnc_updated_at, cnc_created_at = cnc_state
+            cnc_submitted_at = cnc_updated_at or cnc_created_at
+            if not cnc_completed or cnc_submitted_at is None or cnc_submitted_at < fab.confirmed_date:
+                continue
 
         fab.current_stage = "shop"
         fab.next_stage = None
