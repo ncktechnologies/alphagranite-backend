@@ -6,6 +6,7 @@ from typing import Optional
 
 from src.app.database import get_db
 from src.app.database.fab import Fab
+from src.app.database.cnc import CNCDrafting
 from src.app.database.fab_notes import FabNotes
 from src.app.database.user import User
 from src.app.interface.business_schemas import (
@@ -21,7 +22,29 @@ router = APIRouter(
 )
 
 
-def _transition_to_shop_if_cutlist_complete(fab: Fab, user_id: Optional[int]) -> bool:
+async def _has_completed_cnc_submission(
+    db: AsyncSession,
+    fab_id: int,
+) -> bool:
+    latest_cnc_result = await db.execute(
+        select(CNCDrafting)
+        .where(CNCDrafting.fab_id == fab_id)
+        .order_by(CNCDrafting.created_at.desc(), CNCDrafting.id.desc())
+        .limit(1)
+    )
+    latest_cnc = latest_cnc_result.scalar_one_or_none()
+    return bool(latest_cnc and latest_cnc.is_completed)
+
+
+def _requires_cnc_programming(fab: Fab) -> bool:
+    return fab.cnc_linft is not None and fab.cnc_linft > 0
+
+
+async def _transition_to_shop_if_cutlist_complete(
+    db: AsyncSession,
+    fab: Fab,
+    user_id: Optional[int],
+) -> bool:
     if not fab:
         return False
 
@@ -30,6 +53,10 @@ def _transition_to_shop_if_cutlist_complete(fab: Fab, user_id: Optional[int]) ->
 
     if not fab.cutlist_complete:
         return False
+
+    if _requires_cnc_programming(fab):
+        if not await _has_completed_cnc_submission(db, fab.id):
+            return False
 
     fab.current_stage = "shop"
     fab.next_stage = None
@@ -87,7 +114,7 @@ async def schedule_shop_date(
         if schedule_data.revision_complete is not None:
             fab.revised = not schedule_data.revision_complete
 
-        _transition_to_shop_if_cutlist_complete(fab, current_user.id)
+        await _transition_to_shop_if_cutlist_complete(db, fab, current_user.id)
 
         fab_type = (fab.fab_type or "").strip().lower()
         is_resurface = fab_type in {"resurface_scheduling", "resurface"}
@@ -253,7 +280,7 @@ async def get_cut_list_details(
     
     fab, job, account, sales_person, stone_type, stone_color, stone_thickness, edge = row
 
-    if _transition_to_shop_if_cutlist_complete(fab, current_user.id):
+    if await _transition_to_shop_if_cutlist_complete(db, fab, current_user.id):
         await db.commit()
         await db.refresh(fab)
     

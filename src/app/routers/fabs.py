@@ -26,6 +26,7 @@ from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness
 from src.app.database.templating import Templating
 from src.app.database.sales_ct import SalesCT
+from src.app.database.cnc import CNCDrafting
 from src.app.database.status import Status
 from src.app.interface.generated_schemas import ResurfaceScheduling, InstallScheduling, Revision
 
@@ -119,6 +120,25 @@ def _effective_cut_list_filter():
         and_(
             Fab.current_stage == "shop",
             needs_cut_list_visibility_by_plan,
+        ),
+    )
+
+
+def _pending_cnc_widget_filter():
+    latest_cnc_completed = (
+        select(CNCDrafting.is_completed)
+        .where(CNCDrafting.fab_id == Fab.id)
+        .order_by(CNCDrafting.created_at.desc(), CNCDrafting.id.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+
+    return and_(
+        Fab.cnc_linft.isnot(None),
+        Fab.cnc_linft > 0,
+        or_(
+            latest_cnc_completed.is_(None),
+            latest_cnc_completed.is_(False),
         ),
     )
 
@@ -260,10 +280,50 @@ async def _transition_completed_cutlist_fabs_to_shop(
         await db.execute(select(Fab).where(Fab.id.in_(eligible_fab_ids)))
     ).scalars().all()
 
+    cnc_required_fab_ids = [
+        fab.id
+        for fab in fabs_to_update
+        if fab.cnc_linft is not None and fab.cnc_linft > 0
+    ]
+
+    latest_cnc_by_fab: dict[int, tuple[bool, Optional[datetime], Optional[datetime]]] = {}
+    if cnc_required_fab_ids:
+        cnc_rows = (
+            await db.execute(
+                select(
+                    CNCDrafting.fab_id,
+                    CNCDrafting.is_completed,
+                    CNCDrafting.updated_at,
+                    CNCDrafting.created_at,
+                )
+                .where(CNCDrafting.fab_id.in_(cnc_required_fab_ids))
+                .order_by(CNCDrafting.fab_id, CNCDrafting.created_at.desc(), CNCDrafting.id.desc())
+            )
+        ).all()
+
+        for fab_id, is_completed, updated_at, created_at in cnc_rows:
+            # Keep only the latest CNC submission row per FAB.
+            if fab_id not in latest_cnc_by_fab:
+                latest_cnc_by_fab[fab_id] = (bool(is_completed), updated_at, created_at)
+
     updated = False
     for fab in fabs_to_update:
         if fab.current_stage != "cut_list":
             continue
+
+        if not fab.cutlist_complete:
+            continue
+
+        cnc_required = fab.cnc_linft is not None and fab.cnc_linft > 0
+        if cnc_required:
+            cnc_state = latest_cnc_by_fab.get(fab.id)
+            if not cnc_state:
+                continue
+
+            cnc_completed, _cnc_updated_at, _cnc_created_at = cnc_state
+            if not cnc_completed:
+                continue
+
         fab.current_stage = "shop"
         fab.next_stage = None
         fab.updated_at = utc_now()
@@ -965,7 +1025,7 @@ async def get_fabs_for_cnc_widget(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get FABs for CNC widget: cutlist_complete=True and cnc_linft has value."""
+    """Get FABs for CNC widget: cnc_linft > 0 and latest CNC draft is not completed."""
 
     # Align with dashboard widgets: default to active FABs unless caller specifies status_id.
     effective_status_id = status_id if status_id is not None else 1
@@ -1028,10 +1088,7 @@ async def get_fabs_for_cnc_widget(
             )
         )
 
-    cnc_widget_filter = and_(
-        Fab.cutlist_complete.is_(True),
-        Fab.cnc_linft.isnot(None),
-    )
+    cnc_widget_filter = _pending_cnc_widget_filter()
     query = query.where(cnc_widget_filter)
 
     # Apply search filter if present
@@ -1346,7 +1403,7 @@ async def get_fabs_with_shop_est_completion(
         elif search_type == "job_name":
             search_filter = BusinessJob.name.ilike(f"%{search_value}%")
 
-    effective_current_stage = current_stage or "install_scheduling"
+    effective_current_stage = current_stage
     stage_for_query = None if effective_current_stage == "install_scheduling" else effective_current_stage
 
     query = _build_fab_list_query(
@@ -1360,6 +1417,18 @@ async def get_fabs_with_shop_est_completion(
 
     install_shop_est_stage_filter = Fab.current_stage == "install_scheduling"
 
+    estimated_completion_exists_filter = (
+        select(ShopCutPlan.id)
+        .where(
+            ShopCutPlan.fab_id == Fab.id,
+            or_(
+                ShopCutPlan.scheduled_start_date.isnot(None),
+                ShopCutPlan.actual_end_date.isnot(None),
+            ),
+        )
+        .exists()
+    )
+
     if effective_current_stage == "install_scheduling":
         query = query.where(install_shop_est_stage_filter)
     elif current_stage:
@@ -1367,6 +1436,7 @@ async def get_fabs_with_shop_est_completion(
 
     shop_est_or_install_filter = or_(
         Fab.shop_est_completion_date.isnot(None),
+        estimated_completion_exists_filter,
         Fab.current_stage == "install_scheduling",
     )
     query = query.where(shop_est_or_install_filter)
@@ -2625,10 +2695,7 @@ async def get_all_stages(
     )
     slabsmith_last_10_ids = [row[0] for row in slabsmith_ids_result.all()]
 
-    cnc_widget_filters = [
-        Fab.cutlist_complete.is_(True),
-        Fab.cnc_linft.isnot(None),
-    ]
+    cnc_widget_filters = [_pending_cnc_widget_filter()]
     cnc_count_result = await db.execute(
         select(func.count(Fab.id)).where(*cnc_widget_filters)
     )
@@ -2641,6 +2708,43 @@ async def get_all_stages(
         .limit(10)
     )
     cnc_last_10_ids = [row[0] for row in cnc_ids_result.all()]
+
+    # Keep install_scheduling count aligned with /fabs/shop-est-completion default criteria.
+    estimated_completion_exists_filter = (
+        select(ShopCutPlan.id)
+        .where(
+            ShopCutPlan.fab_id == Fab.id,
+            or_(
+                ShopCutPlan.scheduled_start_date.isnot(None),
+                ShopCutPlan.actual_end_date.isnot(None),
+            ),
+        )
+        .exists()
+    )
+    shop_est_or_install_filter = or_(
+        Fab.shop_est_completion_date.isnot(None),
+        estimated_completion_exists_filter,
+        Fab.current_stage == "install_scheduling",
+    )
+
+    install_scheduling_count_result = await db.execute(
+        select(func.count(Fab.id)).where(
+            Fab.status_id == 1,
+            shop_est_or_install_filter,
+        )
+    )
+    install_scheduling_count = install_scheduling_count_result.scalar() or 0
+
+    install_scheduling_ids_result = await db.execute(
+        select(Fab.id)
+        .where(
+            Fab.status_id == 1,
+            shop_est_or_install_filter,
+        )
+        .order_by(Fab.id.desc())
+        .limit(10)
+    )
+    install_scheduling_last_10_ids = [row[0] for row in install_scheduling_ids_result.all()]
     
     # Build response with all defined stages
     stages_data = []
@@ -2662,6 +2766,17 @@ async def get_all_stages(
         elif stage_name == "slab_smith_request":
             fab_count = slabsmith_pending_count
             fab_ids = slabsmith_last_10_ids
+            stages_data.append({
+                "stage_name": stage_name,
+                "stage_order": idx + 1,
+                "fab_count": fab_count,
+                "last_10_fab_ids": fab_ids,
+                "next_stage": get_next_stage(stage_name)
+            })
+            continue
+        elif stage_name == "install_scheduling":
+            fab_count = install_scheduling_count
+            fab_ids = install_scheduling_last_10_ids
             stages_data.append({
                 "stage_name": stage_name,
                 "stage_order": idx + 1,

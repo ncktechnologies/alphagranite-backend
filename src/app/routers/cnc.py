@@ -32,6 +32,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _should_move_fab_to_shop_after_cnc_completion(fab: Fab, cnc_completed: bool) -> bool:
+    if not cnc_completed:
+        return False
+
+    if fab.current_stage != "cut_list":
+        return False
+
+    if not fab.cutlist_complete:
+        return False
+
+    return fab.cnc_linft is not None and fab.cnc_linft > 0
+
+
 # ============ CNC SESSION ENDPOINTS ============
 
 @router.post("/CNC/{fab_id}/session", response_model=SuccessResponse[CNCDraftingSessionResponse])
@@ -548,6 +561,12 @@ async def update_cnc_drafting(
         if "drafter_end_date" not in update_data:
             cnc.drafter_end_date = strip_timezone(utc_now())
 
+        if _should_move_fab_to_shop_after_cnc_completion(fab, cnc_completed=True):
+            fab.current_stage = "shop"
+            fab.next_stage = None
+            fab.updated_at = strip_timezone(utc_now())
+            fab.updated_by = current_user.id
+
     cnc.updated_at = strip_timezone(utc_now())
     cnc.updated_by = current_user.id
 
@@ -567,15 +586,18 @@ async def submit_cnc_draft(
     """Submit CNC draft for review"""
 
     result = await db.execute(
-        select(CNCDrafting)
+        select(CNCDrafting, Fab)
+        .join(Fab, CNCDrafting.fab_id == Fab.id)
         .where(CNCDrafting.fab_id == fab_id)
         .order_by(CNCDrafting.created_at.desc())
         .limit(1)
     )
-    cnc = result.scalar_one_or_none()
+    row = result.first()
 
-    if not cnc:
+    if not row:
         raise error_response("CNC drafting not found for this fab", 404)
+
+    cnc, fab = row
 
     if submit_data.total_sqft is not None:
         cnc.total_sqft_drafted = submit_data.total_sqft
@@ -590,6 +612,12 @@ async def submit_cnc_draft(
         cnc.is_completed = True
         cnc.status_id = 3
         cnc.drafter_end_date = strip_timezone(utc_now())
+
+        if _should_move_fab_to_shop_after_cnc_completion(fab, cnc_completed=True):
+            fab.current_stage = "shop"
+            fab.next_stage = None
+            fab.updated_at = strip_timezone(utc_now())
+            fab.updated_by = current_user.id
 
     cnc.updated_at = strip_timezone(utc_now())
     cnc.updated_by = current_user.id

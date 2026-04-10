@@ -78,11 +78,18 @@ load_dotenv()
 log_level = os.getenv("LOG_LEVEL", "INFO")
 setup_logging(log_level)
 
+
+def _parse_csv_env(value: str) -> list[str]:
+    """Parse comma-separated env values into a normalized list."""
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 # Get CORS settings from environment variables or use defaults
 cors_origins_str = os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:3000,http://localhost:5173,https://agdemo.easybusiness.ng")
-cors_origins = ["*"] if cors_origins_str == "*" else cors_origins_str.split(",")
-cors_methods = os.getenv("CORS_ALLOW_METHODS", "GET,POST,PUT,DELETE,OPTIONS,PATCH").split(",")
-cors_headers = os.getenv("CORS_ALLOW_HEADERS", "*").split(",")
+cors_origins = ["*"] if cors_origins_str.strip() == "*" else _parse_csv_env(cors_origins_str)
+cors_methods = _parse_csv_env(os.getenv("CORS_ALLOW_METHODS", "GET,POST,PUT,DELETE,OPTIONS,PATCH"))
+cors_headers = _parse_csv_env(os.getenv("CORS_ALLOW_HEADERS", "*"))
+cors_expose_headers = _parse_csv_env(os.getenv("CORS_EXPOSE_HEADERS", "Content-Disposition"))
 cors_credentials = os.getenv("CORS_ALLOW_CREDENTIALS", "true").lower() == "true"
 
 # If using wildcard origins, credentials must be False
@@ -227,7 +234,7 @@ app.add_middleware(
     allow_credentials=cors_credentials,
     allow_methods=cors_methods,
     allow_headers=cors_headers,
-    expose_headers=["Content-Disposition"],
+    expose_headers=cors_expose_headers,
 )
 
 # Existing routers
