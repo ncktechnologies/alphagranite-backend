@@ -1087,6 +1087,11 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
     job_cache: Dict[int, Optional[BusinessJob]] = {}
     account_cache: Dict[int, Optional[Account]] = {}
 
+    current_plan_stage_by_fab = await _get_current_plan_stage_by_fab(
+        db,
+        [plan.fab_id for plan in plans if plan.fab_id is not None],
+    )
+
     for plan in plans:
         work_percentage, total_actual_hours, total_actual_seconds = await _recalculate_shop_plan_work_percentage(
             db=db,
@@ -1147,6 +1152,7 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
         item = {
             "id": plan.id,
             "fab_id": plan.fab_id,
+            "current_plan_stage": current_plan_stage_by_fab.get(plan.fab_id),
             "fab_type": fab_type,
             "account_name": account_name,
             "job_name": job_name,
@@ -1188,6 +1194,55 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
         grouped_plans.append(grouped[key])
 
     return serialized_plans, grouped_plans
+
+
+async def _get_current_plan_stage_by_fab(db: AsyncSession, fab_ids: List[int]) -> Dict[int, Optional[str]]:
+    if not fab_ids:
+        return {}
+
+    unique_fab_ids = sorted(set(fab_ids))
+    plans_result = await db.execute(
+        select(ShopCutPlan)
+        .where(ShopCutPlan.fab_id.in_(unique_fab_ids))
+        .order_by(ShopCutPlan.fab_id.asc(), ShopCutPlan.sequence.asc(), ShopCutPlan.id.asc())
+    )
+    all_plans = plans_result.scalars().all()
+
+    section_ids = {p.planning_section_id for p in all_plans if p.planning_section_id is not None}
+    planning_section_map: Dict[int, str] = {}
+    if section_ids:
+        sections_result = await db.execute(
+            select(PlanningSection.id, PlanningSection.plan_name).where(PlanningSection.id.in_(section_ids))
+        )
+        planning_section_map = {sid: name for sid, name in sections_result.all() if sid is not None and name}
+
+    plans_by_fab: Dict[int, List[ShopCutPlan]] = {}
+    for plan in all_plans:
+        if plan.fab_id is None:
+            continue
+        plans_by_fab.setdefault(plan.fab_id, []).append(plan)
+
+    result: Dict[int, Optional[str]] = {}
+    now_floor = datetime.now().replace(second=0, microsecond=0)
+
+    for fab_id, fab_plans in plans_by_fab.items():
+        current_stage_name: Optional[str] = None
+        for plan in fab_plans:
+            work_percentage, _, _ = await _recalculate_shop_plan_work_percentage(
+                db=db,
+                plan=plan,
+                as_of=now_floor,
+            )
+            if int(work_percentage or 0) < 100:
+                current_stage_name = planning_section_map.get(plan.planning_section_id)
+                break
+
+        result[fab_id] = current_stage_name
+
+    for fab_id in unique_fab_ids:
+        result.setdefault(fab_id, None)
+
+    return result
 
 
 def _normalize_naive_dt(value: datetime) -> datetime:
