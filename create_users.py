@@ -8,20 +8,17 @@ import asyncio
 import bcrypt
 from uuid import uuid4
 from datetime import datetime
-from sqlalchemy import select
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
-from src.app.database.user import User
-from src.app.database.role import Role
-from src.app.database.user_role import UserRole
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # Database connection
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/alphagranite")
+DATABASE_URL = "postgresql+asyncpg://admin:Admin%40Gr%40n1%2Be%21@93.114.128.181:5432/alpha_granite_staging"
 
 # Users to create
 USERS_DATA = [
@@ -32,8 +29,7 @@ USERS_DATA = [
         "email": "chuks@carpediemts.com",
         "password": "Sandoval123!",
         "is_super_admin": True,
-        "department": 1,
-        "roles": ["Admin"]
+        "department": 1
     },
     {
         "first_name": "Luis",
@@ -42,8 +38,7 @@ USERS_DATA = [
         "email": "chuks@carpediemts.com",
         "password": "Becerril123!",
         "is_super_admin": False,
-        "department": 1,
-        "roles": ["Saw 1 or Saw 2 Operator"]
+        "department": 1
     },
     {
         "first_name": "Fernando",
@@ -52,8 +47,7 @@ USERS_DATA = [
         "email": "chuks@carpediemts.com",
         "password": "Valencia123!",
         "is_super_admin": False,
-        "department": 1,
-        "roles": ["Saw 2 or Saw 1 Operator"]
+        "department": 1
     },
     {
         "first_name": "Jasiel",
@@ -62,8 +56,7 @@ USERS_DATA = [
         "email": "chuks@carpediemts.com",
         "password": "Pena123!",
         "is_super_admin": False,
-        "department": 1,
-        "roles": ["Marmo or CNC Operator"]
+        "department": 1
     },
     {
         "first_name": "Victor",
@@ -72,8 +65,7 @@ USERS_DATA = [
         "email": "chuks@carpediemts.com",
         "password": "Juarez123!",
         "is_super_admin": False,
-        "department": 1,
-        "roles": ["Water Jet Operator"]
+        "department": 1
     },
     {
         "first_name": "Faustino",
@@ -82,8 +74,7 @@ USERS_DATA = [
         "email": "chuks@carpediemts.com",
         "password": "Velasco123!",
         "is_super_admin": False,
-        "department": 1,
-        "roles": ["Miter or Hand Work Station"]
+        "department": 1
     },
     {
         "first_name": "Alejandro",
@@ -92,8 +83,7 @@ USERS_DATA = [
         "email": "chuks@carpediemts.com",
         "password": "Ramirez123!",
         "is_super_admin": False,
-        "department": 1,
-        "roles": ["Miter or Hand Work Station"]
+        "department": 1
     },
     {
         "first_name": "Rufino",
@@ -102,8 +92,7 @@ USERS_DATA = [
         "email": "chuks@carpediemts.com",
         "password": "Marcelino123!",
         "is_super_admin": False,
-        "department": 1,
-        "roles": ["Hand Work Station"]
+        "department": 1
     },
     {
         "first_name": "Virgilio",
@@ -112,8 +101,7 @@ USERS_DATA = [
         "email": "chuks@carpediemts.com",
         "password": "Denova123!",
         "is_super_admin": False,
-        "department": 1,
-        "roles": ["Miter or Hand Work Station"]
+        "department": 1
     },
     {
         "first_name": "Jose",
@@ -122,8 +110,7 @@ USERS_DATA = [
         "email": "chuks@carpediemts.com",
         "password": "Corona123!",
         "is_super_admin": False,
-        "department": 1,
-        "roles": ["Slab Polisher and CNC Operator"]
+        "department": 1
     },
     {
         "first_name": "Juan",
@@ -132,8 +119,7 @@ USERS_DATA = [
         "email": "chuks@carpediemts.com",
         "password": "Zuniga123!",
         "is_super_admin": False,
-        "department": 1,
-        "roles": ["Miter or Hand Work Station"]
+        "department": 1
     },
 ]
 
@@ -157,32 +143,29 @@ async def create_users():
         try:
             print("Starting user creation...")
             
-            # Get or create roles
-            roles_dict = {}
-            for user_data in USERS_DATA:
-                for role_name in user_data["roles"]:
-                    if role_name not in roles_dict:
-                        # Try to find existing role
-                        result = await session.execute(
-                            select(Role).where(Role.name == role_name)
-                        )
-                        role = result.scalar_one_or_none()
-                        if not role:
-                            print(f"  ⚠️  Role '{role_name}' not found. Please create it first.")
-                            print(f"     SQL: INSERT INTO roles (name, description, status, created_at, updated_at) VALUES ('{role_name}', '', 1, NOW(), NOW());")
-                            roles_dict[role_name] = None
-                        else:
-                            roles_dict[role_name] = role.id
-                            print(f"  ✓ Found role: {role_name} (ID: {role.id})")
+            # First, get the schema of the users table to find all NOT NULL columns
+            schema_result = await session.execute(
+                text("""
+                    SELECT column_name, is_nullable, column_default
+                    FROM information_schema.columns
+                    WHERE table_name = 'users'
+                    ORDER BY ordinal_position
+                """)
+            )
+            columns_info = schema_result.fetchall()
+            print("\nUsers table schema:")
+            for col_name, is_nullable, col_default in columns_info:
+                print(f"  {col_name}: nullable={is_nullable}, default={col_default}")
             
             # Create users
             created_count = 0
             for user_data in USERS_DATA:
                 username = user_data["username"]
                 
-                # Check if user already exists
+                # Check if user already exists using raw SQL
                 result = await session.execute(
-                    select(User).where(User.username == username)
+                    text("SELECT id FROM users WHERE username = :username"),
+                    {"username": username}
                 )
                 existing_user = result.scalar_one_or_none()
                 
@@ -190,43 +173,42 @@ async def create_users():
                     print(f"  ⚠️  User '{username}' already exists. Skipping...")
                     continue
                 
-                # Create user
+                # Create user with raw SQL
                 hashed_pwd = hash_password(user_data["password"])
-                new_user = User(
-                    username=username,
-                    employee_id=uuid4(),
-                    email=user_data["email"],
-                    first_name=user_data["first_name"],
-                    last_name=user_data["last_name"],
-                    password=hashed_pwd,
-                    is_super_admin=user_data["is_super_admin"],
-                    department=user_data["department"],
-                    status=1,
-                    is_first_login=True,
-                    created_at=datetime.now(),
-                    updated_at=datetime.now()
+                employee_id = str(uuid4())
+                now = datetime.now()
+                
+                await session.execute(
+                    text("""
+                        INSERT INTO users 
+                        (username, employee_id, email, first_name, last_name, password, 
+                         is_super_admin, department, status, is_first_login, failed_login_attempts, is_locked, 
+                         email_notifications_enabled, created_at, updated_at)
+                        VALUES 
+                        (:username, :employee_id, :email, :first_name, :last_name, :password,
+                         :is_super_admin, :department, :status, :is_first_login, :failed_login_attempts, :is_locked,
+                         :email_notifications_enabled, :created_at, :updated_at)
+                    """),
+                    {
+                        "username": username,
+                        "employee_id": employee_id,
+                        "email": user_data["email"],
+                        "first_name": user_data["first_name"],
+                        "last_name": user_data["last_name"],
+                        "password": hashed_pwd,
+                        "is_super_admin": user_data["is_super_admin"],
+                        "department": user_data["department"],
+                        "status": 1,
+                        "is_first_login": True,
+                        "failed_login_attempts": 0,
+                        "is_locked": False,
+                        "email_notifications_enabled": True,
+                        "created_at": now,
+                        "updated_at": now
+                    }
                 )
                 
-                session.add(new_user)
-                await session.flush()  # Flush to get the user ID
-                
                 print(f"  ✓ Created user: {user_data['first_name']} {user_data['last_name']} ({username})")
-                
-                # Assign roles
-                for role_name in user_data["roles"]:
-                    role_id = roles_dict.get(role_name)
-                    if role_id:
-                        user_role = UserRole(
-                            user_id=new_user.id,
-                            role_id=role_id,
-                            created_at=datetime.now(),
-                            update_at=datetime.now()
-                        )
-                        session.add(user_role)
-                        print(f"    → Assigned role: {role_name}")
-                    else:
-                        print(f"    ⚠️  Could not assign role: {role_name} (not found)")
-                
                 created_count += 1
             
             await session.commit()

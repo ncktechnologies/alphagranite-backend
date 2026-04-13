@@ -1602,6 +1602,7 @@ class CNCDraftingUpdate(BaseModel):
     mentions: Optional[str] = None
     is_completed: Optional[bool] = None
     status_id: Optional[int] = None
+    drafter_id: Optional[int] = Field(None, gt=0, description="Assign/reassign drafter")
 
     @field_validator('drafter_start_date', 'drafter_end_date', mode='before')
     @classmethod
