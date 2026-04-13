@@ -254,5 +254,5 @@ async def view_file(
     return FileResponse(
         path=absolute_path,
         media_type=media_type,
-        headers={"Content-Disposition": f'inline; filename="{db_file.name}"'}
+        headers={"Content-Disposition": f'attachment; filename="{db_file.name}"'}
     )
