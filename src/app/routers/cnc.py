@@ -531,6 +531,11 @@ async def update_cnc_drafting(
     update_data = drafting_data.model_dump(exclude_unset=True)
     is_complete = update_data.get("is_completed", False)
 
+    if "drafter_id" in update_data:
+        drafter_result = await db.execute(select(User).where(User.id == update_data["drafter_id"]))
+        if not drafter_result.scalar_one_or_none():
+            raise error_response("Drafter not found", 404)
+
     field_mapping = {
         "total_sqft": "total_sqft",
         "no_of_pieces": "no_of_pieces",
@@ -546,6 +551,7 @@ async def update_cnc_drafting(
         "mentions": "mentions",
         "total_hours_drafted": "total_hours_drafted",
         "status_id": "status_id",
+        "drafter_id": "drafter_id",
     }
 
     for field, value in update_data.items():
