@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Optional, List
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -110,6 +110,13 @@ async def update_slabsmith(
     
     # Update fields
     update_data = slabsmith_data.model_dump(exclude_unset=True)
+
+    # Validate drafter exists when reassigned
+    if "drafter_id" in update_data:
+        drafter_result = await db.execute(select(User).where(User.id == update_data["drafter_id"]))
+        if not drafter_result.scalar_one_or_none():
+            raise error_response("Drafter not found", 404)
+
     for field, value in update_data.items():
         setattr(slabsmith, field, value)
     
@@ -523,7 +530,18 @@ async def get_all_sales_ct(
 async def get_pending_slabsmith_fab_ids(
     search: Optional[str] = None,
     type: Optional[str] = None,
-    date_filter: Optional[str] = None,
+    date_filter: Optional[str] = Query(
+        None,
+        description="Predefined date filter: today, this_week, last_week, this_month, last_month, next_week, next_month",
+    ),
+    draft_completed_start: Optional[date] = Query(
+        None,
+        description="Filter by draft_completed_date on or after this date (YYYY-MM-DD)",
+    ),
+    draft_completed_end: Optional[date] = Query(
+        None,
+        description="Filter by draft_completed_date on or before this date (YYYY-MM-DD)",
+    ),
     fab_type: Optional[str] = None,
     drafter_id: Optional[int] = Query(None, description="Filter by drafter/programmer ID"),
     skip: int = 0,
@@ -549,7 +567,7 @@ async def get_pending_slabsmith_fab_ids(
         valid_filters = {
             "today", "this_week", "last_week",
             "this_month", "last_month",
-            "next_week", "next_month", "next"
+            "next_week", "next_month"
         }
         if date_filter not in valid_filters:
             raise error_response("Invalid date_filter", 400)
@@ -588,9 +606,6 @@ async def get_pending_slabsmith_fab_ids(
         elif date_filter == "next_month":
             start = add_months(month_start(today), 1)
             end = add_months(start, 1)
-        elif date_filter == "next":
-            start = today + timedelta(days=1)
-
         if start is not None:
             start_dt = datetime.combine(start, datetime.min.time())
             if end is not None:
@@ -599,6 +614,14 @@ async def get_pending_slabsmith_fab_ids(
                 filters.append(Fab.draft_completed_date < end_dt)
             else:
                 filters.append(Fab.draft_completed_date >= start_dt)
+
+    if draft_completed_start and draft_completed_end and draft_completed_start > draft_completed_end:
+        raise error_response("draft_completed_start cannot be after draft_completed_end", 400)
+
+    if draft_completed_start:
+        filters.append(Fab.draft_completed_date >= datetime.combine(draft_completed_start, datetime.min.time()))
+    if draft_completed_end:
+        filters.append(Fab.draft_completed_date < datetime.combine(draft_completed_end + timedelta(days=1), datetime.min.time()))
 
     # FAB Type filter
     if fab_type:

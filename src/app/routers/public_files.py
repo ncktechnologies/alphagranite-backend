@@ -93,5 +93,5 @@ async def public_view_file(file_id: int, db: AsyncSession = Depends(get_db)):
     return FileResponse(
         path=str(absolute_path),
         media_type=media_type,
-        headers={"Content-Disposition": f'inline; filename="{db_file.name}"'}
+        headers={"Content-Disposition": f'attachment; filename="{db_file.name}"'}
     )

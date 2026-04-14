@@ -3839,12 +3839,16 @@ async def _batch_load_slabsmith_data(db: AsyncSession, fab_ids: List[int]) -> di
     from sqlalchemy.orm import aliased
     
     UpdaterUser = aliased(User)
+    DrafterUser = aliased(User)
     
     query = select(
         SlabSmith,
+        DrafterUser.first_name.label("drafter_first_name"),
+        DrafterUser.last_name.label("drafter_last_name"),
         UpdaterUser.first_name.label("updater_first_name"),
         UpdaterUser.last_name.label("updater_last_name")
     ).where(SlabSmith.fab_id.in_(fab_ids))\
+     .join(DrafterUser, SlabSmith.drafter_id == DrafterUser.id, isouter=True)\
      .join(UpdaterUser, SlabSmith.updated_by == UpdaterUser.id, isouter=True)\
      .order_by(SlabSmith.fab_id, SlabSmith.id.desc())
     
@@ -3904,6 +3908,7 @@ async def _batch_load_slabsmith_data(db: AsyncSession, fab_ids: List[int]) -> di
                 "fab_id": slabsmith.fab_id,
                 "slab_smith_type": slabsmith.slab_smith_type,
                 "drafter_id": slabsmith.drafter_id,
+                "drafter_name": f"{row[1]} {row[2]}" if row[1] else None,
                 "start_date": slabsmith.start_date.isoformat() if slabsmith.start_date else None,
                 "end_date": slabsmith.end_date.isoformat() if slabsmith.end_date else None,
                 "total_sqft_completed": slabsmith.total_sqft_completed,
@@ -3913,7 +3918,7 @@ async def _batch_load_slabsmith_data(db: AsyncSession, fab_ids: List[int]) -> di
                 "created_at": slabsmith.created_at.isoformat() if slabsmith.created_at else None,
                 "updated_at": slabsmith.updated_at.isoformat() if slabsmith.updated_at else None,
                 "updated_by": slabsmith.updated_by,
-                "updated_by_name": f"{row[1]} {row[2]}" if row[1] else None
+                "updated_by_name": f"{row[3]} {row[4]}" if row[3] else None
             }
     
     return slabsmith_by_fab
@@ -4721,6 +4726,9 @@ async def get_resurface_schedule(
     )
     rows = result.all()
 
+    fab_ids = [row[0].id for row in rows if row[0] and row[0].id is not None]
+    plans_map = await get_plans_map_for_fabs(db, fab_ids)
+
     data = []
     for row in rows:
         fab = row[0]
@@ -4747,6 +4755,15 @@ async def get_resurface_schedule(
         fab_dict["stone_thickness_value"] = row.stone_thickness_value
         fab_dict["edge_name"] = row.edge_name
         fab_dict["status_name"] = row.status_name
+        stored_shop_est = (
+            fab.shop_est_completion_date.date().isoformat()
+            if fab.shop_est_completion_date
+            else None
+        )
+        fab_dict["shop_est_completion_date"] = _coalesce_shop_est_completion_date(
+            stored_shop_est,
+            plans_map.get(fab.id, []),
+        )
 
         data.append(fab_dict)
 

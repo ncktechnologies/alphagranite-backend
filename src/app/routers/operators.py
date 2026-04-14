@@ -1033,17 +1033,6 @@ async def get_current_operator_tasks(
     target_date = reference_date or date.today()
     range_start, range_end = _build_calendar_window(normalized_view, target_date)
 
-    # Collect workstation IDs this operator is assigned to (via the operator_ids JSON array)
-    ws_rows = (await db.execute(select(WorkStation.id, WorkStation.operator_ids))).all()
-    assigned_ws_ids = [row[0] for row in ws_rows if current_user.id in (row[1] or [])]
-
-    # Match tasks directly assigned to this operator OR at any workstation they belong to
-    assignment_filter = (
-        or_(ShopCutPlan.user_id == current_user.id, ShopCutPlan.workstation_id.in_(assigned_ws_ids))
-        if assigned_ws_ids
-        else ShopCutPlan.user_id == current_user.id
-    )
-
     query = (
         select(
             ShopCutPlan,
@@ -1060,7 +1049,7 @@ async def get_current_operator_tasks(
         .join(WorkStation, WorkStation.id == ShopCutPlan.workstation_id, isouter=True)
         .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id, isouter=True)
         .where(
-            assignment_filter,
+            ShopCutPlan.user_id == current_user.id,
             ShopCutPlan.scheduled_start_date.is_not(None),
             ShopCutPlan.scheduled_start_date < range_end,
         )
