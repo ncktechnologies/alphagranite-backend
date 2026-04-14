@@ -708,6 +708,7 @@ class SlabSmithCreate(BaseModel):
 
 
 class SlabSmithUpdate(BaseModel):
+    drafter_id: Optional[int] = Field(None, gt=0)
     end_date: Optional[datetime] = None
     total_sqft_completed: Optional[str] = None
     is_completed: Optional[bool] = None

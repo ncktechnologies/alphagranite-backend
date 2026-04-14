@@ -110,6 +110,13 @@ async def update_slabsmith(
     
     # Update fields
     update_data = slabsmith_data.model_dump(exclude_unset=True)
+
+    # Validate drafter exists when reassigned
+    if "drafter_id" in update_data:
+        drafter_result = await db.execute(select(User).where(User.id == update_data["drafter_id"]))
+        if not drafter_result.scalar_one_or_none():
+            raise error_response("Drafter not found", 404)
+
     for field, value in update_data.items():
         setattr(slabsmith, field, value)
     
