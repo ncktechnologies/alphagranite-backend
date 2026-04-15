@@ -241,6 +241,33 @@ def _coalesce_shop_est_completion_date(
         return None
 
 
+def _get_shop_current_stage(plans: List[dict]) -> Optional[str]:
+    """
+    Get the current active shop stage (first incomplete plan by sequence).
+    Returns the plan_name of the first plan where work_percentage < 100.
+    If all plans are completed, returns the last plan's name.
+    If no plans exist, returns None.
+    """
+    if not plans:
+        return None
+
+    # Sort plans by sequence to ensure order
+    sorted_plans = sorted(plans, key=lambda p: p.get("sequence") or 0)
+
+    # Find first incomplete plan (work_percentage < 100)
+    for p in sorted_plans:
+        work_pct = p.get("work_percentage")
+        if work_pct is None or float(work_pct) < 100:
+            plan_name = p.get("plan_name")
+            return plan_name if plan_name else None
+
+    # If all plans are completed, return the last plan's name
+    if sorted_plans:
+        return sorted_plans[-1].get("plan_name")
+
+    return None
+
+
 async def _transition_completed_cutlist_fabs_to_shop(
     db: AsyncSession,
     updated_by: Optional[int],
@@ -799,6 +826,7 @@ async def get_fabs(
             f.get("shop_est_completion_date"),
             plans,
         )
+        f["shop_current_stage"] = _get_shop_current_stage(plans)
 
     # Step 6.2: Batch load resurface scheduling and attach per FAB
     resurface_scheduling_map = await _batch_load_resurface_scheduling_responses(db, fab_ids)
@@ -1130,6 +1158,7 @@ async def get_fabs_for_cnc_widget(
             f.get("shop_est_completion_date"),
             plans,
         )
+        f["shop_current_stage"] = _get_shop_current_stage(plans)
 
     # Step 7: Get total count
     count_query = select(func.count(Fab.id)).select_from(Fab)
@@ -1476,6 +1505,7 @@ async def get_fabs_with_shop_est_completion(
         estimated_completion_date, percentage_completion = _compute_fab_progress_fields(plans)
         f["estimated_completion_date"] = estimated_completion_date
         f["percentage_completion"] = percentage_completion
+        f["shop_current_stage"] = _get_shop_current_stage(plans)
 
     # Step 6.2: Group fabs by month → day using estimated_completion_date
     def _build_completion_date_groups(fab_list: list) -> list:
@@ -1826,6 +1856,7 @@ async def get_fab(
         fab_dict.get("shop_est_completion_date"),
         plans,
     )
+    fab_dict["shop_current_stage"] = _get_shop_current_stage(plans)
 
     resurface_scheduling_map = await _batch_load_resurface_scheduling_responses(db, [fab_id])
     fab_dict["resurface_scheduling"] = resurface_scheduling_map.get(fab_id)
