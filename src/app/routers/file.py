@@ -251,8 +251,12 @@ async def view_file(
         db_file_type=db_file.file_type,
     )
 
+    # Render PDFs/images in-browser instead of forcing download.
+    disposition = "inline" if media_type == "application/pdf" or media_type.startswith("image/") else "attachment"
+    filename = db_file.name or os.path.basename(absolute_path)
+
     return FileResponse(
         path=absolute_path,
         media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{db_file.name}"'}
+        headers={"Content-Disposition": f'{disposition}; filename="{filename}"'}
     )
