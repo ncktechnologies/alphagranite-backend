@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, UploadFile, File, Form, Request, HTTPExc
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 import mimetypes
+from urllib.parse import quote
 
 from src.app.database.user import User
 from src.app.database.file import File as FileModel
@@ -38,6 +39,13 @@ def _resolve_media_type(file_name: str, file_path: str, db_file_type: Optional[s
     if guessed:
         return guessed
     return "application/octet-stream"
+
+
+def _build_content_disposition(disposition: str, filename: str) -> str:
+    """Return RFC 6266-compatible Content-Disposition with UTF-8 filename support."""
+    safe_name = filename.replace('"', "")
+    encoded_name = quote(filename)
+    return f"{disposition}; filename=\"{safe_name}\"; filename*=UTF-8''{encoded_name}"
 
 @router.post(
     "/upload",
@@ -258,5 +266,5 @@ async def view_file(
     return FileResponse(
         path=absolute_path,
         media_type=media_type,
-        headers={"Content-Disposition": f'{disposition}; filename="{filename}"'}
+        headers={"Content-Disposition": _build_content_disposition(disposition, filename)}
     )
