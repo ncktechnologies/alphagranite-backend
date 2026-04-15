@@ -4700,6 +4700,8 @@ async def _load_plans_for_fabs(db: AsyncSession, fab_ids: list[int]) -> dict[int
 async def get_resurface_schedule(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
+    search: Optional[str] = Query(None, description="Search value"),
+    type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, job_name"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -4743,6 +4745,30 @@ async def get_resurface_schedule(
             Fab.shop_date_schedule.isnot(None),
         )
     )
+
+    # Build search filter based on type (same behavior as get_fabs)
+    search_filter = None
+    if search and type:
+        if type == "fab_id":
+            search_filter = sa.cast(Fab.id, sa.String) == search
+        elif type == "job_number":
+            search_filter = BusinessJob.job_number == search
+        elif type == "job_name":
+            search_filter = BusinessJob.name.ilike(f"%{search}%")
+    else:
+        search_filter = None
+
+    if search_filter is not None:
+        base_query = base_query.where(search_filter)
+    elif search:
+        search_term = f"%{search}%"
+        base_query = base_query.where(
+            or_(
+                sa.cast(Fab.id, sa.String) == search,
+                BusinessJob.name.ilike(search_term),
+                BusinessJob.job_number == search,
+            )
+        )
 
     total_result = await db.execute(
         select(func.count()).select_from(base_query.subquery())
