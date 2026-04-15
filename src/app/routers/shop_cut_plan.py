@@ -2216,12 +2216,14 @@ async def _assert_no_shop_plan_conflicts(
             readable_start_time = other_start.strftime("%I:%M %p").lstrip("0")
             readable_end_time = other_end.strftime("%I:%M %p").lstrip("0")
             readable_date = other_start.strftime("%b %d, %Y")
+            conflicting_fab_id = other_plan.fab_id
         
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
                     "This schedule update conflicts with an existing plan scheduled "
                     f"from {readable_start_time} to {readable_end_time} on {readable_date}. "
+                    f"Conflicting FAB ID: {conflicting_fab_id}. "
                     "Please choose a different time slot."
                 ),
             )
