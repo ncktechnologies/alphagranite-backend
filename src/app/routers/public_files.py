@@ -90,8 +90,11 @@ async def public_view_file(file_id: int, db: AsyncSession = Depends(get_db)):
         db_file_type=db_file.file_type,
     )
 
+    disposition = "inline" if media_type == "application/pdf" or media_type.startswith("image/") else "attachment"
+    filename = db_file.name or absolute_path.name
+
     return FileResponse(
         path=str(absolute_path),
         media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{db_file.name}"'}
+        headers={"Content-Disposition": f'{disposition}; filename="{filename}"'}
     )
