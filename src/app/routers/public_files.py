@@ -2,6 +2,7 @@ import os
 import mimetypes
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 from fastapi import APIRouter
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.future import select
@@ -37,6 +38,13 @@ def _resolve_media_type(file_name: str, file_path: str, db_file_type: str | None
     if guessed:
         return guessed
     return "application/octet-stream"
+
+
+def _build_content_disposition(disposition: str, filename: str) -> str:
+    """Return RFC 6266-compatible Content-Disposition with UTF-8 filename support."""
+    safe_name = filename.replace('"', "")
+    encoded_name = quote(filename)
+    return f"{disposition}; filename=\"{safe_name}\"; filename*=UTF-8''{encoded_name}"
 
 @router.get("/test-public")
 async def test_public_route():
@@ -90,8 +98,11 @@ async def public_view_file(file_id: int, db: AsyncSession = Depends(get_db)):
         db_file_type=db_file.file_type,
     )
 
+    disposition = "inline" if media_type == "application/pdf" or media_type.startswith("image/") else "attachment"
+    filename = db_file.name or absolute_path.name
+
     return FileResponse(
         path=str(absolute_path),
         media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{db_file.name}"'}
+        headers={"Content-Disposition": _build_content_disposition(disposition, filename)}
     )

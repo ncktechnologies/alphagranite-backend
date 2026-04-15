@@ -241,6 +241,33 @@ def _coalesce_shop_est_completion_date(
         return None
 
 
+def _get_shop_current_stage(plans: List[dict]) -> Optional[str]:
+    """
+    Get the current active shop stage (first incomplete plan by sequence).
+    Returns the plan_name of the first plan where work_percentage < 100.
+    If all plans are completed, returns the last plan's name.
+    If no plans exist, returns None.
+    """
+    if not plans:
+        return None
+
+    # Sort plans by sequence to ensure order
+    sorted_plans = sorted(plans, key=lambda p: p.get("sequence") or 0)
+
+    # Find first incomplete plan (work_percentage < 100)
+    for p in sorted_plans:
+        work_pct = p.get("work_percentage")
+        if work_pct is None or float(work_pct) < 100:
+            plan_name = p.get("plan_name")
+            return plan_name if plan_name else None
+
+    # If all plans are completed, return the last plan's name
+    if sorted_plans:
+        return sorted_plans[-1].get("plan_name")
+
+    return None
+
+
 async def _transition_completed_cutlist_fabs_to_shop(
     db: AsyncSession,
     updated_by: Optional[int],
@@ -799,6 +826,7 @@ async def get_fabs(
             f.get("shop_est_completion_date"),
             plans,
         )
+        f["shop_current_stage"] = _get_shop_current_stage(plans)
 
     # Step 6.2: Batch load resurface scheduling and attach per FAB
     resurface_scheduling_map = await _batch_load_resurface_scheduling_responses(db, fab_ids)
@@ -1130,6 +1158,7 @@ async def get_fabs_for_cnc_widget(
             f.get("shop_est_completion_date"),
             plans,
         )
+        f["shop_current_stage"] = _get_shop_current_stage(plans)
 
     # Step 7: Get total count
     count_query = select(func.count(Fab.id)).select_from(Fab)
@@ -1476,6 +1505,7 @@ async def get_fabs_with_shop_est_completion(
         estimated_completion_date, percentage_completion = _compute_fab_progress_fields(plans)
         f["estimated_completion_date"] = estimated_completion_date
         f["percentage_completion"] = percentage_completion
+        f["shop_current_stage"] = _get_shop_current_stage(plans)
 
     # Step 6.2: Group fabs by month → day using estimated_completion_date
     def _build_completion_date_groups(fab_list: list) -> list:
@@ -1826,6 +1856,7 @@ async def get_fab(
         fab_dict.get("shop_est_completion_date"),
         plans,
     )
+    fab_dict["shop_current_stage"] = _get_shop_current_stage(plans)
 
     resurface_scheduling_map = await _batch_load_resurface_scheduling_responses(db, [fab_id])
     fab_dict["resurface_scheduling"] = resurface_scheduling_map.get(fab_id)
@@ -4669,6 +4700,8 @@ async def _load_plans_for_fabs(db: AsyncSession, fab_ids: list[int]) -> dict[int
 async def get_resurface_schedule(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
+    search: Optional[str] = Query(None, description="Search value"),
+    type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, job_name"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -4712,6 +4745,30 @@ async def get_resurface_schedule(
             Fab.shop_date_schedule.isnot(None),
         )
     )
+
+    # Build search filter based on type (same behavior as get_fabs)
+    search_filter = None
+    if search and type:
+        if type == "fab_id":
+            search_filter = sa.cast(Fab.id, sa.String) == search
+        elif type == "job_number":
+            search_filter = BusinessJob.job_number == search
+        elif type == "job_name":
+            search_filter = BusinessJob.name.ilike(f"%{search}%")
+    else:
+        search_filter = None
+
+    if search_filter is not None:
+        base_query = base_query.where(search_filter)
+    elif search:
+        search_term = f"%{search}%"
+        base_query = base_query.where(
+            or_(
+                sa.cast(Fab.id, sa.String) == search,
+                BusinessJob.name.ilike(search_term),
+                BusinessJob.job_number == search,
+            )
+        )
 
     total_result = await db.execute(
         select(func.count()).select_from(base_query.subquery())
