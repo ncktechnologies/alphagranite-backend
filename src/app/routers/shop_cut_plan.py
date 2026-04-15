@@ -2217,6 +2217,13 @@ async def _assert_no_shop_plan_conflicts(
             readable_end_time = other_end.strftime("%I:%M %p").lstrip("0")
             readable_date = other_start.strftime("%b %d, %Y")
             conflicting_fab_id = other_plan.fab_id
+            conflicting_workstation_id = other_plan.workstation_id
+            conflicting_workstation_name = None
+            if conflicting_workstation_id is not None:
+                ws_result = await db.execute(
+                    select(WorkStation.name).where(WorkStation.id == conflicting_workstation_id)
+                )
+                conflicting_workstation_name = ws_result.scalar_one_or_none()
         
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -2224,6 +2231,8 @@ async def _assert_no_shop_plan_conflicts(
                     "This schedule update conflicts with an existing plan scheduled "
                     f"from {readable_start_time} to {readable_end_time} on {readable_date}. "
                     f"Conflicting FAB ID: {conflicting_fab_id}. "
+                    f"Conflicting Workstation ID: {conflicting_workstation_id}. "
+                    f"Conflicting Workstation Name: {conflicting_workstation_name}. "
                     "Please choose a different time slot."
                 ),
             )
