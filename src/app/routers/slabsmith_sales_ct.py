@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, date
 from typing import Optional, List
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Body
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func, or_
 import sqlalchemy as sa
@@ -96,7 +96,16 @@ async def create_slabsmith(
 @router.put("/slabsmith/{slabsmith_id}", response_model=SuccessResponse[SlabSmithResponse])
 async def update_slabsmith(
     slabsmith_id: int,
-    slabsmith_data: SlabSmithUpdate,
+    slabsmith_data: SlabSmithUpdate = Body(
+        ...,
+        example={
+            "drafter_id": 12,
+            "end_date": "2026-04-15T14:30:00",
+            "total_sqft_completed": "150.5",
+            "is_completed": False,
+            "status_id": 1,
+        },
+    ),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):

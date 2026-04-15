@@ -708,11 +708,22 @@ class SlabSmithCreate(BaseModel):
 
 
 class SlabSmithUpdate(BaseModel):
-    drafter_id: Optional[int] = Field(None, gt=0)
-    end_date: Optional[datetime] = None
-    total_sqft_completed: Optional[str] = None
-    is_completed: Optional[bool] = None
-    status_id: Optional[int] = None
+    drafter_id: Optional[int] = Field(None, gt=0, description="Assign/reassign drafter")
+    end_date: Optional[datetime] = Field(None, description="End date/time of slabsmith work")
+    total_sqft_completed: Optional[str] = Field(None, description="Total sqft completed")
+    is_completed: Optional[bool] = Field(None, description="Mark slabsmith as completed")
+    status_id: Optional[int] = Field(None, description="Status ID")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "drafter_id": 12,
+                "end_date": "2026-04-15T14:30:00",
+                "total_sqft_completed": "150.5",
+                "is_completed": False,
+                "status_id": 1
+            }
+        }
 
 
 class SlabSmithResponse(BaseModel):
