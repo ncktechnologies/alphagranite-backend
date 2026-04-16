@@ -34,6 +34,7 @@ from src.app.middleware.jwt_auth import get_current_user
 from src.app.service.file import FileService
 from src.app.utils.config import get_settings
 from src.app.utils.helpers import success_response
+from src.app.utils.timer_guards import assert_no_active_timer_session
 
 
 router = APIRouter(
@@ -1130,24 +1131,9 @@ async def _process_current_operator_job_timer_action(
             if active_session:
                 raise HTTPException(status_code=400, detail="An active timer session already exists for this job")
 
-            # Prevent multiple simultaneous running timers for the same operator at this stage
-            cross_conflict_result = await db.execute(
-                select(OperatorJobTimerSession, BusinessJob)
-                .join(BusinessJob, BusinessJob.id == OperatorJobTimerSession.job_id)
-                .where(
-                    OperatorJobTimerSession.operator_id == operator_id,
-                    OperatorJobTimerSession.status == "running",
-                    OperatorJobTimerSession.job_id != job_id,
-                )
-                .limit(1)
-            )
-            cross_conflict = cross_conflict_result.first()
-            if cross_conflict:
-                c_session, c_job = cross_conflict
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Timer on Job #{c_job.job_number} and Fab_id {c_session.fab_id} is already running. Stop or pause it before starting another.",
-                )
+            # Prevent starting if any running timer exists across all session types
+            if not getattr(current_user, "is_super_admin", False):
+                await assert_no_active_timer_session(db, operator_id)
 
             session = OperatorJobTimerSession(
                 job_id=job_id,
@@ -1216,6 +1202,9 @@ async def _process_current_operator_job_timer_action(
         elif normalized_action == "resume":
             if not active_session or active_session.status != "paused":
                 raise HTTPException(status_code=400, detail="No paused timer session found to resume")
+
+            if not getattr(current_user, "is_super_admin", False):
+                await assert_no_active_timer_session(db, operator_id)
 
             pause_start = _normalize_naive_dt(active_session.current_pause_start_at)
             if pause_start and action_ts > pause_start:
