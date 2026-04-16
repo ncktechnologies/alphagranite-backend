@@ -29,6 +29,7 @@ from src.app.interface.business_schemas import (
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import error_response, success_response, strip_timezone, utc_now, datetime_to_iso
+from src.app.utils.timer_guards import assert_no_active_timer_session
 
 logger = logging.getLogger(__name__)
 
@@ -84,25 +85,9 @@ async def manage_drafting_session(
                 detail="An active session already exists for this fab. Complete it first or mark as revision."
             )
         
-        # Prevent multiple simultaneous running timers for the same drafter at this stage
-        conflict_result = await db.execute(
-            select(DraftingSession, BusinessJob)
-            .join(Fab, Fab.id == DraftingSession.fab_id)
-            .join(BusinessJob, BusinessJob.id == Fab.job_id)
-            .where(
-                DraftingSession.drafter_id == session_data.drafter_id,
-                DraftingSession.status == "drafting",
-                DraftingSession.fab_id != fab_id,
-            )
-            .limit(1)
-        )
-        conflict_row = conflict_result.first()
-        if conflict_row:
-            conflict_session, conflict_job = conflict_row
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Timer on Job #{conflict_job.job_number} and Fab_id {conflict_session.fab_id} is already running. Stop or pause it before starting another.",
-            )
+        # Prevent starting if any running timer exists across all session types
+        if not getattr(current_user, "is_super_admin", False):
+            await assert_no_active_timer_session(db, session_data.drafter_id)
 
         # Create new session
         session = DraftingSession(
@@ -188,7 +173,10 @@ async def manage_drafting_session(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Session is not paused or on hold"
             )
-        
+
+        if not getattr(current_user, "is_super_admin", False):
+            await assert_no_active_timer_session(db, session_data.drafter_id)
+
         # Calculate pause duration
         if active_session.current_pause_start_time:
             pause_start = strip_timezone(active_session.current_pause_start_time)

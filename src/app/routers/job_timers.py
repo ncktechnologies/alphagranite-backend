@@ -31,6 +31,7 @@ from src.app.interface.business_schemas import (
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.utils.helpers import error_response, success_response
+from src.app.utils.timer_guards import assert_no_active_timer_session
 
 router = APIRouter(
     prefix="/job-timers",
@@ -159,7 +160,11 @@ async def start_installer_job_timer(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Timer on Job #{conflict_job.job_number} and Fab_id {conflict_session.fab_id} is already running. Stop or pause it before starting another.",
         )
-    
+
+    # Prevent starting if any running timer exists across all session types
+    if not getattr(current_user, "is_super_admin", False):
+        await assert_no_active_timer_session(db, installer_id)
+
     # Create new session
     now = datetime.now()
     new_session = InstallerJobTimerSession(
@@ -523,7 +528,11 @@ async def start_templater_job_timer(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Timer on Job #{conflict_job.job_number} and Fab_id {conflict_session.fab_id} is already running. Stop or pause it before starting another.",
         )
-    
+
+    # Prevent starting if any running timer exists across all session types
+    if not getattr(current_user, "is_super_admin", False):
+        await assert_no_active_timer_session(db, templater_id)
+
     # Create new session
     now = datetime.now()
     new_session = TemplaterJobTimerSession(

@@ -26,6 +26,7 @@ from src.app.middleware.jwt_auth import get_current_user
 from src.app.service.file import FileService
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import error_response, success_response, strip_timezone, utc_now
+from src.app.utils.timer_guards import assert_no_active_timer_session
 
 logger = logging.getLogger(__name__)
 
@@ -97,13 +98,9 @@ async def manage_cnc_session(
             )
             .limit(1)
         )
-        conflict_row = conflict_result.first()
-        if conflict_row:
-            conflict_session, conflict_job = conflict_row
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Timer on Job #{conflict_job.job_number} and Fab_id {conflict_session.fab_id} is already running. Stop or pause it before starting another.",
-            )
+        # Prevent starting if any running timer exists across all session types
+        if not getattr(current_user, "is_super_admin", False):
+            await assert_no_active_timer_session(db, session_data.drafter_id)
 
         session = CNCDraftingSession(
             fab_id=fab_id,
@@ -170,6 +167,9 @@ async def manage_cnc_session(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No CNC session found to resume")
         if active_session.status not in ["paused", "on_hold"]:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Session is not paused or on hold")
+
+        if not getattr(current_user, "is_super_admin", False):
+            await assert_no_active_timer_session(db, session_data.drafter_id)
 
         if active_session.current_pause_start_time:
             pause_start = strip_timezone(active_session.current_pause_start_time)

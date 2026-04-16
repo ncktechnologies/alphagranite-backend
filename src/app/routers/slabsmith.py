@@ -9,6 +9,7 @@ from src.app.database.fab_notes import FabNotes
 from src.app.database.user import User
 from src.app.interface.business_schemas import SlabSmithSessionUpdate
 from src.app.middleware.jwt_auth import get_current_user
+from src.app.utils.timer_guards import assert_no_active_timer_session
 
 router = APIRouter(
     prefix="/slabsmith",
@@ -43,6 +44,10 @@ async def manage_slabsmith_session(
     action = session_data.action.lower()
     
     if action == "start":
+        # Prevent starting if any running timer exists across all session types
+        if not getattr(current_user, "is_super_admin", False):
+            await assert_no_active_timer_session(db, current_user.id)
+
         # Start new session
         slabsmith_sessions[session_key] = {
             "fab_id": fab_id,
@@ -117,7 +122,10 @@ async def manage_slabsmith_session(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Session is not paused"
             )
-        
+
+        if not getattr(current_user, "is_super_admin", False):
+            await assert_no_active_timer_session(db, current_user.id)
+
         # Calculate paused time
         if session["paused_at"]:
             paused_minutes = (datetime.now() - session["paused_at"]).total_seconds() / 60
