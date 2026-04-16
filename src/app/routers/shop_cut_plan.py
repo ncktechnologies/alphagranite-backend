@@ -1844,26 +1844,12 @@ def _validate_manual_schedule_interval(start: Optional[datetime], estimated_hour
     """Validate a manually supplied schedule start time.
 
     Rules:
-    - Must be a weekday (Mon–Fri)
-    - Must be within 7:00 AM – 4:00 PM
+    - scheduled_start is required
     """
     if start is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="scheduled_start is required",
-        )
-
-    if not _is_business_day(start):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="scheduled_start must be on a weekday (Monday–Friday)",
-        )
-
-    day_start, day_end = _business_window_for_day(start)
-    if not (day_start <= start < day_end):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="scheduled_start must be between 7:00 AM and 4:00 PM",
         )
 
 
@@ -2193,13 +2179,9 @@ async def _assert_no_shop_plan_conflicts(
     conflict_result = await db.execute(
         select(ShopCutPlan).where(
             ShopCutPlan.id != plan_id,
+            ShopCutPlan.workstation_id == workstation_id,
             ShopCutPlan.scheduled_start_date.is_not(None),
             ShopCutPlan.scheduled_start_date < proposed_end,
-            or_(
-                ShopCutPlan.workstation_id == workstation_id,
-                ShopCutPlan.user_id == operator_id,
-                ShopCutPlan.fab_id == fab_id,
-            ),
         )
     )
     conflicting_plans = conflict_result.scalars().all()

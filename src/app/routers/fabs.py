@@ -822,10 +822,6 @@ async def get_fabs(
         estimated_completion_date, percentage_completion = _compute_fab_progress_fields(plans)
         f["estimated_completion_date"] = estimated_completion_date
         f["percentage_completion"] = percentage_completion
-        f["shop_est_completion_date"] = _coalesce_shop_est_completion_date(
-            f.get("shop_est_completion_date"),
-            plans,
-        )
         f["shop_current_stage"] = _get_shop_current_stage(plans)
 
     # Step 6.2: Batch load resurface scheduling and attach per FAB
@@ -1505,6 +1501,10 @@ async def get_fabs_with_shop_est_completion(
         estimated_completion_date, percentage_completion = _compute_fab_progress_fields(plans)
         f["estimated_completion_date"] = estimated_completion_date
         f["percentage_completion"] = percentage_completion
+        f["shop_est_completion_date"] = _coalesce_shop_est_completion_date(
+            f.get("shop_est_completion_date"),
+            plans,
+        )
         f["shop_current_stage"] = _get_shop_current_stage(plans)
 
     # Step 6.2: Group fabs by month → day using estimated_completion_date
