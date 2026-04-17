@@ -358,6 +358,31 @@ async def get_shop_plans_by_fab_id(
     }
 
 
+@router.get("/plans/fab/{fab_id}/exists", response_model=dict)
+async def has_shop_plans_for_fab(
+    fab_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Check whether a FAB has any existing shop cut plans."""
+    existing_plan_id = (
+        await db.execute(
+            select(ShopCutPlan.id)
+            .where(ShopCutPlan.fab_id == fab_id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    return {
+        "success": True,
+        "message": "Shop plan existence checked successfully",
+        "data": {
+            "fab_id": fab_id,
+            "has_shop_cut_plans": existing_plan_id is not None,
+        },
+    }
+
+
 @router.get("/plans/{plan_id}", response_model=dict)
 async def get_shop_plan(
     plan_id: int,
