@@ -1845,11 +1845,19 @@ def _validate_manual_schedule_interval(start: Optional[datetime], estimated_hour
 
     Rules:
     - scheduled_start is required
+    - scheduled_start must not fall within the 12:00 PM – 1:00 PM lunch break
     """
     if start is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="scheduled_start is required",
+        )
+
+    lunch_start, lunch_end = _lunch_window_for_day(start)
+    if lunch_start <= start < lunch_end:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="scheduled_start cannot fall within the lunch break (12:00 PM – 1:00 PM). Please choose a time before 12:00 PM or at 1:00 PM or later.",
         )
 
 
@@ -2174,7 +2182,7 @@ async def _assert_no_shop_plan_conflicts(
     scheduled_start: datetime,
     estimated_hours: float,
 ) -> None:
-    proposed_end = scheduled_start + timedelta(hours=float(estimated_hours))
+    proposed_end = _compute_lunch_adjusted_end(scheduled_start, float(estimated_hours))
 
     conflict_result = await db.execute(
         select(ShopCutPlan).where(
@@ -2192,7 +2200,7 @@ async def _assert_no_shop_plan_conflicts(
         if not other_start or other_hours <= 0:
             continue
 
-        other_end = other_start + timedelta(hours=other_hours)
+        other_end = _compute_lunch_adjusted_end(other_start, other_hours)
 
         if _intervals_overlap(scheduled_start, proposed_end, other_start, other_end):
             readable_start_time = other_start.strftime("%I:%M %p").lstrip("0")
