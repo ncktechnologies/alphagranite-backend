@@ -358,6 +358,31 @@ async def get_shop_plans_by_fab_id(
     }
 
 
+@router.get("/plans/fab/{fab_id}/exists", response_model=dict)
+async def has_shop_plans_for_fab(
+    fab_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Check whether a FAB has any existing shop cut plans."""
+    existing_plan_id = (
+        await db.execute(
+            select(ShopCutPlan.id)
+            .where(ShopCutPlan.fab_id == fab_id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    return {
+        "success": True,
+        "message": "Shop plan existence checked successfully",
+        "data": {
+            "fab_id": fab_id,
+            "has_shop_cut_plans": existing_plan_id is not None,
+        },
+    }
+
+
 @router.get("/plans/{plan_id}", response_model=dict)
 async def get_shop_plan(
     plan_id: int,
@@ -1844,8 +1869,8 @@ def _validate_manual_schedule_interval(start: Optional[datetime], estimated_hour
     """Validate a manually supplied schedule start time.
 
     Rules:
-    - Must be a weekday (Mon–Fri)
-    - Must be within 7:00 AM – 4:00 PM
+    - scheduled_start is required
+    - scheduled_start must not fall within the 12:00 PM – 1:00 PM lunch break
     """
     if start is None:
         raise HTTPException(
@@ -1853,17 +1878,11 @@ def _validate_manual_schedule_interval(start: Optional[datetime], estimated_hour
             detail="scheduled_start is required",
         )
 
-    if not _is_business_day(start):
+    lunch_start, lunch_end = _lunch_window_for_day(start)
+    if lunch_start <= start < lunch_end:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="scheduled_start must be on a weekday (Monday–Friday)",
-        )
-
-    day_start, day_end = _business_window_for_day(start)
-    if not (day_start <= start < day_end):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="scheduled_start must be between 7:00 AM and 4:00 PM",
+            detail="scheduled_start cannot fall within the lunch break (12:00 PM – 1:00 PM). Please choose a time before 12:00 PM or at 1:00 PM or later.",
         )
 
 
@@ -2188,18 +2207,14 @@ async def _assert_no_shop_plan_conflicts(
     scheduled_start: datetime,
     estimated_hours: float,
 ) -> None:
-    proposed_end = scheduled_start + timedelta(hours=float(estimated_hours))
+    proposed_end = _compute_lunch_adjusted_end(scheduled_start, float(estimated_hours))
 
     conflict_result = await db.execute(
         select(ShopCutPlan).where(
             ShopCutPlan.id != plan_id,
+            ShopCutPlan.workstation_id == workstation_id,
             ShopCutPlan.scheduled_start_date.is_not(None),
             ShopCutPlan.scheduled_start_date < proposed_end,
-            or_(
-                ShopCutPlan.workstation_id == workstation_id,
-                ShopCutPlan.user_id == operator_id,
-                ShopCutPlan.fab_id == fab_id,
-            ),
         )
     )
     conflicting_plans = conflict_result.scalars().all()
@@ -2210,7 +2225,7 @@ async def _assert_no_shop_plan_conflicts(
         if not other_start or other_hours <= 0:
             continue
 
-        other_end = other_start + timedelta(hours=other_hours)
+        other_end = _compute_lunch_adjusted_end(other_start, other_hours)
 
         if _intervals_overlap(scheduled_start, proposed_end, other_start, other_end):
             readable_start_time = other_start.strftime("%I:%M %p").lstrip("0")
