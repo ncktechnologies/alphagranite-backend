@@ -4812,6 +4812,11 @@ async def get_resurface_schedule(
         fab_dict["stone_thickness_value"] = row.stone_thickness_value
         fab_dict["edge_name"] = row.edge_name
         fab_dict["status_name"] = row.status_name
+        
+        # Attach plans array and computed shop-related fields
+        plans = plans_map.get(fab.id, [])
+        fab_dict["plans"] = plans
+        
         stored_shop_est = (
             fab.shop_est_completion_date.date().isoformat()
             if fab.shop_est_completion_date
@@ -4819,8 +4824,14 @@ async def get_resurface_schedule(
         )
         fab_dict["shop_est_completion_date"] = _coalesce_shop_est_completion_date(
             stored_shop_est,
-            plans_map.get(fab.id, []),
+            plans,
         )
+        
+        # Compute progress fields from plans
+        estimated_completion_date, percentage_completion = _compute_fab_progress_fields(plans)
+        fab_dict["estimated_completion_date"] = estimated_completion_date
+        fab_dict["percentage_completion"] = percentage_completion
+        fab_dict["shop_current_stage"] = _get_shop_current_stage(plans)
 
         data.append(fab_dict)
 
