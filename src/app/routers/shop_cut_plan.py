@@ -79,6 +79,20 @@ async def create_shop_plans(
                 detail="This Planning Section has already been added. Please select a different Planning Section."
             )
 
+        # Validate that incoming sequence numbers don't duplicate existing ones for this FAB
+        incoming_sequences = [stage.sequence for stage in plan_data.stages]
+        existing_seq_result = await db.execute(
+            select(ShopCutPlan.sequence).where(ShopCutPlan.fab_id == plan_data.fab_id)
+        )
+        existing_sequences = {row[0] for row in existing_seq_result.fetchall()}
+        duplicate_sequences = [seq for seq in incoming_sequences if seq in existing_sequences]
+        if duplicate_sequences:
+            seq_list = ", ".join(str(s) for s in sorted(duplicate_sequences))
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Sequence {seq_list} already exists for this FAB. Please assign a unique sequence."
+            )
+
         # Validate that stages are ordered by sequence chronologically
         if len(plan_data.stages) > 1:
             stages_by_seq = sorted(plan_data.stages, key=lambda s: s.sequence)
