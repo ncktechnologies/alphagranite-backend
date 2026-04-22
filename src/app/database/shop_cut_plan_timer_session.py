@@ -19,6 +19,7 @@ class ShopCutPlanTimerSession(SQLModel, table=True):
 
     total_work_seconds: int = Field(default=0)
     total_pause_seconds: int = Field(default=0)
+    work_percentage: int = Field(default=0)
 
     created_at: datetime = Field(default_factory=datetime.now)
     created_by: int = Field(foreign_key="users.id")
