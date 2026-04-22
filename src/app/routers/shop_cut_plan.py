@@ -938,6 +938,10 @@ async def manage_shop_cut_plan_timer(
             as_of=action_ts,
         )
 
+        target_session = session if action == "start" else active_session
+        if target_session:
+            target_session.work_percentage = work_percentage
+
         ws_result = await db.execute(select(WorkStation).where(WorkStation.id == plan.workstation_id))
         workstation = ws_result.scalar_one_or_none()
 
@@ -1031,6 +1035,7 @@ async def get_shop_cut_plan_timer_state(
                 "current_run_start_at": latest.current_run_start_at.isoformat() if latest.current_run_start_at else None,
                 "current_pause_start_at": latest.current_pause_start_at.isoformat() if latest.current_pause_start_at else None,
                 "stopped_at": latest.stopped_at.isoformat() if latest.stopped_at else None,
+                "work_percentage": int(latest.work_percentage or 0),
             } if latest else None,
             "total_actual_seconds": total_actual_seconds,
             "total_actual_hours": total_actual_hours,
@@ -1099,6 +1104,7 @@ async def get_shop_cut_plan_timer_history(
                     "stopped_at": s.stopped_at.isoformat() if s.stopped_at else None,
                     "total_work_seconds": int(s.total_work_seconds or 0),
                     "total_pause_seconds": int(s.total_pause_seconds or 0),
+                    "work_percentage": int(s.work_percentage or 0),
                     "created_at": s.created_at.isoformat() if s.created_at else None,
                     "updated_at": s.updated_at.isoformat() if s.updated_at else None,
                 }
