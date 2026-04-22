@@ -1439,6 +1439,7 @@ async def stop_current_operator_job_timer(
 @router.get("/me/jobs/{fab_id}/timer", response_model=SuccessResponse[dict])
 async def get_current_operator_job_timer_state(
     fab_id: int,
+    workstation_id: Optional[int] = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -1450,15 +1451,19 @@ async def get_current_operator_job_timer_state(
 
     _, job_id = await _get_fab_and_job_id(db, fab_id)
 
+    timer_filters = [
+        or_(
+            OperatorJobTimerSession.fab_id == fab_id,
+            (OperatorJobTimerSession.fab_id.is_(None)) & (OperatorJobTimerSession.job_id == job_id),
+        ),
+        OperatorJobTimerSession.operator_id == operator_id,
+    ]
+    if workstation_id is not None:
+        timer_filters.append(OperatorJobTimerSession.workstation_id == workstation_id)
+
     latest_result = await db.execute(
         select(OperatorJobTimerSession)
-        .where(
-            or_(
-                OperatorJobTimerSession.fab_id == fab_id,
-                (OperatorJobTimerSession.fab_id.is_(None)) & (OperatorJobTimerSession.job_id == job_id),
-            ),
-            OperatorJobTimerSession.operator_id == operator_id,
-        )
+        .where(*timer_filters)
         .order_by(OperatorJobTimerSession.created_at.desc())
         .limit(1)
     )
@@ -1490,6 +1495,7 @@ async def get_current_operator_job_timer_state(
 @router.get("/me/jobs/{fab_id}/timer/history", response_model=SuccessResponse[dict])
 async def get_current_operator_job_timer_history(
     fab_id: int,
+    workstation_id: Optional[int] = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -1501,28 +1507,34 @@ async def get_current_operator_job_timer_history(
 
     _, job_id = await _get_fab_and_job_id(db, fab_id)
 
+    session_filters = [
+        or_(
+            OperatorJobTimerSession.fab_id == fab_id,
+            (OperatorJobTimerSession.fab_id.is_(None)) & (OperatorJobTimerSession.job_id == job_id),
+        ),
+        OperatorJobTimerSession.operator_id == operator_id,
+    ]
+    event_filters = [
+        or_(
+            OperatorJobTimerEvent.fab_id == fab_id,
+            (OperatorJobTimerEvent.fab_id.is_(None)) & (OperatorJobTimerEvent.job_id == job_id),
+        ),
+        OperatorJobTimerEvent.operator_id == operator_id,
+    ]
+    if workstation_id is not None:
+        session_filters.append(OperatorJobTimerSession.workstation_id == workstation_id)
+        event_filters.append(OperatorJobTimerEvent.workstation_id == workstation_id)
+
     sessions_result = await db.execute(
         select(OperatorJobTimerSession)
-        .where(
-            or_(
-                OperatorJobTimerSession.fab_id == fab_id,
-                (OperatorJobTimerSession.fab_id.is_(None)) & (OperatorJobTimerSession.job_id == job_id),
-            ),
-            OperatorJobTimerSession.operator_id == operator_id,
-        )
+        .where(*session_filters)
         .order_by(OperatorJobTimerSession.created_at.asc())
     )
     sessions = sessions_result.scalars().all()
 
     events_result = await db.execute(
         select(OperatorJobTimerEvent)
-        .where(
-            or_(
-                OperatorJobTimerEvent.fab_id == fab_id,
-                (OperatorJobTimerEvent.fab_id.is_(None)) & (OperatorJobTimerEvent.job_id == job_id),
-            ),
-            OperatorJobTimerEvent.operator_id == operator_id,
-        )
+        .where(*event_filters)
         .order_by(OperatorJobTimerEvent.event_at.asc())
     )
     events = events_result.scalars().all()
