@@ -35,8 +35,7 @@ from src.app.database.edge import Edge
 from src.app.database.fab_notes import FabNotes
 from src.app.database.fab_type import FabType
 from src.app.database.job_note import JobNote
-from src.app.database.planning_section import PlanningSection
-from src.app.interface.generated_schemas import ShopPlanningSection as PlanningSection
+# from src.app.database.planning_section import PlanningSection
 from src.app.database.work_station import WorkStation
 from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness
@@ -63,8 +62,7 @@ from src.app.interface.generated_schemas import (
     Templating, SlabSmith,
     Drafting, DraftingSession, DraftingSessionNote,
     PreDraftReview, SalesCT, CutList,
-    JobTechnicianWorkflow, FinalProgramming,
-    ShopPlanningSection, OperationWorkflow,
+    JobTechnicianWorkflow, FinalProgramming, OperationWorkflow,
     WJProgramming, WJScheduling, ResurfaceScheduling,
     Revision, CostOfStone,
     InstallScheduling, InstallCompletion,
