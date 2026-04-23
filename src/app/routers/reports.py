@@ -11,7 +11,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, case, func, literal_column, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.database import get_db
@@ -706,18 +706,19 @@ async def get_owner_weekly_trends_report(
 ):
     """Weekly trendline for owner review: new fabs, completed installs, revenue, and GP."""
     cutoff = datetime.now() - timedelta(days=weeks * 7)
+    week_bucket = func.date_trunc(literal_column("'week'"), Fab.created_at)
 
     fab_week_rows = (
         await db.execute(
             select(
-                func.date_trunc("week", Fab.created_at).label("week_start"),
+                week_bucket.label("week_start"),
                 func.count(Fab.id).label("fabs_created"),
                 func.sum(Fab.revenue).label("revenue"),
                 func.sum(Fab.gp).label("gp"),
             )
             .where(Fab.created_at >= cutoff)
-            .group_by(func.date_trunc("week", Fab.created_at))
-            .order_by(func.date_trunc("week", Fab.created_at))
+            .group_by(week_bucket)
+            .order_by(week_bucket)
         )
     ).all()
 
