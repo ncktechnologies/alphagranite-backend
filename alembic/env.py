@@ -35,7 +35,6 @@ from src.app.database.edge import Edge
 from src.app.database.fab_notes import FabNotes
 from src.app.database.fab_type import FabType
 from src.app.database.job_note import JobNote
-# from src.app.database.planning_section import PlanningSection
 from src.app.database.work_station import WorkStation
 from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness
