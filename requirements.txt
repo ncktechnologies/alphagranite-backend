@@ -17,6 +17,7 @@ aiosqlite
 email-validator
 pydantic-settings
 dnspython
+openpyxl
 
 # test
 httpx>=0.25.0
