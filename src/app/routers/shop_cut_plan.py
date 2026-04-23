@@ -1021,7 +1021,7 @@ async def get_shop_cut_plan_timer_state(
     latest = latest_result.scalars().first()
 
     now_ts = datetime.now().replace(second=0, microsecond=0)
-    work_percentage, total_actual_hours, total_actual_seconds = await _recalculate_shop_plan_work_percentage(
+    _, total_actual_hours, total_actual_seconds = await _recalculate_shop_plan_work_percentage(
         db=db,
         plan=plan,
         as_of=now_ts,
@@ -1054,7 +1054,7 @@ async def get_shop_cut_plan_timer_state(
             "total_actual_seconds": total_actual_seconds,
             "total_actual_hours": total_actual_hours,
             "estimated_hours": float(plan.estimated_hours or 0),
-            "work_percentage": work_percentage,
+            "work_percentage": int(plan.work_percentage or 0),
         }
     }
 
