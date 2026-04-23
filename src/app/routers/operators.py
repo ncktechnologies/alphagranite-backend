@@ -275,9 +275,6 @@ def _serialize_operator_workstation_task(
     edge_name = row[9]
     operator_name = f"{operator.first_name} {operator.last_name}".strip() or operator.username
     estimated_hours = float(plan.estimated_hours) if plan.estimated_hours is not None else None
-    computed_work_percentage = float(plan.work_percentage or 0)
-    if estimated_hours and estimated_hours > 0 and total_actual_seconds > 0:
-        computed_work_percentage = round(min(100.0, (float(total_actual_hours or 0.0) / estimated_hours) * 100.0), 1)
 
     return {
         "id": plan.id,
@@ -314,7 +311,7 @@ def _serialize_operator_workstation_task(
         "est_job_comp_date": fab.shop_est_completion_date.date().isoformat() if fab.shop_est_completion_date else None,
         "actual_start_date": plan.actual_start_date.isoformat() if plan.actual_start_date else None,
         "actual_end_date": plan.actual_end_date.isoformat() if plan.actual_end_date else None,
-        "work_percentage": computed_work_percentage,
+        "work_percentage": int(plan.work_percentage or 0),
         "notes": plan.notes,
         "area": fab.input_area,
         "stone_type": stone_type_name,
