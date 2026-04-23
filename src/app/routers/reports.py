@@ -1044,7 +1044,8 @@ async def get_owner_monthly_install_completion_report(
             Fab.no_of_pieces,
             InstallCompletion.total_sqft_installed,
             Fab.revenue,
-            func.coalesce(Fab.cost_of_stone, CostOfStone.total_cost),
+            Fab.cost_of_stone,
+            CostOfStone.total_cost,
             Fab.gp,
         )
         .join(Fab, Fab.id == InstallCompletion.fab_id)
@@ -1066,10 +1067,10 @@ async def get_owner_monthly_install_completion_report(
         "row_count": 0,
     })
 
-    for completion_date, fab_type, fab_id, job_number, pieces, sq_ft, revenue, cost_of_stone, gp in records:
+    for completion_date, fab_type, fab_id, job_number, pieces, sq_ft, revenue, fab_cost_of_stone, cos_total_cost, gp in records:
         sq_ft_value = round(_to_float(sq_ft), 2)
         revenue_value = round(_to_float(revenue), 2)
-        cost_value = round(_to_float(cost_of_stone), 2)
+        cost_value = round(_to_float(fab_cost_of_stone if fab_cost_of_stone is not None else cos_total_cost), 2)
         gp_value = round(_to_float(gp), 2)
         pieces_value = int(_to_float(pieces))
         revenue_per_sqft = round((revenue_value / sq_ft_value), 2) if sq_ft_value else 0.0
@@ -1180,7 +1181,8 @@ async def get_owner_daily_install_completion_report(
             Fab.no_of_pieces,
             InstallCompletion.total_sqft_installed,
             Fab.revenue,
-            func.coalesce(Fab.cost_of_stone, CostOfStone.total_cost),
+            Fab.cost_of_stone,
+            CostOfStone.total_cost,
             Fab.gp,
         )
         .join(Fab, Fab.id == InstallCompletion.fab_id)
@@ -1202,10 +1204,10 @@ async def get_owner_daily_install_completion_report(
         "row_count": 0,
     })
 
-    for completion_date, fab_type, fab_id, job_number, pieces, sq_ft, revenue, cost_of_stone, gp in records:
+    for completion_date, fab_type, fab_id, job_number, pieces, sq_ft, revenue, fab_cost_of_stone, cos_total_cost, gp in records:
         sq_ft_value = round(_to_float(sq_ft), 2)
         revenue_value = round(_to_float(revenue), 2)
-        cost_value = round(_to_float(cost_of_stone), 2)
+        cost_value = round(_to_float(fab_cost_of_stone if fab_cost_of_stone is not None else cos_total_cost), 2)
         gp_value = round(_to_float(gp), 2)
         pieces_value = int(_to_float(pieces))
         revenue_per_sqft = round((revenue_value / sq_ft_value), 2) if sq_ft_value else 0.0
@@ -1311,7 +1313,8 @@ async def get_owner_monthly_cut_completion_report(
             Fab.no_of_pieces,
             Fab.total_sqft,
             Fab.revenue,
-            func.coalesce(Fab.cost_of_stone, CostOfStone.total_cost),
+            Fab.cost_of_stone,
+            CostOfStone.total_cost,
             Fab.gp,
         )
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
@@ -1333,13 +1336,13 @@ async def get_owner_monthly_cut_completion_report(
         "row_count": 0,
     })
 
-    for cut_date, fab_type, fab_id, job_number, pieces, sq_ft, revenue, cost_of_stone, gp in records:
+    for cut_date, fab_type, fab_id, job_number, pieces, sq_ft, revenue, fab_cost_of_stone, cos_total_cost, gp in records:
         if cut_date is None:
             continue
 
         sq_ft_value = round(_to_float(sq_ft), 2)
         revenue_value = round(_to_float(revenue), 2)
-        cost_value = round(_to_float(cost_of_stone), 2)
+        cost_value = round(_to_float(fab_cost_of_stone if fab_cost_of_stone is not None else cos_total_cost), 2)
         gp_value = round(_to_float(gp), 2)
         pieces_value = int(_to_float(pieces))
         revenue_per_sqft = round((revenue_value / sq_ft_value), 2) if sq_ft_value else 0.0
