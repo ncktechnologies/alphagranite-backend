@@ -62,16 +62,134 @@ def _rows_from_mapping(value: dict) -> list[dict]:
     return [{"metric": k, "value": v} for k, v in value.items()]
 
 
-def _report_sections(report_key: str, data: dict) -> list[tuple[str, list[dict]]]:
-    if report_key == "overview":
+def _client_layout_sections(report_key: str, data: dict) -> Optional[list[tuple[str, list[dict]]]]:
+    if report_key == "redo-analysis":
+        period = data.get("period", {})
+        summary = data.get("summary", {})
+        redo_by_stage = data.get("redo_by_stage", [])
+        accounts = data.get("top_accounts_with_redo", [])
+        jobs = data.get("top_jobs_with_redo", [])
+
+        total_redo = sum(int(_to_float(row.get("redo_count", 0))) for row in redo_by_stage) or 0
+        stage_rows = []
+        for row in redo_by_stage:
+            stage_count = int(_to_float(row.get("redo_count", 0)))
+            stage_rows.append(
+                {
+                    "stage": row.get("stage"),
+                    "redo_count": stage_count,
+                    "redo_share_percent": round((stage_count / total_redo) * 100, 2) if total_redo else 0.0,
+                }
+            )
+
+        hotspot_rows = []
+        for idx, row in enumerate(accounts, start=1):
+            hotspot_rows.append(
+                {
+                    "rank": idx,
+                    "category": "Account",
+                    "reference": row.get("account_id"),
+                    "name": row.get("account_name"),
+                    "redo_count": int(_to_float(row.get("redo_count", 0))),
+                    "redo_revenue": round(_to_float(row.get("redo_revenue", 0)), 2),
+                }
+            )
+        for idx, row in enumerate(jobs, start=1):
+            hotspot_rows.append(
+                {
+                    "rank": idx,
+                    "category": "Job",
+                    "reference": row.get("job_number") or row.get("job_id"),
+                    "name": row.get("job_name"),
+                    "redo_count": int(_to_float(row.get("redo_count", 0))),
+                    "redo_revenue": "",
+                }
+            )
+
+        summary_rows = [
+            {
+                "period_start": period.get("start_date"),
+                "period_end": period.get("end_date"),
+                "total_fabs": int(_to_float(summary.get("total_fabs", 0))),
+                "revised_fabs": int(_to_float(summary.get("revised_fabs", 0))),
+                "redo_rate_percent": round(_to_float(summary.get("redo_rate_percent", 0)), 2),
+                "revision_events": int(_to_float(summary.get("revision_events", 0))),
+            }
+        ]
+
         return [
-            ("kpis", [_rows_from_mapping(data.get("kpis", {}))[i] for i in range(len(_rows_from_mapping(data.get("kpis", {}))))]),
+            ("redo_summary", summary_rows),
+            ("redo_by_stage", stage_rows),
+            ("redo_hotspots", hotspot_rows),
+        ]
+
+    if report_key == "shop-status":
+        period = data.get("period", {})
+        stage_rows = []
+        for row in data.get("stage_status", []):
+            fab_count = int(_to_float(row.get("fab_count", 0)))
+            stalled_count = int(_to_float(row.get("stalled_over_14_days", 0)))
+            stage_rows.append(
+                {
+                    "stage": row.get("stage"),
+                    "fab_count": fab_count,
+                    "avg_age_days": round(_to_float(row.get("avg_age_days", 0)), 2),
+                    "max_age_days": round(_to_float(row.get("max_age_days", 0)), 2),
+                    "stalled_over_14_days": stalled_count,
+                    "stalled_rate_percent": round((stalled_count / fab_count) * 100, 2) if fab_count else 0.0,
+                }
+            )
+
+        alerts_rows = []
+        for row in stage_rows:
+            if row["stalled_over_14_days"] <= 0:
+                continue
+            stalled_rate = _to_float(row["stalled_rate_percent"])
+            priority = "high" if stalled_rate >= 30 else "medium" if stalled_rate >= 15 else "low"
+            alerts_rows.append(
+                {
+                    "stage": row["stage"],
+                    "priority": priority,
+                    "stalled_over_14_days": row["stalled_over_14_days"],
+                    "stalled_rate_percent": row["stalled_rate_percent"],
+                }
+            )
+
+        cover_rows = [
+            {
+                "report": "End of Month Shop Status",
+                "period_start": period.get("start_date"),
+                "period_end": period.get("end_date"),
+                "generated_at": datetime.now().isoformat(),
+            }
+        ]
+
+        return [
+            ("report_cover", cover_rows),
+            ("shop_status", stage_rows),
+            ("shop_alerts", alerts_rows),
+        ]
+
+    return None
+
+
+def _report_sections(report_key: str, data: dict, layout: str = "default") -> list[tuple[str, list[dict]]]:
+    if layout == "client":
+        sections = _client_layout_sections(report_key, data)
+        if sections is not None:
+            return sections
+
+    if report_key == "overview":
+        kpi_rows = _rows_from_mapping(data.get("kpis", {}))
+        return [
+            ("kpis", kpi_rows),
             ("stage_breakdown", data.get("stage_breakdown", [])),
         ]
 
     if report_key == "redo-analysis":
+        summary_rows = _rows_from_mapping(data.get("summary", {}))
         return [
-            ("summary", [_rows_from_mapping(data.get("summary", {}))[i] for i in range(len(_rows_from_mapping(data.get("summary", {}))))]),
+            ("summary", summary_rows),
             ("redo_by_stage", data.get("redo_by_stage", [])),
             ("top_accounts_with_redo", data.get("top_accounts_with_redo", [])),
             ("top_jobs_with_redo", data.get("top_jobs_with_redo", [])),
@@ -81,8 +199,9 @@ def _report_sections(report_key: str, data: dict) -> list[tuple[str, list[dict]]
         return [("stage_status", data.get("stage_status", []))]
 
     if report_key == "install-performance":
+        summary_rows = _rows_from_mapping(data.get("summary", {}))
         return [
-            ("summary", [_rows_from_mapping(data.get("summary", {}))[i] for i in range(len(_rows_from_mapping(data.get("summary", {}))))]),
+            ("summary", summary_rows),
             ("installer_breakdown", data.get("installer_breakdown", [])),
         ]
 
@@ -101,8 +220,8 @@ def _report_sections(report_key: str, data: dict) -> list[tuple[str, list[dict]]
     return [("data", [{"payload": json.dumps(data)}])]
 
 
-def _csv_bytes(report_key: str, data: dict) -> bytes:
-    sections = _report_sections(report_key, data)
+def _csv_bytes(report_key: str, data: dict, layout: str = "default") -> bytes:
+    sections = _report_sections(report_key, data, layout=layout)
     buf = io.StringIO()
     writer = csv.writer(buf)
 
@@ -122,10 +241,10 @@ def _csv_bytes(report_key: str, data: dict) -> bytes:
     return buf.getvalue().encode("utf-8")
 
 
-def _xlsx_bytes(report_key: str, data: dict) -> bytes:
+def _xlsx_bytes(report_key: str, data: dict, layout: str = "default") -> bytes:
     from openpyxl import Workbook  # type: ignore[reportMissingImports]
 
-    sections = _report_sections(report_key, data)
+    sections = _report_sections(report_key, data, layout=layout)
     wb = Workbook()
     # Remove the default sheet and create one per section.
     active_sheet = wb.active
@@ -814,6 +933,7 @@ async def get_owner_management_packet(
 async def export_owner_report(
     report_key: str,
     export_format: str = Query("csv", pattern="^(csv|xlsx|json)$"),
+    layout: str = Query("default", pattern="^(default|client)$"),
     start_date: Optional[date] = Query(None),
     end_date: Optional[date] = Query(None),
     weeks: int = Query(12, ge=4, le=52),
@@ -869,14 +989,14 @@ async def export_owner_report(
         )
 
     if export_format == "csv":
-        content = _csv_bytes(key, data)
+        content = _csv_bytes(key, data, layout=layout)
         return StreamingResponse(
             io.BytesIO(content),
             media_type="text/csv",
             headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
 
-    content = _xlsx_bytes(key, data)
+    content = _xlsx_bytes(key, data, layout=layout)
     return StreamingResponse(
         io.BytesIO(content),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
