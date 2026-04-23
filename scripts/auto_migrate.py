@@ -63,6 +63,7 @@ from src.app.database.shop_planning import ShopPlanning
 from src.app.database.planning_section import PlanningSection
 from src.app.database.shop_planning_section import ShopPlanningSection
 from src.app.database.operation_workflow import OperationWorkflow
+from src.app.database.installer_rate_history import InstallerRateHistory
 
 # Configure logging
 logging.basicConfig(

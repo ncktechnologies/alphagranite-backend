@@ -56,6 +56,7 @@ from src.app.routers import shop_cut_plan
 from src.app.routers import job_timers
 from src.app.routers import job_fab_listing
 from src.app.routers import cnc
+from src.app.routers import reports
 
 # Import logging configuration
 from src.app.utils.logger import setup_logging
@@ -278,6 +279,7 @@ app.include_router(install_completion.router, prefix="/api/v1", tags=["Install C
 app.include_router(job_timers.router, prefix="/api/v1", tags=["Job Timers"])
 app.include_router(job_fab_listing.router, prefix="/api/v1", tags=["Job Fab Listing"])
 app.include_router(cnc.router, prefix="/api/v1", tags=["CNC Drafting"])
+app.include_router(reports.router, prefix="/api/v1", tags=["Reports"])
 
 
 
