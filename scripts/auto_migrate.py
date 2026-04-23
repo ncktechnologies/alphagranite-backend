@@ -60,7 +60,7 @@ from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness
 from src.app.database.file import File
 from src.app.database.shop_planning import ShopPlanning
-from src.app.database.planning_section import PlanningSection
+from src.app.interface.generated_schemas import PlanningSection
 from src.app.database.operation_workflow import OperationWorkflow
 from src.app.database.installer_rate_history import InstallerRateHistory
 

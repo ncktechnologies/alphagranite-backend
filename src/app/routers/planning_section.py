@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.database import get_db
-from src.app.database.planning_section import PlanningSection as PlanningSectionSchema
+from src.app.interface.generated_schemas import PlanningSection as PlanningSectionSchema
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import success_response, error_response
 from src.app.database.work_station import WorkStation

@@ -24,7 +24,7 @@ from src.app.interface.business_schemas import (
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.utils.helpers import error_response, success_response
 from src.app.database.work_station import WorkStation
-from src.app.database.planning_section import PlanningSection
+from src.app.interface.generated_schemas import PlanningSection
 from src.app.database.business_job import BusinessJob
 from src.app.database.account import Account
 from src.app.database.shop_cut_plan_timer_session import ShopCutPlanTimerSession
