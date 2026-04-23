@@ -1354,6 +1354,7 @@ class ShopCutPlanUpdate(BaseModel):
     """Schema for updating a shop cut plan (matches POST structure)"""
     status_id: int = Field(default=1, ge=0, le=1)
     notes: Optional[str] = None
+    work_percentage: Optional[int] = Field(default=None, ge=0, le=100)
     stage: ShopCutPlanStageCreate
 
 
@@ -1369,6 +1370,7 @@ class ShopCutPlanTimerActionRequest(BaseModel):
     action: str = Field(description="start, pause, resume, stop")
     note: Optional[str] = None
     timestamp: Optional[datetime] = None
+    work_percentage: Optional[int] = Field(default=None, ge=0, le=100)
 
 
 class ShopCutPlanTimerEventResponse(BaseModel):

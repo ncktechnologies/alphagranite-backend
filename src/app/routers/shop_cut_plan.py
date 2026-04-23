@@ -536,6 +536,8 @@ async def update_shop_plan(
         plan.estimated_hours = stage.estimated_hours
         plan.scheduled_start_date = scheduled_start
         plan.notes = update_data.notes
+        if update_data.work_percentage is not None:
+            plan.work_percentage = int(update_data.work_percentage)
         plan.updated_at = datetime.now()
         plan.updated_by = current_user.id
 
@@ -789,6 +791,13 @@ async def manage_shop_cut_plan_timer(
         if action not in {"start", "pause", "resume", "stop"}:
             raise HTTPException(status_code=400, detail="action must be one of: start, pause, resume, stop")
 
+        requested_work_percentage = payload.work_percentage
+        if action in {"pause", "stop"} and requested_work_percentage is None:
+            raise HTTPException(
+                status_code=400,
+                detail="work_percentage is required when action is pause or stop",
+            )
+
         action_ts = _normalize_naive_dt(payload.timestamp) if payload.timestamp else datetime.now().replace(second=0, microsecond=0)
 
         plan_result = await db.execute(select(ShopCutPlan).where(ShopCutPlan.id == plan_id))
@@ -932,11 +941,16 @@ async def manage_shop_cut_plan_timer(
 
             plan.actual_end_date = action_ts
 
-        work_percentage, total_actual_hours, total_actual_seconds = await _recalculate_shop_plan_work_percentage(
+        computed_work_percentage, total_actual_hours, total_actual_seconds = await _recalculate_shop_plan_work_percentage(
             db=db,
             plan=plan,
             as_of=action_ts,
         )
+
+        if action in {"pause", "stop"}:
+            work_percentage = int(requested_work_percentage)
+        else:
+            work_percentage = computed_work_percentage
 
         target_session = session if action == "start" else active_session
         if target_session:
