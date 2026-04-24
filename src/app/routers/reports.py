@@ -21,7 +21,7 @@ from src.app.database.fab import Fab
 from src.app.database.installer_rate_history import InstallerRateHistory
 from src.app.database.installer_job_timer_session import InstallerJobTimerSession
 from src.app.database.user import User
-from src.app.interface.generated_schemas import InstallCompletion, Revision
+from src.app.interface.generated_schemas import CostOfStone, CutList, InstallCompletion, Revision, Templating
 from src.app.interface.response_wrappers import SuccessResponse, success_response
 from src.app.middleware.jwt_auth import get_current_user
 
@@ -42,6 +42,21 @@ def _range_bounds(start_date: Optional[date], end_date: Optional[date]) -> tuple
     return start_dt, end_dt
 
 
+def _month_bounds(year: int, month: int) -> tuple[datetime, datetime]:
+    start_dt = datetime(year, month, 1)
+    if month == 12:
+        end_dt = datetime(year + 1, 1, 1) - timedelta(microseconds=1)
+    else:
+        end_dt = datetime(year, month + 1, 1) - timedelta(microseconds=1)
+    return start_dt, end_dt
+
+
+def _days_between(start_value: Optional[datetime], end_value: Optional[datetime]) -> Optional[int]:
+    if start_value is None or end_value is None:
+        return None
+    return max((end_value.date() - start_value.date()).days, 0)
+
+
 def _apply_datetime_filters(filters: list, field, start_dt: Optional[datetime], end_dt: Optional[datetime]) -> None:
     if start_dt is not None:
         filters.append(field >= start_dt)
@@ -60,6 +75,23 @@ def _to_float(value) -> float:
 
 def _rows_from_mapping(value: dict) -> list[dict]:
     return [{"metric": k, "value": v} for k, v in value.items()]
+
+
+def _format_duration_hhmm(total_seconds: int) -> str:
+    safe_seconds = max(int(total_seconds or 0), 0)
+    hours = safe_seconds // 3600
+    minutes = (safe_seconds % 3600) // 60
+    return f"{hours:02d}:{minutes:02d}"
+
+
+def _notes_to_text(value) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        joined = " | ".join(str(item).strip() for item in value if str(item).strip())
+        return joined or None
+    text = str(value).strip()
+    return text or None
 
 
 def _client_layout_sections(report_key: str, data: dict) -> Optional[list[tuple[str, list[dict]]]]:
@@ -203,6 +235,44 @@ def _report_sections(report_key: str, data: dict, layout: str = "default") -> li
         return [
             ("summary", summary_rows),
             ("installer_breakdown", data.get("installer_breakdown", [])),
+        ]
+
+    if report_key == "installation-template":
+        summary_rows = _rows_from_mapping(data.get("summary", {}))
+        return [
+            ("summary", summary_rows),
+            ("installation_template_rows", data.get("rows", [])),
+        ]
+
+    if report_key == "monthly-install-completion":
+        summary_rows = _rows_from_mapping(data.get("summary", {}))
+        return [
+            ("summary", summary_rows),
+            ("daily_totals", data.get("daily_totals", [])),
+            ("rows", data.get("rows", [])),
+        ]
+
+    if report_key == "daily-install-completion":
+        summary_rows = _rows_from_mapping(data.get("summary", {}))
+        return [
+            ("summary", summary_rows),
+            ("daily_totals", data.get("daily_totals", [])),
+            ("rows", data.get("rows", [])),
+        ]
+
+    if report_key == "monthly-cut-completion":
+        summary_rows = _rows_from_mapping(data.get("summary", {}))
+        return [
+            ("summary", summary_rows),
+            ("daily_totals", data.get("daily_totals", [])),
+            ("rows", data.get("rows", [])),
+        ]
+
+    if report_key == "turnaround-times":
+        stats_rows = _rows_from_mapping(data.get("summary", {}))
+        return [
+            ("summary", stats_rows),
+            ("rows", data.get("rows", [])),
         ]
 
     if report_key == "weekly-trends":
@@ -777,6 +847,730 @@ async def get_owner_weekly_trends_report(
     )
 
 
+@router.get("/reports/owner/installation-template", response_model=SuccessResponse[dict])
+async def get_owner_installation_template_report(
+    start_date: Optional[date] = Query(None, description="Inclusive start date filter"),
+    end_date: Optional[date] = Query(None, description="Inclusive end date filter"),
+    activity: str = Query("both", pattern="^(both|installation|template)$"),
+    limit: int = Query(250, ge=1, le=2000),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Combined Installation and Template report for table-based owner view."""
+    start_dt, end_dt = _range_bounds(start_date, end_date)
+    rows: list[dict] = []
+    installer_ids: set[int] = set()
+
+    if activity in ("both", "installation"):
+        install_filters = []
+        _apply_datetime_filters(install_filters, InstallCompletion.completion_date, start_dt, end_dt)
+
+        install_query = (
+            select(
+                InstallCompletion.installer_id,
+                InstallCompletion.fab_id,
+                InstallCompletion.total_sqft_installed,
+                InstallCompletion.is_completed,
+                InstallCompletion.completion_notes,
+                InstallCompletion.completion_date,
+                BusinessJob.name,
+                BusinessJob.sq_ft,
+                func.coalesce(func.sum(InstallerJobTimerSession.total_work_seconds), 0).label("work_seconds"),
+            )
+            .join(Fab, Fab.id == InstallCompletion.fab_id, isouter=True)
+            .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+            .join(
+                InstallerJobTimerSession,
+                and_(
+                    InstallerJobTimerSession.fab_id == InstallCompletion.fab_id,
+                    InstallerJobTimerSession.installer_id == InstallCompletion.installer_id,
+                ),
+                isouter=True,
+            )
+            .group_by(
+                InstallCompletion.installer_id,
+                InstallCompletion.fab_id,
+                InstallCompletion.total_sqft_installed,
+                InstallCompletion.is_completed,
+                InstallCompletion.completion_notes,
+                InstallCompletion.completion_date,
+                BusinessJob.name,
+                BusinessJob.sq_ft,
+            )
+            .order_by(InstallCompletion.completion_date.desc())
+        )
+        if install_filters:
+            install_query = install_query.where(and_(*install_filters))
+
+        install_rows = (await db.execute(install_query)).all()
+
+        for installer_id, _fab_id, sqft_installed_raw, is_completed, completion_notes, completed_at, job_name, job_sqft, work_seconds in install_rows:
+            installed_sqft = round(_to_float(sqft_installed_raw), 2)
+            target_sqft = _to_float(job_sqft)
+            incomplete_sqft = round(max(target_sqft - installed_sqft, 0.0), 2) if target_sqft > 0 else 0.0
+            work_seconds_int = int(_to_float(work_seconds))
+
+            if installer_id is not None:
+                installer_ids.add(installer_id)
+
+            rows.append(
+                {
+                    "activity_type": "Installation",
+                    "activity_date": completed_at.isoformat() if completed_at else None,
+                    "installer_id": installer_id,
+                    "installer": None,
+                    "installer_hours": round(work_seconds_int / 3600, 2),
+                    "job_name": job_name or "Unknown Job",
+                    "activity_complete": bool(is_completed),
+                    "time_duration": _format_duration_hhmm(work_seconds_int),
+                    "sq_ft_installed": installed_sqft,
+                    "sq_ft_incomplete": incomplete_sqft,
+                    "reason_if_not_complete": None if bool(is_completed) else (_notes_to_text(completion_notes) or "Not marked complete"),
+                }
+            )
+
+    if activity in ("both", "template"):
+        template_activity_date = func.coalesce(Templating.actual_end_date, Templating.actual_start_date, Templating.created_at)
+        template_filters = []
+        _apply_datetime_filters(template_filters, template_activity_date, start_dt, end_dt)
+
+        template_query = (
+            select(
+                Templating.technician_id,
+                Templating.total_sqft,
+                Templating.is_completed,
+                Templating.duration,
+                Templating.notes,
+                template_activity_date.label("activity_date"),
+                BusinessJob.name,
+            )
+            .join(Fab, Fab.id == Templating.fab_id, isouter=True)
+            .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+            .order_by(template_activity_date.desc())
+        )
+        if template_filters:
+            template_query = template_query.where(and_(*template_filters))
+
+        template_rows = (await db.execute(template_query)).all()
+
+        for technician_id, total_sqft_raw, is_completed, duration_minutes, notes, activity_date_value, job_name in template_rows:
+            total_sqft = round(_to_float(total_sqft_raw), 2)
+            is_done = bool(is_completed)
+            duration_seconds = int(_to_float(duration_minutes) * 60)
+
+            if technician_id is not None:
+                installer_ids.add(technician_id)
+
+            rows.append(
+                {
+                    "activity_type": "Template",
+                    "activity_date": activity_date_value.isoformat() if activity_date_value else None,
+                    "installer_id": technician_id,
+                    "installer": None,
+                    "installer_hours": round(duration_seconds / 3600, 2),
+                    "job_name": job_name or "Unknown Job",
+                    "activity_complete": is_done,
+                    "time_duration": _format_duration_hhmm(duration_seconds),
+                    "sq_ft_installed": total_sqft if is_done else 0.0,
+                    "sq_ft_incomplete": 0.0 if is_done else total_sqft,
+                    "reason_if_not_complete": None if is_done else (_notes_to_text(notes) or "Not marked complete"),
+                }
+            )
+
+    name_map: dict[int, str] = {}
+    if installer_ids:
+        user_rows = (
+            await db.execute(
+                select(User.id, User.first_name, User.last_name).where(User.id.in_(list(installer_ids)))
+            )
+        ).all()
+        name_map = {
+            row[0]: (f"{(row[1] or '').strip()} {(row[2] or '').strip()}".strip() or f"User {row[0]}")
+            for row in user_rows
+        }
+
+    for row in rows:
+        installer_id = row.get("installer_id")
+        row["installer"] = name_map.get(installer_id, f"User {installer_id}" if installer_id else "Unknown")
+
+    rows.sort(key=lambda item: item.get("activity_date") or "", reverse=True)
+    rows = rows[:limit]
+
+    return success_response(
+        {
+            "title": "Installation and Template Report",
+            "period": {
+                "start_date": start_date.isoformat() if start_date else None,
+                "end_date": end_date.isoformat() if end_date else None,
+            },
+            "columns": [
+                "installer",
+                "installer_hours",
+                "job_name",
+                "activity_complete",
+                "time_duration",
+                "sq_ft_installed",
+                "sq_ft_incomplete",
+                "reason_if_not_complete",
+            ],
+            "summary": {
+                "row_count": len(rows),
+                "total_installer_hours": round(sum(_to_float(r.get("installer_hours", 0.0)) for r in rows), 2),
+                "total_sq_ft_installed": round(sum(_to_float(r.get("sq_ft_installed", 0.0)) for r in rows), 2),
+                "total_sq_ft_incomplete": round(sum(_to_float(r.get("sq_ft_incomplete", 0.0)) for r in rows), 2),
+            },
+            "rows": rows,
+        },
+        "Owner installation and template report generated",
+    )
+
+
+@router.get("/reports/owner/monthly-install-completion", response_model=SuccessResponse[dict])
+async def get_owner_monthly_install_completion_report(
+    year: int = Query(..., ge=2000, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Monthly install completion report modeled after legacy spreadsheet format."""
+    start_dt, end_dt = _month_bounds(year, month)
+
+    query = (
+        select(
+            InstallCompletion.completion_date,
+            Fab.fab_type,
+            Fab.id,
+            BusinessJob.job_number,
+            Fab.no_of_pieces,
+            InstallCompletion.total_sqft_installed,
+            Fab.revenue,
+            Fab.cost_of_stone,
+            CostOfStone.total_cost,
+            Fab.gp,
+        )
+        .join(Fab, Fab.id == InstallCompletion.fab_id)
+        .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .join(CostOfStone, CostOfStone.id == Fab.cost_of_stone_id, isouter=True)
+        .where(InstallCompletion.completion_date >= start_dt, InstallCompletion.completion_date <= end_dt)
+        .order_by(InstallCompletion.completion_date.asc(), Fab.id.asc())
+    )
+
+    records = (await db.execute(query)).all()
+
+    rows = []
+    daily_rollup: dict[str, dict] = defaultdict(lambda: {
+        "pieces": 0,
+        "sq_ft": 0.0,
+        "revenue": 0.0,
+        "cost_of_stone": 0.0,
+        "gp": 0.0,
+        "row_count": 0,
+    })
+
+    for completion_date, fab_type, fab_id, job_number, pieces, sq_ft, revenue, fab_cost_of_stone, cos_total_cost, gp in records:
+        sq_ft_value = round(_to_float(sq_ft), 2)
+        revenue_value = round(_to_float(revenue), 2)
+        cost_value = round(_to_float(fab_cost_of_stone if fab_cost_of_stone is not None else cos_total_cost), 2)
+        gp_value = round(_to_float(gp), 2)
+        pieces_value = int(_to_float(pieces))
+        revenue_per_sqft = round((revenue_value / sq_ft_value), 2) if sq_ft_value else 0.0
+        day_key = completion_date.date().isoformat()
+
+        daily_rollup[day_key]["pieces"] += pieces_value
+        daily_rollup[day_key]["sq_ft"] += sq_ft_value
+        daily_rollup[day_key]["revenue"] += revenue_value
+        daily_rollup[day_key]["cost_of_stone"] += cost_value
+        daily_rollup[day_key]["gp"] += gp_value
+        daily_rollup[day_key]["row_count"] += 1
+
+        rows.append(
+            {
+                "install_date": day_key,
+                "fab_type": fab_type,
+                "fab_id": fab_id,
+                "job_number": job_number,
+                "pieces": pieces_value,
+                "sq_ft": sq_ft_value,
+                "revenue": revenue_value,
+                "revenue_per_sq_ft": revenue_per_sqft,
+                "cost_of_stone": cost_value,
+                "gp": gp_value,
+            }
+        )
+
+    daily_totals = []
+    for day_key in sorted(daily_rollup.keys()):
+        item = daily_rollup[day_key]
+        day_sqft = round(item["sq_ft"], 2)
+        day_revenue = round(item["revenue"], 2)
+        daily_totals.append(
+            {
+                "install_date": day_key,
+                "pieces": int(item["pieces"]),
+                "sq_ft": day_sqft,
+                "revenue": day_revenue,
+                "revenue_per_sq_ft": round((day_revenue / day_sqft), 2) if day_sqft else 0.0,
+                "cost_of_stone": round(item["cost_of_stone"], 2),
+                "gp": round(item["gp"], 2),
+                "row_count": int(item["row_count"]),
+            }
+        )
+
+    total_sqft = round(sum(item["sq_ft"] for item in daily_rollup.values()), 2)
+    total_revenue = round(sum(item["revenue"] for item in daily_rollup.values()), 2)
+    total_cost = round(sum(item["cost_of_stone"] for item in daily_rollup.values()), 2)
+    total_gp = round(sum(item["gp"] for item in daily_rollup.values()), 2)
+
+    return success_response(
+        {
+            "title": "Monthly Install Completion",
+            "year": year,
+            "month": month,
+            "columns": [
+                "install_date",
+                "fab_type",
+                "fab_id",
+                "job_number",
+                "pieces",
+                "sq_ft",
+                "revenue",
+                "revenue_per_sq_ft",
+                "cost_of_stone",
+                "gp",
+            ],
+            "summary": {
+                "pieces": int(sum(item["pieces"] for item in daily_rollup.values())),
+                "sq_ft": total_sqft,
+                "revenue": total_revenue,
+                "revenue_per_sq_ft": round((total_revenue / total_sqft), 2) if total_sqft else 0.0,
+                "cost_of_stone": total_cost,
+                "gp": total_gp,
+                "row_count": len(rows),
+            },
+            "daily_totals": daily_totals,
+            "rows": rows,
+        },
+        "Owner monthly install completion report generated",
+    )
+
+
+@router.get("/reports/owner/daily-install-completion", response_model=SuccessResponse[dict])
+async def get_owner_daily_install_completion_report(
+    start_date: Optional[date] = Query(None, description="Inclusive start date filter"),
+    end_date: Optional[date] = Query(None, description="Inclusive end date filter"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Daily install completion report across a date range, grouped by install date."""
+    if start_date is None and end_date is None:
+        end_date = date.today()
+        start_date = end_date - timedelta(days=30)
+    elif start_date is None and end_date is not None:
+        start_date = end_date
+    elif start_date is not None and end_date is None:
+        end_date = start_date
+
+    start_dt, end_dt = _range_bounds(start_date, end_date)
+
+    query = (
+        select(
+            InstallCompletion.completion_date,
+            Fab.fab_type,
+            Fab.id,
+            BusinessJob.job_number,
+            Fab.no_of_pieces,
+            InstallCompletion.total_sqft_installed,
+            Fab.revenue,
+            Fab.cost_of_stone,
+            CostOfStone.total_cost,
+            Fab.gp,
+        )
+        .join(Fab, Fab.id == InstallCompletion.fab_id)
+        .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .join(CostOfStone, CostOfStone.id == Fab.cost_of_stone_id, isouter=True)
+        .where(InstallCompletion.completion_date >= start_dt, InstallCompletion.completion_date <= end_dt)
+        .order_by(InstallCompletion.completion_date.asc(), Fab.id.asc())
+    )
+
+    records = (await db.execute(query)).all()
+
+    rows = []
+    daily_rollup: dict[str, dict] = defaultdict(lambda: {
+        "pieces": 0,
+        "sq_ft": 0.0,
+        "revenue": 0.0,
+        "cost_of_stone": 0.0,
+        "gp": 0.0,
+        "row_count": 0,
+    })
+
+    for completion_date, fab_type, fab_id, job_number, pieces, sq_ft, revenue, fab_cost_of_stone, cos_total_cost, gp in records:
+        sq_ft_value = round(_to_float(sq_ft), 2)
+        revenue_value = round(_to_float(revenue), 2)
+        cost_value = round(_to_float(fab_cost_of_stone if fab_cost_of_stone is not None else cos_total_cost), 2)
+        gp_value = round(_to_float(gp), 2)
+        pieces_value = int(_to_float(pieces))
+        revenue_per_sqft = round((revenue_value / sq_ft_value), 2) if sq_ft_value else 0.0
+        day_key = completion_date.date().isoformat()
+
+        daily_rollup[day_key]["pieces"] += pieces_value
+        daily_rollup[day_key]["sq_ft"] += sq_ft_value
+        daily_rollup[day_key]["revenue"] += revenue_value
+        daily_rollup[day_key]["cost_of_stone"] += cost_value
+        daily_rollup[day_key]["gp"] += gp_value
+        daily_rollup[day_key]["row_count"] += 1
+
+        rows.append(
+            {
+                "install_date": day_key,
+                "fab_type": fab_type,
+                "fab_id": fab_id,
+                "job_number": job_number,
+                "pieces": pieces_value,
+                "sq_ft": sq_ft_value,
+                "revenue": revenue_value,
+                "revenue_per_sq_ft": revenue_per_sqft,
+                "cost_of_stone": cost_value,
+                "gp": gp_value,
+            }
+        )
+
+    daily_totals = []
+    for day_key in sorted(daily_rollup.keys()):
+        item = daily_rollup[day_key]
+        day_sqft = round(item["sq_ft"], 2)
+        day_revenue = round(item["revenue"], 2)
+        daily_totals.append(
+            {
+                "install_date": day_key,
+                "pieces": int(item["pieces"]),
+                "sq_ft": day_sqft,
+                "revenue": day_revenue,
+                "revenue_per_sq_ft": round((day_revenue / day_sqft), 2) if day_sqft else 0.0,
+                "cost_of_stone": round(item["cost_of_stone"], 2),
+                "gp": round(item["gp"], 2),
+                "row_count": int(item["row_count"]),
+            }
+        )
+
+    total_sqft = round(sum(item["sq_ft"] for item in daily_rollup.values()), 2)
+    total_revenue = round(sum(item["revenue"] for item in daily_rollup.values()), 2)
+    total_cost = round(sum(item["cost_of_stone"] for item in daily_rollup.values()), 2)
+    total_gp = round(sum(item["gp"] for item in daily_rollup.values()), 2)
+
+    return success_response(
+        {
+            "title": "Daily Install Completion",
+            "period": {
+                "start_date": start_date.isoformat() if start_date else None,
+                "end_date": end_date.isoformat() if end_date else None,
+            },
+            "columns": [
+                "install_date",
+                "fab_type",
+                "fab_id",
+                "job_number",
+                "pieces",
+                "sq_ft",
+                "revenue",
+                "revenue_per_sq_ft",
+                "cost_of_stone",
+                "gp",
+            ],
+            "summary": {
+                "pieces": int(sum(item["pieces"] for item in daily_rollup.values())),
+                "sq_ft": total_sqft,
+                "revenue": total_revenue,
+                "revenue_per_sq_ft": round((total_revenue / total_sqft), 2) if total_sqft else 0.0,
+                "cost_of_stone": total_cost,
+                "gp": total_gp,
+                "row_count": len(rows),
+            },
+            "daily_totals": daily_totals,
+            "rows": rows,
+        },
+        "Owner daily install completion report generated",
+    )
+
+
+@router.get("/reports/owner/monthly-cut-completion", response_model=SuccessResponse[dict])
+async def get_owner_monthly_cut_completion_report(
+    year: int = Query(..., ge=2000, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Monthly cut completion report modeled after legacy spreadsheet format."""
+    start_dt, end_dt = _month_bounds(year, month)
+    cut_date_expr = func.coalesce(Fab.shop_date_schedule, Fab.final_programming_completed_date)
+
+    query = (
+        select(
+            cut_date_expr.label("cut_date"),
+            Fab.fab_type,
+            Fab.id,
+            BusinessJob.job_number,
+            Fab.no_of_pieces,
+            Fab.total_sqft,
+            Fab.revenue,
+            Fab.cost_of_stone,
+            CostOfStone.total_cost,
+            Fab.gp,
+        )
+        .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .join(CostOfStone, CostOfStone.id == Fab.cost_of_stone_id, isouter=True)
+        .join(CutList, CutList.fab_id == Fab.id, isouter=True)
+        .where(cut_date_expr >= start_dt, cut_date_expr <= end_dt)
+        .order_by(cut_date_expr.asc(), Fab.id.asc())
+    )
+
+    records = (await db.execute(query)).all()
+
+    rows = []
+    daily_rollup: dict[str, dict] = defaultdict(lambda: {
+        "pieces": 0,
+        "sq_ft": 0.0,
+        "revenue": 0.0,
+        "cost_of_stone": 0.0,
+        "gp": 0.0,
+        "row_count": 0,
+    })
+
+    for cut_date, fab_type, fab_id, job_number, pieces, sq_ft, revenue, fab_cost_of_stone, cos_total_cost, gp in records:
+        if cut_date is None:
+            continue
+
+        sq_ft_value = round(_to_float(sq_ft), 2)
+        revenue_value = round(_to_float(revenue), 2)
+        cost_value = round(_to_float(fab_cost_of_stone if fab_cost_of_stone is not None else cos_total_cost), 2)
+        gp_value = round(_to_float(gp), 2)
+        pieces_value = int(_to_float(pieces))
+        revenue_per_sqft = round((revenue_value / sq_ft_value), 2) if sq_ft_value else 0.0
+        day_key = cut_date.date().isoformat()
+
+        daily_rollup[day_key]["pieces"] += pieces_value
+        daily_rollup[day_key]["sq_ft"] += sq_ft_value
+        daily_rollup[day_key]["revenue"] += revenue_value
+        daily_rollup[day_key]["cost_of_stone"] += cost_value
+        daily_rollup[day_key]["gp"] += gp_value
+        daily_rollup[day_key]["row_count"] += 1
+
+        rows.append(
+            {
+                "cut_date": day_key,
+                "fab_type": fab_type,
+                "fab_id": fab_id,
+                "job_number": job_number,
+                "pieces": pieces_value,
+                "sq_ft": sq_ft_value,
+                "revenue": revenue_value,
+                "revenue_per_sq_ft": revenue_per_sqft,
+                "cost_of_stone": cost_value,
+                "gp": gp_value,
+            }
+        )
+
+    daily_totals = []
+    for day_key in sorted(daily_rollup.keys()):
+        item = daily_rollup[day_key]
+        day_sqft = round(item["sq_ft"], 2)
+        day_revenue = round(item["revenue"], 2)
+        daily_totals.append(
+            {
+                "cut_date": day_key,
+                "pieces": int(item["pieces"]),
+                "sq_ft": day_sqft,
+                "revenue": day_revenue,
+                "revenue_per_sq_ft": round((day_revenue / day_sqft), 2) if day_sqft else 0.0,
+                "cost_of_stone": round(item["cost_of_stone"], 2),
+                "gp": round(item["gp"], 2),
+                "row_count": int(item["row_count"]),
+            }
+        )
+
+    total_sqft = round(sum(item["sq_ft"] for item in daily_rollup.values()), 2)
+    total_revenue = round(sum(item["revenue"] for item in daily_rollup.values()), 2)
+    total_cost = round(sum(item["cost_of_stone"] for item in daily_rollup.values()), 2)
+    total_gp = round(sum(item["gp"] for item in daily_rollup.values()), 2)
+
+    return success_response(
+        {
+            "title": "Monthly Cut Completion",
+            "year": year,
+            "month": month,
+            "columns": [
+                "cut_date",
+                "fab_type",
+                "fab_id",
+                "job_number",
+                "pieces",
+                "sq_ft",
+                "revenue",
+                "revenue_per_sq_ft",
+                "cost_of_stone",
+                "gp",
+            ],
+            "summary": {
+                "pieces": int(sum(item["pieces"] for item in daily_rollup.values())),
+                "sq_ft": total_sqft,
+                "revenue": total_revenue,
+                "revenue_per_sq_ft": round((total_revenue / total_sqft), 2) if total_sqft else 0.0,
+                "cost_of_stone": total_cost,
+                "gp": total_gp,
+                "row_count": len(rows),
+            },
+            "daily_totals": daily_totals,
+            "rows": rows,
+        },
+        "Owner monthly cut completion report generated",
+    )
+
+
+@router.get("/reports/owner/turnaround-times", response_model=SuccessResponse[dict])
+async def get_owner_turnaround_times_report(
+    year: int = Query(..., ge=2000, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    limit: int = Query(2000, ge=1, le=10000),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Turnaround-times report aligned to template/predraft/draft/sct/final-prog/cut/fab-complete milestones."""
+    start_dt, end_dt = _month_bounds(year, month)
+
+    install_subquery = (
+        select(
+            InstallCompletion.fab_id.label("fab_id"),
+            func.max(InstallCompletion.completion_date).label("fab_complete_date"),
+        )
+        .group_by(InstallCompletion.fab_id)
+        .subquery()
+    )
+
+    query = (
+        select(
+            Fab.id,
+            BusinessJob.job_number,
+            Fab.no_of_pieces,
+            Fab.total_sqft,
+            Fab.template_completed_date,
+            Fab.predraft_completed_date,
+            Fab.draft_completed_date,
+            func.coalesce(Fab.sales_ct_completed_date, Fab.sct_completed_date).label("sct_date"),
+            Fab.final_programming_completed_date,
+            Fab.shop_date_schedule,
+            install_subquery.c.fab_complete_date,
+        )
+        .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .join(install_subquery, install_subquery.c.fab_id == Fab.id, isouter=True)
+        .where(
+            install_subquery.c.fab_complete_date.is_not(None),
+            install_subquery.c.fab_complete_date >= start_dt,
+            install_subquery.c.fab_complete_date <= end_dt,
+        )
+        .order_by(install_subquery.c.fab_complete_date.desc(), Fab.id.asc())
+        .limit(limit)
+    )
+
+    records = (await db.execute(query)).all()
+    rows = []
+
+    pd_days_values: list[int] = []
+    draft_days_values: list[int] = []
+    sct_days_values: list[int] = []
+    fp_days_values: list[int] = []
+    cut_days_values: list[int] = []
+    fab_days_values: list[int] = []
+    total_days_values: list[int] = []
+
+    for (
+        fab_id,
+        job_number,
+        pieces,
+        total_sqft,
+        template_date,
+        predraft_date,
+        draft_date,
+        sct_date,
+        final_prog_date,
+        cut_date,
+        fab_complete_date,
+    ) in records:
+        predraft_days = _days_between(template_date, predraft_date)
+        draft_days = _days_between(predraft_date or template_date, draft_date)
+        sct_days = _days_between(draft_date, sct_date)
+        final_prog_days = _days_between(sct_date, final_prog_date)
+        cut_days = _days_between(final_prog_date, cut_date)
+        fab_days = _days_between(cut_date, fab_complete_date)
+        total_days = _days_between(template_date, fab_complete_date)
+
+        if predraft_days is not None:
+            pd_days_values.append(predraft_days)
+        if draft_days is not None:
+            draft_days_values.append(draft_days)
+        if sct_days is not None:
+            sct_days_values.append(sct_days)
+        if final_prog_days is not None:
+            fp_days_values.append(final_prog_days)
+        if cut_days is not None:
+            cut_days_values.append(cut_days)
+        if fab_days is not None:
+            fab_days_values.append(fab_days)
+        if total_days is not None:
+            total_days_values.append(total_days)
+
+        rows.append(
+            {
+                "fab_id": fab_id,
+                "job_number": job_number,
+                "pieces": int(_to_float(pieces)),
+                "total_sq_ft": round(_to_float(total_sqft), 2),
+                "template_date": template_date.isoformat() if template_date else None,
+                "predraft_date": predraft_date.isoformat() if predraft_date else None,
+                "predraft_days": predraft_days,
+                "draft_date": draft_date.isoformat() if draft_date else None,
+                "draft_days": draft_days,
+                "sct_date": sct_date.isoformat() if sct_date else None,
+                "sct_days": sct_days,
+                "final_prog_date": final_prog_date.isoformat() if final_prog_date else None,
+                "final_prog_days": final_prog_days,
+                "cut_date": cut_date.isoformat() if cut_date else None,
+                "cut_days": cut_days,
+                "fab_complete_date": fab_complete_date.isoformat() if fab_complete_date else None,
+                "fab_days": fab_days,
+                "total_days": total_days,
+            }
+        )
+
+    def _stats(values: list[int]) -> dict:
+        if not values:
+            return {"min": None, "max": None, "avg": None}
+        return {
+            "min": min(values),
+            "max": max(values),
+            "avg": round(sum(values) / len(values), 2),
+        }
+
+    return success_response(
+        {
+            "title": "Turnaround Times Report",
+            "year": year,
+            "month": month,
+            "summary": {
+                "predraft_days": _stats(pd_days_values),
+                "draft_days": _stats(draft_days_values),
+                "sct_days": _stats(sct_days_values),
+                "final_prog_days": _stats(fp_days_values),
+                "cut_days": _stats(cut_days_values),
+                "fab_days": _stats(fab_days_values),
+                "total_days": _stats(total_days_values),
+                "row_count": len(rows),
+            },
+            "rows": rows,
+        },
+        "Owner turnaround times report generated",
+    )
+
+
 @router.get("/reports/owner/installer-rates", response_model=SuccessResponse[list[dict]])
 async def get_installer_rates(
     installer_id: Optional[int] = Query(None, gt=0),
@@ -939,6 +1733,8 @@ async def export_owner_report(
     end_date: Optional[date] = Query(None),
     weeks: int = Query(12, ge=4, le=52),
     top_n: int = Query(10, ge=1, le=50),
+    year: Optional[int] = Query(None, ge=2000, le=2100),
+    month: Optional[int] = Query(None, ge=1, le=12),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -959,6 +1755,32 @@ async def export_owner_report(
     elif key == "install-performance":
         data = _unwrap_success_data(
             await get_owner_install_performance_report(start_date=start_date, end_date=end_date, top_n=top_n, db=db, current_user=current_user)
+        )
+    elif key == "installation-template":
+        data = _unwrap_success_data(
+            await get_owner_installation_template_report(start_date=start_date, end_date=end_date, db=db, current_user=current_user)
+        )
+    elif key == "monthly-install-completion":
+        if year is None or month is None:
+            return success_response(None, "year and month are required for monthly-install-completion", status_code=400)
+        data = _unwrap_success_data(
+            await get_owner_monthly_install_completion_report(year=year, month=month, db=db, current_user=current_user)
+        )
+    elif key == "daily-install-completion":
+        data = _unwrap_success_data(
+            await get_owner_daily_install_completion_report(start_date=start_date, end_date=end_date, db=db, current_user=current_user)
+        )
+    elif key == "monthly-cut-completion":
+        if year is None or month is None:
+            return success_response(None, "year and month are required for monthly-cut-completion", status_code=400)
+        data = _unwrap_success_data(
+            await get_owner_monthly_cut_completion_report(year=year, month=month, db=db, current_user=current_user)
+        )
+    elif key == "turnaround-times":
+        if year is None or month is None:
+            return success_response(None, "year and month are required for turnaround-times", status_code=400)
+        data = _unwrap_success_data(
+            await get_owner_turnaround_times_report(year=year, month=month, db=db, current_user=current_user)
         )
     elif key == "weekly-trends":
         data = _unwrap_success_data(

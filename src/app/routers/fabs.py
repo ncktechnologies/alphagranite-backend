@@ -10,7 +10,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from src.app.database.shop_cut_plan import ShopCutPlan
 from src.app.database.work_station import WorkStation
-from src.app.database.planning_section import PlanningSection
+from src.app.interface.generated_schemas import PlanningSection
 from collections import defaultdict
 import os
 

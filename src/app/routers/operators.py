@@ -16,7 +16,7 @@ from src.app.database.file import File
 from src.app.database.fab import Fab
 from src.app.database.operator_job_timer_event import OperatorJobTimerEvent
 from src.app.database.operator_job_timer_session import OperatorJobTimerSession
-from src.app.database.planning_section import PlanningSection
+from src.app.interface.generated_schemas import PlanningSection
 from src.app.database.shop_cut_plan import ShopCutPlan
 from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness

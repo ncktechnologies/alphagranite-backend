@@ -12,7 +12,7 @@ from src.app.utils.helpers import success_response, error_response
 from src.app.middleware.jwt_auth import get_current_user
 from sqlalchemy import func
 from pydantic import BaseModel
-from src.app.database.planning_section import PlanningSection
+from src.app.interface.generated_schemas import PlanningSection
 
 router = APIRouter(
     prefix="/workstation",

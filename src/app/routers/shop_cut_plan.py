@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Body, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Body, Query
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, and_, or_, cast, String
@@ -24,7 +24,7 @@ from src.app.interface.business_schemas import (
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.utils.helpers import error_response, success_response
 from src.app.database.work_station import WorkStation
-from src.app.database.planning_section import PlanningSection
+from src.app.interface.generated_schemas import PlanningSection
 from src.app.database.business_job import BusinessJob
 from src.app.database.account import Account
 from src.app.database.shop_cut_plan_timer_session import ShopCutPlanTimerSession
@@ -263,7 +263,10 @@ async def get_all_shop_plans(
     fab_type: Optional[str] = None,
     workstation_id: Optional[int] = None,
     planning_section_id: Optional[int] = None,
-    operator_id: Optional[int] = None,
+    operator_id: Optional[List[int]] = Query(
+        None,
+        description="Operator ID filter. Pass multiple values as repeated query params, e.g. operator_id=1&operator_id=2",
+    ),
     status_id: Optional[int] = None,
     cut_type: Optional[str] = None,
     month: Optional[int] = None,
@@ -274,9 +277,14 @@ async def get_all_shop_plans(
     reference_date: Optional[date] = None,
     skip: int = 0,
     limit: int = 100,
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    parsed_operator_ids = _parse_multi_int_query_param(request, "operator_id", "operator_ids")
+    if parsed_operator_ids:
+        operator_id = parsed_operator_ids
+
     normalized_view = (view or "week").strip().lower()
     if reference_date is not None:
         target_date = reference_date
@@ -1472,6 +1480,39 @@ def _build_shop_plans_query():
     )
 
 
+def _parse_multi_int_query_param(request: Optional[Request], *param_names: str) -> Optional[List[int]]:
+    if request is None:
+        return None
+
+    values: List[int] = []
+    for param_name in param_names:
+        for raw_value in request.query_params.getlist(param_name):
+            if raw_value is None:
+                continue
+
+            normalized = raw_value.strip()
+            if not normalized:
+                continue
+
+            if normalized.startswith("[") and normalized.endswith("]"):
+                normalized = normalized[1:-1]
+
+            for part in normalized.split(","):
+                item = part.strip()
+                if not item:
+                    continue
+                try:
+                    values.append(int(item))
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Invalid integer value '{item}' for query parameter '{param_name}'",
+                    ) from exc
+
+    deduped_values = list(dict.fromkeys(values))
+    return deduped_values or None
+
+
 def _apply_shop_plan_filters(
     query,
     *,
@@ -1480,7 +1521,7 @@ def _apply_shop_plan_filters(
     fab_type: Optional[str],
     workstation_id: Optional[int],
     planning_section_id: Optional[int],
-    operator_id: Optional[int],
+    operator_id: Optional[List[int]],
     status_id: Optional[int],
     cut_type: Optional[str],
     search: Optional[str],
@@ -1508,8 +1549,8 @@ def _apply_shop_plan_filters(
     if planning_section_id is not None:
         query = query.where(ShopCutPlan.planning_section_id == planning_section_id)
 
-    if operator_id is not None:
-        query = query.where(ShopCutPlan.user_id == operator_id)
+    if operator_id:
+        query = query.where(ShopCutPlan.user_id.in_(operator_id))
 
     if status_id is not None:
         if not hasattr(ShopCutPlan, "status_id"):
