@@ -18,9 +18,9 @@ jobs:
       - name: Deploy to server
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.STAGING_VPS_HOST }}
-          username: ${{ secrets.STAGING_VPS_USERNAME }}
-          key: ${{ secrets.STAGING_VPS_SSH_KEY }}
+          host: ${{ secrets.DEV_VPS_HOST }}
+          username: ${{ secrets.DEV_VPS_USERNAME }}
+          key: ${{ secrets.DEV_VPS_SSH_KEY }}
           script: |
             set -e
             
