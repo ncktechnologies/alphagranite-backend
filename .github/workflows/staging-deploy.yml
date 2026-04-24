@@ -88,13 +88,9 @@ jobs:
             echo "Cleaning up Docker system..."
             docker system prune --force -a
             
-            # Build Docker images
-            echo "Building Docker images..."
-            docker compose build --no-cache
-            
             # Start services
             echo "Starting services..."
-            docker compose up -d
+            docker compose --env-file .env.dev -p ag_dev up -d --build
             
             # Wait a few seconds for containers to start
             echo "Waiting for containers to start..."
@@ -102,11 +98,11 @@ jobs:
             
             # Check container status
             echo "Checking container status..."
-            docker compose ps
+            docker compose --env-file .env.dev -p ag_dev ps
             
             # Show recent logs
             echo "Recent logs:"
-            docker compose logs --tail=50
+            docker compose --env-file .env.dev -p ag_dev logs --tail=50
             
             echo "========================================="
             echo "Deployment completed successfully!"
