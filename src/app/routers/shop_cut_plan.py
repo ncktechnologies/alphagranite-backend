@@ -263,7 +263,10 @@ async def get_all_shop_plans(
     fab_type: Optional[str] = None,
     workstation_id: Optional[int] = None,
     planning_section_id: Optional[int] = None,
-    operator_id: Optional[int] = None,
+    operator_id: Optional[List[int]] = Query(
+        None,
+        description="Operator ID filter. Pass multiple values as repeated query params, e.g. operator_id=1&operator_id=2",
+    ),
     status_id: Optional[int] = None,
     cut_type: Optional[str] = None,
     month: Optional[int] = None,
@@ -1480,7 +1483,7 @@ def _apply_shop_plan_filters(
     fab_type: Optional[str],
     workstation_id: Optional[int],
     planning_section_id: Optional[int],
-    operator_id: Optional[int],
+    operator_id: Optional[List[int]],
     status_id: Optional[int],
     cut_type: Optional[str],
     search: Optional[str],
@@ -1508,8 +1511,8 @@ def _apply_shop_plan_filters(
     if planning_section_id is not None:
         query = query.where(ShopCutPlan.planning_section_id == planning_section_id)
 
-    if operator_id is not None:
-        query = query.where(ShopCutPlan.user_id == operator_id)
+    if operator_id:
+        query = query.where(ShopCutPlan.user_id.in_(operator_id))
 
     if status_id is not None:
         if not hasattr(ShopCutPlan, "status_id"):
