@@ -3,12 +3,12 @@ name: Deploy to Staging Environment
 on:
   push:
     branches:
-      - dev
+      - staging
   workflow_dispatch:
 
 jobs:
   deploy:
-    name: Deploy to VPS
+    name: Deploy to Staging VPS
     runs-on: ubuntu-latest
     
     steps:
@@ -18,9 +18,9 @@ jobs:
       - name: Deploy to server
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.STAGING_VPS_HOST }}
-          username: ${{ secrets.STAGING_VPS_USERNAME }}
-          key: ${{ secrets.STAGING_VPS_SSH_KEY }}
+          host: ${{ secrets.DEV_VPS_HOST }}
+          username: ${{ secrets.DEV_VPS_USERNAME }}
+          key: ${{ secrets.DEV_VPS_SSH_KEY }}
           script: |
             set -e
             
@@ -28,85 +28,25 @@ jobs:
             echo "Starting deployment to staging server"
             echo "========================================="
             
-            # Check if Docker is installed
-            echo "Checking Docker installation..."
-            if ! command -v docker &> /dev/null; then
-              echo "Docker not found. Installing Docker..."
-              
-              # Update package index
-              apt-get update
-              
-              # Install prerequisites
-              apt-get install -y \
-                ca-certificates \
-                curl \
-                gnupg \
-                lsb-release
-              
-              # Add Docker's official GPG key
-              mkdir -p /etc/apt/keyrings
-              curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-              
-              # Set up the repository
-              echo \
-                "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-                $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-              
-              # Install Docker Engine
-              apt-get update
-              apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-              
-              # Start and enable Docker service
-              systemctl start docker
-              systemctl enable docker
-              
-              echo "Docker installation completed successfully!"
-            else
-              echo "Docker is already installed: $(docker --version)"
-            fi
-            
-            # Check if Docker Compose is installed
-            echo "Checking Docker Compose installation..."
-            if ! docker compose version &> /dev/null; then
-              echo "Docker Compose plugin not found. Installing..."
-              apt-get update
-              apt-get install -y docker-compose-plugin
-              echo "Docker Compose installation completed!"
-            else
-              echo "Docker Compose is already installed: $(docker compose version)"
-            fi
-            
             # Navigate to project directory
             echo "Navigating to project directory..."
-            cd /root/alphagranite/alpha-granit
+            cd /root/alphagranite/staging/alphagranite-backend
             
             # Pull latest changes
             echo "Pulling latest changes from Git..."
             git pull
             
-            # Clean up Docker system
-            echo "Cleaning up Docker system..."
-            docker system prune --force -a
-            
-            # Build Docker images
-            echo "Building Docker images..."
-            docker compose build --no-cache
-            
             # Start services
             echo "Starting services..."
-            docker compose up -d
-            
-            # Wait a few seconds for containers to start
-            echo "Waiting for containers to start..."
-            sleep 10
+            docker compose --env-file .env.staging -p ag_staging up -d --build
             
             # Check container status
             echo "Checking container status..."
-            docker compose ps
+            docker compose --env-file .env.staging -p ag_staging ps
             
             # Show recent logs
             echo "Recent logs:"
-            docker compose logs --tail=50
+            docker compose --env-file .env.staging -p ag_staging logs --tail=50
             
             echo "========================================="
             echo "Deployment completed successfully!"
