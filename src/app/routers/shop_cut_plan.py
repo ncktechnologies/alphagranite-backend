@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Body, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Body, Query
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, and_, or_, cast, String
@@ -277,9 +277,14 @@ async def get_all_shop_plans(
     reference_date: Optional[date] = None,
     skip: int = 0,
     limit: int = 100,
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    parsed_operator_ids = _parse_multi_int_query_param(request, "operator_id", "operator_ids")
+    if parsed_operator_ids:
+        operator_id = parsed_operator_ids
+
     normalized_view = (view or "week").strip().lower()
     if reference_date is not None:
         target_date = reference_date
@@ -1473,6 +1478,39 @@ def _build_shop_plans_query():
         .join(BusinessJob, BusinessJob.id == Fab.job_id)
         .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
     )
+
+
+def _parse_multi_int_query_param(request: Optional[Request], *param_names: str) -> Optional[List[int]]:
+    if request is None:
+        return None
+
+    values: List[int] = []
+    for param_name in param_names:
+        for raw_value in request.query_params.getlist(param_name):
+            if raw_value is None:
+                continue
+
+            normalized = raw_value.strip()
+            if not normalized:
+                continue
+
+            if normalized.startswith("[") and normalized.endswith("]"):
+                normalized = normalized[1:-1]
+
+            for part in normalized.split(","):
+                item = part.strip()
+                if not item:
+                    continue
+                try:
+                    values.append(int(item))
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Invalid integer value '{item}' for query parameter '{param_name}'",
+                    ) from exc
+
+    deduped_values = list(dict.fromkeys(values))
+    return deduped_values or None
 
 
 def _apply_shop_plan_filters(
