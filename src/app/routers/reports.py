@@ -289,6 +289,7 @@ def _report_sections(report_key: str, data: dict, layout: str = "default") -> li
             ("widgets", widget_rows),
             ("summary", summary_rows),
             ("stage_bottleneck_heat_map", data.get("stage_bottleneck_heat_map", [])),
+            ("fab_status_rows", data.get("fab_status_rows", [])),
             ("cycle_time_stats", data.get("cycle_time_stats", [])),
             ("aging_backlog", data.get("aging_backlog", [])),
             ("breach_details", data.get("breach_details", [])),
@@ -1600,20 +1601,58 @@ async def get_owner_service_level_report(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Service-level report with KPI widgets and stage bottleneck heat map."""
+    """Service-level report with KPI widgets, stage heat map, and Fab-level bottleneck rows."""
     start_dt, end_dt = _range_bounds(start_date, end_date)
 
-    yellow_threshold = max(int(round(sla_days * 0.75)), 1)
+    stage_target_days = {
+        "Pre-Draft Review": 2.0,
+        "Drafting": 3.0,
+        "SCT": 3.0,
+        "SlabSmith": 2.0,
+        "Final Programming": 2.0,
+        "CNC": 1.0,
+    }
+    revision_target_days = {
+        "cad": 1.0,
+        "template": 1.0,
+        "sales": 1.0,
+        "client": 2.0,
+    }
 
-    def _risk_color(age_days: int) -> str:
-        if age_days > sla_days:
+    def _revision_subtype(value: Optional[str]) -> Optional[str]:
+        text = (value or "").strip().lower()
+        if not text:
+            return None
+        if "cad" in text:
+            return "cad"
+        if "template" in text:
+            return "template"
+        if "sales" in text:
+            return "sales"
+        if "client" in text:
+            return "client"
+        return None
+
+    def _target_days_for(stage_name: str, revision_type: Optional[str]) -> float:
+        if stage_name == "Revisions":
+            revision_key = _revision_subtype(revision_type)
+            if revision_key is not None:
+                return revision_target_days[revision_key]
+            return float(sla_days)
+        return float(stage_target_days.get(stage_name, float(sla_days)))
+
+    def _risk_color(age_days: float, target_days: float) -> str:
+        yellow_threshold = max(target_days * 0.75, 0.0)
+        if age_days > target_days:
             return "red"
-        if age_days > yellow_threshold:
+        if age_days >= yellow_threshold:
             return "yellow"
         return "green"
 
     def _normalize_stage(stage_value: Optional[str]) -> str:
         stage = (stage_value or "").strip().lower()
+        if "pre_draft" in stage or "predraft" in stage:
+            return "Pre-Draft Review"
         if "revision" in stage:
             return "Revisions"
         if stage in {"sct", "sales_ct"} or "sales_ct" in stage or "salesct" in stage:
@@ -1740,24 +1779,56 @@ async def get_owner_service_level_report(
         .subquery()
     )
 
+    revision_subquery = (
+        select(
+            Revision.fab_id.label("fab_id"),
+            Revision.revision_type,
+            Revision.assigned_to,
+            Revision.actual_start_date,
+            Revision.scheduled_start_date,
+            Revision.created_at,
+        )
+        .subquery()
+    )
+
     backlog_query = (
         select(
             Fab.id,
             BusinessJob.job_number,
+            BusinessJob.name,
+            BusinessJob.priority,
             Fab.current_stage,
+            Fab.fab_type,
+            Fab.total_sqft,
+            Fab.no_of_pieces,
             Fab.created_at,
+            Fab.updated_at,
             Fab.template_completed_date,
+            Fab.predraft_completed_date,
+            Fab.draft_completed_date,
+            Fab.slabsmith_completed_date,
+            Fab.sales_ct_completed_date,
+            Fab.sct_completed_date,
+            Fab.final_programming_completed_date,
             Fab.installation_date,
             Fab.shop_est_completion_date,
             Fab.shop_date_schedule,
             Fab.status_id,
+            Fab.drafter_id,
+            Fab.sales_person_id,
             schedule_subquery.c.scheduled_install_date,
             completed_subquery.c.completion_date,
+            revision_subquery.c.revision_type,
+            revision_subquery.c.assigned_to,
+            revision_subquery.c.actual_start_date,
+            revision_subquery.c.scheduled_start_date,
+            revision_subquery.c.created_at,
         )
         .select_from(Fab)
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
         .join(schedule_subquery, schedule_subquery.c.fab_id == Fab.id, isouter=True)
         .join(completed_subquery, completed_subquery.c.fab_id == Fab.id, isouter=True)
+        .join(revision_subquery, revision_subquery.c.fab_id == Fab.id, isouter=True)
         .where(completed_subquery.c.completion_date.is_(None), Fab.status_id == 1)
     )
 
@@ -1788,6 +1859,7 @@ async def get_owner_service_level_report(
     }
 
     stage_display_names = [
+        "Pre-Draft Review",
         "Drafting",
         "Revisions",
         "SCT",
@@ -1811,28 +1883,101 @@ async def get_owner_service_level_report(
     total_red = 0
     oldest_open_job = None
     breach_details = []
+    fab_status_rows = []
+
+    def _first_name(names: dict[int, str], user_id: Optional[int]) -> Optional[str]:
+        if user_id is None:
+            return None
+        return names.get(user_id)
+
+    backlog_records = backlog_rows
+    user_ids: set[int] = set()
+    for row in backlog_records:
+        drafter_id = row[21]
+        sales_person_id = row[22]
+        revision_assigned_to = row[26]
+        if drafter_id is not None:
+            user_ids.add(drafter_id)
+        if sales_person_id is not None:
+            user_ids.add(sales_person_id)
+        if revision_assigned_to is not None:
+            user_ids.add(revision_assigned_to)
+
+    user_names: dict[int, str] = {}
+    if user_ids:
+        user_rows = (
+            await db.execute(
+                select(User.id, User.first_name, User.last_name).where(User.id.in_(list(user_ids)))
+            )
+        ).all()
+        user_names = {
+            user_id: (f"{(first_name or '').strip()} {(last_name or '').strip()}".strip() or f"User {user_id}")
+            for user_id, first_name, last_name in user_rows
+        }
 
     now_dt = datetime.now()
     for (
         fab_id,
         job_number,
+        job_name,
+        job_priority,
         current_stage,
+        fab_type,
+        total_sqft,
+        no_of_pieces,
         created_at,
+        updated_at,
         template_completed_at,
+        predraft_completed_at,
+        draft_completed_at,
+        slabsmith_completed_at,
+        sales_ct_completed_at,
+        sct_completed_at,
+        final_programming_completed_at,
         installation_date,
         shop_est_completion_date,
         shop_date_schedule,
         _status_id,
+        drafter_id,
+        sales_person_id,
         scheduled_install_date,
         _completion_date,
+        revision_type,
+        revision_assigned_to,
+        revision_actual_start,
+        revision_scheduled_start,
+        revision_created_at,
     ) in backlog_rows:
         due_date = scheduled_install_date or installation_date or shop_est_completion_date or shop_date_schedule
         cycle_anchor = template_completed_at or created_at
-        age_anchor = due_date or cycle_anchor
-        if age_anchor is None:
+        stage_name = _normalize_stage(current_stage)
+
+        if stage_name == "Pre-Draft Review":
+            stage_anchor = template_completed_at or created_at
+        elif stage_name == "Drafting":
+            stage_anchor = predraft_completed_at or template_completed_at or created_at
+        elif stage_name == "Revisions":
+            stage_anchor = revision_actual_start or revision_scheduled_start or revision_created_at or updated_at or created_at
+        elif stage_name == "SCT":
+            stage_anchor = draft_completed_at or updated_at or created_at
+        elif stage_name == "SlabSmith":
+            stage_anchor = sales_ct_completed_at or sct_completed_at or updated_at or created_at
+        elif stage_name == "Final Programming":
+            stage_anchor = slabsmith_completed_at or sales_ct_completed_at or sct_completed_at or updated_at or created_at
+        elif stage_name == "CNC":
+            stage_anchor = final_programming_completed_at or updated_at or created_at
+        else:
+            stage_anchor = updated_at or created_at
+
+        if stage_anchor is None:
             continue
 
-        age_days = max((now_dt.date() - age_anchor.date()).days, 0)
+        days_since_template = _days_between(template_completed_at, now_dt)
+        days_in_stage = max((now_dt.date() - stage_anchor.date()).days, 0)
+        target_days = _target_days_for(stage_name, revision_type)
+        risk_color = _risk_color(float(days_in_stage), target_days)
+
+        age_days = days_in_stage
         if age_days <= 7:
             bucket_totals["0_7_days"] += 1
         elif age_days <= 14:
@@ -1842,7 +1987,6 @@ async def get_owner_service_level_report(
         else:
             bucket_totals["31_plus_days"] += 1
 
-        risk_color = _risk_color(age_days)
         if risk_color == "green":
             total_green += 1
         elif risk_color == "yellow":
@@ -1850,7 +1994,6 @@ async def get_owner_service_level_report(
         else:
             total_red += 1
 
-        stage_name = _normalize_stage(current_stage)
         if stage_name in stage_rollup:
             stage_rollup[stage_name][risk_color] += 1
             stage_rollup[stage_name]["total_wip"] += 1
@@ -1863,19 +2006,49 @@ async def get_owner_service_level_report(
                 "current_stage": stage_name if stage_name != "Other" else current_stage,
                 "age_days": age_days,
                 "due_date": due_date.isoformat() if due_date else None,
-                "age_anchor": age_anchor.isoformat() if age_anchor else None,
+                "stage_anchor": stage_anchor.isoformat() if stage_anchor else None,
             }
 
-        if age_days > sla_days:
+        if stage_name == "Revisions":
+            assigned_user_id = revision_assigned_to or drafter_id
+        elif stage_name in {"Drafting", "Pre-Draft Review", "Final Programming", "CNC", "SlabSmith"}:
+            assigned_user_id = drafter_id
+        elif stage_name == "SCT":
+            assigned_user_id = sales_person_id
+        else:
+            assigned_user_id = drafter_id or sales_person_id
+
+        priority_flag = str(job_priority or "").strip() or ("High" if risk_color == "red" else "Medium")
+        status_label = "On Track" if risk_color == "green" else "At Risk" if risk_color == "yellow" else "Over SLA"
+
+        fab_status_rows.append(
+            {
+                "fab_type": fab_type,
+                "fab_id": fab_id,
+                "job_number": job_number,
+                "fab_info": (f"{job_name or ''} | {round(_to_float(total_sqft), 2)} sqft | {int(_to_float(no_of_pieces))} pcs").strip(" |"),
+                "current_stage": stage_name if stage_name != "Other" else current_stage,
+                "days_since_template": days_since_template,
+                "days_in_stage": days_in_stage,
+                "revision_type": revision_type,
+                "assigned_user": _first_name(user_names, assigned_user_id),
+                "status": status_label,
+                "priority_flag": priority_flag,
+                "risk_color": risk_color,
+                "stage_target_days": target_days,
+            }
+        )
+
+        if risk_color == "red":
             breach_details.append(
                 {
                     "fab_id": fab_id,
                     "job_number": job_number,
                     "current_stage": stage_name if stage_name != "Other" else current_stage,
-                    "age_days": age_days,
-                    "sla_days": sla_days,
-                    "days_over_sla": age_days - sla_days,
-                    "age_anchor": age_anchor.isoformat() if age_anchor else None,
+                    "age_days": days_in_stage,
+                    "sla_days": target_days,
+                    "days_over_sla": round(days_in_stage - target_days, 2),
+                    "stage_anchor": stage_anchor.isoformat() if stage_anchor else None,
                     "due_date": due_date.isoformat() if due_date else None,
                 }
             )
@@ -1896,9 +2069,11 @@ async def get_owner_service_level_report(
         row = stage_rollup[stage_name]
         total_wip = int(row["total_wip"])
         avg_days = round((row["total_age_days"] / total_wip), 2) if total_wip else 0.0
+        target_days = _target_days_for(stage_name, None)
         stage_bottleneck_heat_map.append(
             {
                 "stage": stage_name,
+                "target_days": target_days,
                 "green": int(row["green"]),
                 "yellow": int(row["yellow"]),
                 "red": int(row["red"]),
@@ -1919,6 +2094,14 @@ async def get_owner_service_level_report(
         "avg_cycle_time_days": cycle_stats["avg_days"],
         "oldest_open_job": oldest_open_job,
     }
+
+    fab_status_rows.sort(
+        key=lambda row: (
+            2 if row["risk_color"] == "red" else 1 if row["risk_color"] == "yellow" else 0,
+            row["days_in_stage"] or 0,
+        ),
+        reverse=True,
+    )
 
     return success_response(
         {
@@ -1945,6 +2128,24 @@ async def get_owner_service_level_report(
                 "cycle_time_max_days": cycle_stats["max_days"],
             },
             "stage_bottleneck_heat_map": stage_bottleneck_heat_map,
+            "sla_rules": {
+                "green": "Within 75% of stage SLA threshold",
+                "yellow": "75% to 100% of stage SLA threshold",
+                "red": "Exceeds stage SLA threshold",
+                "stage_target_days": {
+                    "Pre-Draft Review": 2,
+                    "Drafting": 3,
+                    "Revisions - CAD": 1,
+                    "Revisions - Template": 1,
+                    "Revisions - Sales": 1,
+                    "Revisions - Client": 2,
+                    "SCT": 3,
+                    "SlabSmith": 2,
+                    "Final Programming": 2,
+                    "CNC": 1,
+                },
+            },
+            "fab_status_rows": fab_status_rows,
             "cycle_time_stats": [cycle_stats],
             "aging_backlog": aging_backlog,
             "breach_details": breach_details,
