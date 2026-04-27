@@ -21,7 +21,7 @@ from src.app.database.fab import Fab
 from src.app.database.installer_rate_history import InstallerRateHistory
 from src.app.database.installer_job_timer_session import InstallerJobTimerSession
 from src.app.database.user import User
-from src.app.interface.generated_schemas import CostOfStone, CutList, InstallCompletion, Revision, Templating
+from src.app.interface.generated_schemas import CostOfStone, CutList, InstallCompletion, InstallScheduling, Revision, Templating
 from src.app.interface.response_wrappers import SuccessResponse, success_response
 from src.app.middleware.jwt_auth import get_current_user
 
@@ -273,6 +273,15 @@ def _report_sections(report_key: str, data: dict, layout: str = "default") -> li
         return [
             ("summary", stats_rows),
             ("rows", data.get("rows", [])),
+        ]
+
+    if report_key == "service-level":
+        summary_rows = _rows_from_mapping(data.get("summary", {}))
+        return [
+            ("summary", summary_rows),
+            ("cycle_time_stats", data.get("cycle_time_stats", [])),
+            ("aging_backlog", data.get("aging_backlog", [])),
+            ("breach_details", data.get("breach_details", [])),
         ]
 
     if report_key == "weekly-trends":
@@ -1571,6 +1580,263 @@ async def get_owner_turnaround_times_report(
     )
 
 
+@router.get("/reports/owner/service-level", response_model=SuccessResponse[dict])
+async def get_owner_service_level_report(
+    start_date: Optional[date] = Query(None, description="Inclusive start date filter"),
+    end_date: Optional[date] = Query(None, description="Inclusive end date filter"),
+    date_basis: str = Query("completed", pattern="^(created|scheduled|completed)$"),
+    sla_days: int = Query(14, ge=1, le=365, description="SLA threshold in days"),
+    breach_limit: int = Query(500, ge=1, le=5000),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Service-level report with on-time completion, cycle-time, and backlog SLA breach analysis."""
+    start_dt, end_dt = _range_bounds(start_date, end_date)
+
+    completion_query = (
+        select(
+            Fab.id.label("fab_id"),
+            BusinessJob.job_number,
+            Fab.created_at,
+            Fab.template_completed_date,
+            InstallCompletion.install_date,
+            InstallCompletion.completion_date,
+            Fab.shop_date_schedule,
+            Fab.shop_est_completion_date,
+            Fab.installation_date,
+            InstallCompletion.installer_id,
+            InstallCompletion.total_sqft_installed,
+        )
+        .select_from(InstallCompletion)
+        .join(Fab, Fab.id == InstallCompletion.fab_id)
+        .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+    )
+
+    if date_basis == "created":
+        if start_dt is not None:
+            completion_query = completion_query.where(Fab.created_at >= start_dt)
+        if end_dt is not None:
+            completion_query = completion_query.where(Fab.created_at <= end_dt)
+    elif date_basis == "scheduled":
+        scheduled_basis = func.coalesce(
+            InstallCompletion.install_date,
+            Fab.installation_date,
+            Fab.shop_est_completion_date,
+            Fab.shop_date_schedule,
+        )
+        if start_dt is not None:
+            completion_query = completion_query.where(scheduled_basis >= start_dt)
+        if end_dt is not None:
+            completion_query = completion_query.where(scheduled_basis <= end_dt)
+    else:
+        if start_dt is not None:
+            completion_query = completion_query.where(InstallCompletion.completion_date >= start_dt)
+        if end_dt is not None:
+            completion_query = completion_query.where(InstallCompletion.completion_date <= end_dt)
+
+    completion_rows = (await db.execute(completion_query)).all()
+
+    total_completed = len(completion_rows)
+    on_time_eligible = 0
+    on_time_count = 0
+    cycle_days: list[int] = []
+    cycle_rows = []
+
+    for (
+        fab_id,
+        job_number,
+        created_at,
+        template_completed_at,
+        install_date,
+        completion_date,
+        shop_date_schedule,
+        shop_est_completion_date,
+        installation_date,
+        installer_id,
+        total_sqft_installed,
+    ) in completion_rows:
+        due_date = install_date or installation_date or shop_est_completion_date or shop_date_schedule
+        if due_date is not None:
+            on_time_eligible += 1
+            if completion_date is not None and completion_date <= due_date:
+                on_time_count += 1
+
+        cycle_day = _days_between(template_completed_at, completion_date)
+        if cycle_day is not None:
+            cycle_days.append(cycle_day)
+
+        cycle_rows.append(
+            {
+                "fab_id": fab_id,
+                "job_number": job_number,
+                "installer_id": installer_id,
+                "created_at": created_at.isoformat() if created_at else None,
+                "template_completed_at": template_completed_at.isoformat() if template_completed_at else None,
+                "due_date": due_date.isoformat() if due_date else None,
+                "completion_date": completion_date.isoformat() if completion_date else None,
+                "cycle_days": cycle_day,
+                "is_on_time": bool(due_date is not None and completion_date is not None and completion_date <= due_date),
+                "total_sqft_installed": round(_to_float(total_sqft_installed), 2),
+            }
+        )
+
+    cycle_stats = {
+        "count": len(cycle_days),
+        "min_days": min(cycle_days) if cycle_days else None,
+        "max_days": max(cycle_days) if cycle_days else None,
+        "avg_days": round(sum(cycle_days) / len(cycle_days), 2) if cycle_days else None,
+    }
+
+    completed_subquery = (
+        select(
+            InstallCompletion.fab_id.label("fab_id"),
+            func.max(InstallCompletion.completion_date).label("completion_date"),
+        )
+        .group_by(InstallCompletion.fab_id)
+        .subquery()
+    )
+
+    schedule_subquery = (
+        select(
+            InstallScheduling.fab_id.label("fab_id"),
+            func.max(InstallScheduling.scheduled_install_date).label("scheduled_install_date"),
+        )
+        .group_by(InstallScheduling.fab_id)
+        .subquery()
+    )
+
+    backlog_query = (
+        select(
+            Fab.id,
+            BusinessJob.job_number,
+            Fab.current_stage,
+            Fab.created_at,
+            Fab.template_completed_date,
+            Fab.installation_date,
+            Fab.shop_est_completion_date,
+            Fab.shop_date_schedule,
+            schedule_subquery.c.scheduled_install_date,
+            completed_subquery.c.completion_date,
+        )
+        .select_from(Fab)
+        .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .join(schedule_subquery, schedule_subquery.c.fab_id == Fab.id, isouter=True)
+        .join(completed_subquery, completed_subquery.c.fab_id == Fab.id, isouter=True)
+        .where(completed_subquery.c.completion_date.is_(None))
+    )
+
+    if date_basis == "created":
+        if start_dt is not None:
+            backlog_query = backlog_query.where(Fab.created_at >= start_dt)
+        if end_dt is not None:
+            backlog_query = backlog_query.where(Fab.created_at <= end_dt)
+    elif date_basis == "scheduled":
+        scheduled_backlog_basis = func.coalesce(
+            schedule_subquery.c.scheduled_install_date,
+            Fab.installation_date,
+            Fab.shop_est_completion_date,
+            Fab.shop_date_schedule,
+        )
+        if start_dt is not None:
+            backlog_query = backlog_query.where(scheduled_backlog_basis >= start_dt)
+        if end_dt is not None:
+            backlog_query = backlog_query.where(scheduled_backlog_basis <= end_dt)
+
+    backlog_rows = (await db.execute(backlog_query)).all()
+
+    bucket_totals = {
+        "0_7_days": 0,
+        "8_14_days": 0,
+        "15_30_days": 0,
+        "31_plus_days": 0,
+    }
+    breach_details = []
+
+    now_dt = datetime.now()
+    for (
+        fab_id,
+        job_number,
+        current_stage,
+        created_at,
+        template_completed_at,
+        installation_date,
+        shop_est_completion_date,
+        shop_date_schedule,
+        scheduled_install_date,
+        _completion_date,
+    ) in backlog_rows:
+        due_date = scheduled_install_date or installation_date or shop_est_completion_date or shop_date_schedule
+        cycle_anchor = template_completed_at or created_at
+        age_anchor = due_date or cycle_anchor
+        if age_anchor is None:
+            continue
+
+        age_days = max((now_dt.date() - age_anchor.date()).days, 0)
+        if age_days <= 7:
+            bucket_totals["0_7_days"] += 1
+        elif age_days <= 14:
+            bucket_totals["8_14_days"] += 1
+        elif age_days <= 30:
+            bucket_totals["15_30_days"] += 1
+        else:
+            bucket_totals["31_plus_days"] += 1
+
+        if age_days > sla_days:
+            breach_details.append(
+                {
+                    "fab_id": fab_id,
+                    "job_number": job_number,
+                    "current_stage": current_stage,
+                    "age_days": age_days,
+                    "sla_days": sla_days,
+                    "days_over_sla": age_days - sla_days,
+                    "age_anchor": age_anchor.isoformat() if age_anchor else None,
+                    "due_date": due_date.isoformat() if due_date else None,
+                }
+            )
+
+    breach_details.sort(key=lambda row: row["days_over_sla"], reverse=True)
+    total_breach_count = len(breach_details)
+    breach_details = breach_details[:breach_limit]
+
+    aging_backlog = [
+        {"bucket": "0-7 days", "count": bucket_totals["0_7_days"]},
+        {"bucket": "8-14 days", "count": bucket_totals["8_14_days"]},
+        {"bucket": "15-30 days", "count": bucket_totals["15_30_days"]},
+        {"bucket": "31+ days", "count": bucket_totals["31_plus_days"]},
+    ]
+
+    on_time_percent = round((on_time_count / on_time_eligible) * 100, 2) if on_time_eligible else 0.0
+
+    return success_response(
+        {
+            "title": "Service Level Report",
+            "period": {
+                "start_date": start_date.isoformat() if start_date else None,
+                "end_date": end_date.isoformat() if end_date else None,
+                "date_basis": date_basis,
+                "sla_days": sla_days,
+            },
+            "summary": {
+                "total_completed": total_completed,
+                "on_time_eligible": on_time_eligible,
+                "on_time_count": on_time_count,
+                "on_time_percent": on_time_percent,
+                "open_backlog_count": sum(bucket_totals.values()),
+                "sla_breach_count": total_breach_count,
+                "cycle_time_avg_days": cycle_stats["avg_days"],
+                "cycle_time_min_days": cycle_stats["min_days"],
+                "cycle_time_max_days": cycle_stats["max_days"],
+            },
+            "cycle_time_stats": [cycle_stats],
+            "aging_backlog": aging_backlog,
+            "breach_details": breach_details,
+            "completed_rows": cycle_rows,
+        },
+        "Owner service level report generated",
+    )
+
+
 @router.get("/reports/owner/installer-rates", response_model=SuccessResponse[list[dict]])
 async def get_installer_rates(
     installer_id: Optional[int] = Query(None, gt=0),
@@ -1731,6 +1997,8 @@ async def export_owner_report(
     layout: str = Query("default", pattern="^(default|client)$"),
     start_date: Optional[date] = Query(None),
     end_date: Optional[date] = Query(None),
+    date_basis: str = Query("completed", pattern="^(created|scheduled|completed)$"),
+    sla_days: int = Query(14, ge=1, le=365),
     weeks: int = Query(12, ge=4, le=52),
     top_n: int = Query(10, ge=1, le=50),
     year: Optional[int] = Query(None, ge=2000, le=2100),
@@ -1781,6 +2049,17 @@ async def export_owner_report(
             return success_response(None, "year and month are required for turnaround-times", status_code=400)
         data = _unwrap_success_data(
             await get_owner_turnaround_times_report(year=year, month=month, db=db, current_user=current_user)
+        )
+    elif key == "service-level":
+        data = _unwrap_success_data(
+            await get_owner_service_level_report(
+                start_date=start_date,
+                end_date=end_date,
+                date_basis=date_basis,
+                sla_days=sla_days,
+                db=db,
+                current_user=current_user,
+            )
         )
     elif key == "weekly-trends":
         data = _unwrap_success_data(
