@@ -3,12 +3,12 @@ name: Deploy to Dev Environment
 on:
   push:
     branches:
-      - dev
+      - staging
   workflow_dispatch:
 
 jobs:
   deploy:
-    name: Deploy to VPS
+    name: Deploy to Staging VPS
     runs-on: ubuntu-latest
     
     steps:
@@ -21,6 +21,9 @@ jobs:
           host: ${{ secrets.DEV_VPS_HOST }}
           username: ${{ secrets.DEV_VPS_USERNAME }}
           key: ${{ secrets.DEV_VPS_SSH_KEY }}
+          host: ${{ secrets.DEV_VPS_HOST }}
+          username: ${{ secrets.DEV_VPS_USERNAME }}
+          key: ${{ secrets.DEV_VPS_SSH_KEY }}
           script: |
             set -e
             
@@ -30,7 +33,7 @@ jobs:
             
             # Navigate to project directory
             echo "Navigating to project directory..."
-            cd /root/alphagranite/alpha-granit
+            cd /root/alphagranite/staging/alphagranite-backend
             
             # Pull latest changes
             echo "Pulling latest changes from Git..."
