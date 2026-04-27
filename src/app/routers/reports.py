@@ -277,8 +277,18 @@ def _report_sections(report_key: str, data: dict, layout: str = "default") -> li
 
     if report_key == "service-level":
         summary_rows = _rows_from_mapping(data.get("summary", {}))
+        widget_rows = []
+        widgets = data.get("widgets", {})
+        if widgets:
+            for metric_key, metric_value in widgets.items():
+                if isinstance(metric_value, dict):
+                    widget_rows.append({"metric": metric_key, "value": json.dumps(metric_value)})
+                else:
+                    widget_rows.append({"metric": metric_key, "value": metric_value})
         return [
+            ("widgets", widget_rows),
             ("summary", summary_rows),
+            ("stage_bottleneck_heat_map", data.get("stage_bottleneck_heat_map", [])),
             ("cycle_time_stats", data.get("cycle_time_stats", [])),
             ("aging_backlog", data.get("aging_backlog", [])),
             ("breach_details", data.get("breach_details", [])),
@@ -1590,8 +1600,33 @@ async def get_owner_service_level_report(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Service-level report with on-time completion, cycle-time, and backlog SLA breach analysis."""
+    """Service-level report with KPI widgets and stage bottleneck heat map."""
     start_dt, end_dt = _range_bounds(start_date, end_date)
+
+    yellow_threshold = max(int(round(sla_days * 0.75)), 1)
+
+    def _risk_color(age_days: int) -> str:
+        if age_days > sla_days:
+            return "red"
+        if age_days > yellow_threshold:
+            return "yellow"
+        return "green"
+
+    def _normalize_stage(stage_value: Optional[str]) -> str:
+        stage = (stage_value or "").strip().lower()
+        if "revision" in stage:
+            return "Revisions"
+        if stage in {"sct", "sales_ct"} or "sales_ct" in stage or "salesct" in stage:
+            return "SCT"
+        if "slabsmith" in stage or "slab_smith" in stage:
+            return "SlabSmith"
+        if "final_program" in stage:
+            return "Final Programming"
+        if "cnc" in stage:
+            return "CNC"
+        if "draft" in stage:
+            return "Drafting"
+        return "Other"
 
     completion_query = (
         select(
@@ -1715,6 +1750,7 @@ async def get_owner_service_level_report(
             Fab.installation_date,
             Fab.shop_est_completion_date,
             Fab.shop_date_schedule,
+            Fab.status_id,
             schedule_subquery.c.scheduled_install_date,
             completed_subquery.c.completion_date,
         )
@@ -1722,7 +1758,7 @@ async def get_owner_service_level_report(
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
         .join(schedule_subquery, schedule_subquery.c.fab_id == Fab.id, isouter=True)
         .join(completed_subquery, completed_subquery.c.fab_id == Fab.id, isouter=True)
-        .where(completed_subquery.c.completion_date.is_(None))
+        .where(completed_subquery.c.completion_date.is_(None), Fab.status_id == 1)
     )
 
     if date_basis == "created":
@@ -1750,6 +1786,30 @@ async def get_owner_service_level_report(
         "15_30_days": 0,
         "31_plus_days": 0,
     }
+
+    stage_display_names = [
+        "Drafting",
+        "Revisions",
+        "SCT",
+        "SlabSmith",
+        "Final Programming",
+        "CNC",
+    ]
+    stage_rollup: dict[str, dict] = {
+        stage_name: {
+            "green": 0,
+            "yellow": 0,
+            "red": 0,
+            "total_wip": 0,
+            "total_age_days": 0,
+        }
+        for stage_name in stage_display_names
+    }
+
+    total_green = 0
+    total_yellow = 0
+    total_red = 0
+    oldest_open_job = None
     breach_details = []
 
     now_dt = datetime.now()
@@ -1762,6 +1822,7 @@ async def get_owner_service_level_report(
         installation_date,
         shop_est_completion_date,
         shop_date_schedule,
+        _status_id,
         scheduled_install_date,
         _completion_date,
     ) in backlog_rows:
@@ -1781,12 +1842,36 @@ async def get_owner_service_level_report(
         else:
             bucket_totals["31_plus_days"] += 1
 
+        risk_color = _risk_color(age_days)
+        if risk_color == "green":
+            total_green += 1
+        elif risk_color == "yellow":
+            total_yellow += 1
+        else:
+            total_red += 1
+
+        stage_name = _normalize_stage(current_stage)
+        if stage_name in stage_rollup:
+            stage_rollup[stage_name][risk_color] += 1
+            stage_rollup[stage_name]["total_wip"] += 1
+            stage_rollup[stage_name]["total_age_days"] += age_days
+
+        if oldest_open_job is None or age_days > oldest_open_job["age_days"]:
+            oldest_open_job = {
+                "fab_id": fab_id,
+                "job_number": job_number,
+                "current_stage": stage_name if stage_name != "Other" else current_stage,
+                "age_days": age_days,
+                "due_date": due_date.isoformat() if due_date else None,
+                "age_anchor": age_anchor.isoformat() if age_anchor else None,
+            }
+
         if age_days > sla_days:
             breach_details.append(
                 {
                     "fab_id": fab_id,
                     "job_number": job_number,
-                    "current_stage": current_stage,
+                    "current_stage": stage_name if stage_name != "Other" else current_stage,
                     "age_days": age_days,
                     "sla_days": sla_days,
                     "days_over_sla": age_days - sla_days,
@@ -1806,7 +1891,34 @@ async def get_owner_service_level_report(
         {"bucket": "31+ days", "count": bucket_totals["31_plus_days"]},
     ]
 
+    stage_bottleneck_heat_map = []
+    for stage_name in stage_display_names:
+        row = stage_rollup[stage_name]
+        total_wip = int(row["total_wip"])
+        avg_days = round((row["total_age_days"] / total_wip), 2) if total_wip else 0.0
+        stage_bottleneck_heat_map.append(
+            {
+                "stage": stage_name,
+                "green": int(row["green"]),
+                "yellow": int(row["yellow"]),
+                "red": int(row["red"]),
+                "total_wip": total_wip,
+                "avg_days": avg_days,
+                "sla_breach_percent": round((row["red"] / total_wip) * 100, 2) if total_wip else 0.0,
+            }
+        )
+
     on_time_percent = round((on_time_count / on_time_eligible) * 100, 2) if on_time_eligible else 0.0
+    total_active_fab_ids = len(backlog_rows)
+
+    widgets = {
+        "total_active_fab_ids": total_active_fab_ids,
+        "on_track_green": total_green,
+        "at_risk_yellow": total_yellow,
+        "overdue_red": total_red,
+        "avg_cycle_time_days": cycle_stats["avg_days"],
+        "oldest_open_job": oldest_open_job,
+    }
 
     return success_response(
         {
@@ -1817,6 +1929,7 @@ async def get_owner_service_level_report(
                 "date_basis": date_basis,
                 "sla_days": sla_days,
             },
+            "widgets": widgets,
             "summary": {
                 "total_completed": total_completed,
                 "on_time_eligible": on_time_eligible,
@@ -1824,10 +1937,14 @@ async def get_owner_service_level_report(
                 "on_time_percent": on_time_percent,
                 "open_backlog_count": sum(bucket_totals.values()),
                 "sla_breach_count": total_breach_count,
+                "green_count": total_green,
+                "yellow_count": total_yellow,
+                "red_count": total_red,
                 "cycle_time_avg_days": cycle_stats["avg_days"],
                 "cycle_time_min_days": cycle_stats["min_days"],
                 "cycle_time_max_days": cycle_stats["max_days"],
             },
+            "stage_bottleneck_heat_map": stage_bottleneck_heat_map,
             "cycle_time_stats": [cycle_stats],
             "aging_backlog": aging_backlog,
             "breach_details": breach_details,
