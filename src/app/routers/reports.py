@@ -1189,7 +1189,11 @@ async def get_owner_monthly_install_completion_report(
         .join(Fab, Fab.id == InstallCompletion.fab_id)
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
         .join(CostOfStone, CostOfStone.id == Fab.cost_of_stone_id, isouter=True)
-        .where(InstallCompletion.completion_date >= start_dt, InstallCompletion.completion_date <= end_dt)
+        .where(
+            InstallCompletion.is_completed.is_(True),
+            InstallCompletion.completion_date >= start_dt,
+            InstallCompletion.completion_date <= end_dt,
+        )
         .order_by(InstallCompletion.completion_date.asc(), Fab.id.asc())
     )
 
