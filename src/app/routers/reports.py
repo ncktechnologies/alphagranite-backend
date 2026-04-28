@@ -2,6 +2,7 @@ from __future__ import annotations
 # pyright: reportGeneralTypeIssues=false, reportMissingImports=false
 
 import csv
+import calendar
 import io
 import json
 from collections import defaultdict
@@ -17,9 +18,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.app.database import get_db
 from src.app.database.account import Account
 from src.app.database.business_job import BusinessJob
+from src.app.database.department import Department
 from src.app.database.fab import Fab
 from src.app.database.installer_rate_history import InstallerRateHistory
 from src.app.database.installer_job_timer_session import InstallerJobTimerSession
+from src.app.database.stone_color import StoneColor
+from src.app.database.stone_thickness import StoneThickness
+from src.app.database.stone_type import StoneType
 from src.app.database.user import User
 from src.app.interface.generated_schemas import CostOfStone, CutList, InstallCompletion, InstallScheduling, Revision, Templating
 from src.app.interface.response_wrappers import SuccessResponse, success_response
@@ -36,6 +41,95 @@ class InstallerRateUpsert(BaseModel):
     is_active: bool = True
 
 
+@router.get("/reports/redos", response_model=SuccessResponse[list[dict]])
+async def get_ag_redo_report(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return AG REDO FAB rows with complete report fields."""
+    rows = (
+        await db.execute(
+            select(
+                Fab.created_at,
+                Fab.fab_type,
+                Fab.id,
+                BusinessJob.job_number,
+                Account.name,
+                BusinessJob.name,
+                StoneType.name,
+                StoneColor.name,
+                StoneThickness.thickness,
+                Fab.no_of_pieces,
+                Fab.total_sqft,
+                CostOfStone.cost_per_sqft,
+                Revision.revision_notes,
+            )
+            .select_from(Fab)
+            .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+            .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+            .join(StoneType, StoneType.id == Fab.stone_type_id, isouter=True)
+            .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
+            .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
+            .join(CostOfStone, CostOfStone.id == Fab.cost_of_stone_id, isouter=True)
+            .join(Revision, Revision.fab_id == Fab.id, isouter=True)
+            .where(func.lower(Fab.fab_type) == "ag redo")
+            .order_by(Fab.created_at.desc(), Fab.id.desc())
+        )
+    ).all()
+
+    departments = (await db.execute(select(Department.name).order_by(Department.name.asc()))).all()
+    department_options = [row[0] for row in departments if row[0]]
+
+    data = []
+    for (
+        created_at,
+        fab_type,
+        fab_id,
+        job_number,
+        account_name,
+        job_name,
+        stone_type,
+        stone_color,
+        stone_thickness,
+        no_of_pieces,
+        sqft,
+        cost_per_sqft_raw,
+        revision_notes,
+    ) in rows:
+        cost_per_sqft = round(_to_float(cost_per_sqft_raw), 2) if cost_per_sqft_raw is not None else None
+        sqft_value = round(_to_float(sqft), 2)
+        total_cost = round(cost_per_sqft * sqft_value * 2.1, 2) if cost_per_sqft is not None else None
+
+        info_parts = [
+            account_name,
+            job_name,
+            stone_type,
+            stone_color,
+            stone_thickness,
+        ]
+        fab_info = " - ".join(str(part).strip() for part in info_parts if part and str(part).strip()) or None
+
+        data.append(
+            {
+                "fab_created_date": created_at.date().isoformat() if created_at else None,
+                "fab_type": fab_type,
+                "fab_id": fab_id,
+                "job_number": job_number,
+                "fab_info": fab_info,
+                "no_of_pieces": int(_to_float(no_of_pieces)),
+                "sqft": sqft_value,
+                "cost_per_sqft": cost_per_sqft,
+                "total_cost": total_cost,
+                "department": None,
+                "person_name": None,
+                "reason": revision_notes,
+                "department_options": department_options,
+            }
+        )
+
+    return success_response(data, "AG REDO report data retrieved successfully")
+
+
 def _range_bounds(start_date: Optional[date], end_date: Optional[date]) -> tuple[Optional[datetime], Optional[datetime]]:
     start_dt = datetime.combine(start_date, time.min) if start_date else None
     end_dt = datetime.combine(end_date, time.max) if end_date else None
@@ -49,6 +143,30 @@ def _month_bounds(year: int, month: int) -> tuple[datetime, datetime]:
     else:
         end_dt = datetime(year, month + 1, 1) - timedelta(microseconds=1)
     return start_dt, end_dt
+
+
+def _parse_month_input(month_value: str) -> Optional[int]:
+    text = (month_value or "").strip()
+    if not text:
+        return None
+
+    if text.isdigit():
+        month_num = int(text)
+        return month_num if 1 <= month_num <= 12 else None
+
+    lower = text.lower()
+    for idx, name in enumerate(calendar.month_name):
+        if idx == 0:
+            continue
+        if lower == name.lower():
+            return idx
+    for idx, name in enumerate(calendar.month_abbr):
+        if idx == 0:
+            continue
+        if lower == name.lower():
+            return idx
+
+    return None
 
 
 def _days_between(start_value: Optional[datetime], end_value: Optional[datetime]) -> Optional[int]:
@@ -1443,6 +1561,283 @@ async def get_owner_monthly_cut_completion_report(
             "rows": rows,
         },
         "Owner monthly cut completion report generated",
+    )
+
+
+@router.get("/reports/daily-install-completion", response_model=SuccessResponse[dict])
+async def get_daily_install_completion_report(
+    start_date: Optional[date] = Query(None, description="Inclusive start date filter"),
+    end_date: Optional[date] = Query(None, description="Inclusive end date filter"),
+    job_number: Optional[str] = Query(None, description="Optional job number filter"),
+    fab_id: Optional[int] = Query(None, gt=0, description="Optional FAB ID filter"),
+    installer_id: Optional[int] = Query(None, gt=0, description="Optional installer user ID filter"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Daily install completion report with optional filters and daily/grand totals."""
+    start_dt, end_dt = _range_bounds(start_date, end_date)
+
+    query = (
+        select(
+            InstallCompletion.completion_date,
+            Fab.id,
+            Fab.fab_type,
+            BusinessJob.job_number,
+            BusinessJob.name,
+            InstallCompletion.installer_id,
+            User.first_name,
+            User.last_name,
+            InstallCompletion.total_sqft_installed,
+            Fab.revenue,
+            Fab.gp,
+        )
+        .select_from(InstallCompletion)
+        .join(Fab, Fab.id == InstallCompletion.fab_id)
+        .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .join(User, User.id == InstallCompletion.installer_id, isouter=True)
+        .where(Fab.current_stage == "install_completion")
+        .order_by(InstallCompletion.completion_date.asc(), Fab.id.asc())
+    )
+
+    if start_dt is not None:
+        query = query.where(InstallCompletion.completion_date >= start_dt)
+    if end_dt is not None:
+        query = query.where(InstallCompletion.completion_date <= end_dt)
+    if job_number:
+        query = query.where(BusinessJob.job_number.ilike(f"%{job_number.strip()}%"))
+    if fab_id is not None:
+        query = query.where(Fab.id == fab_id)
+    if installer_id is not None:
+        query = query.where(InstallCompletion.installer_id == installer_id)
+
+    records = (await db.execute(query)).all()
+
+    entries = []
+    daily_totals_map: dict[str, dict] = defaultdict(lambda: {
+        "total_sqft": 0.0,
+        "total_revenue": 0.0,
+        "total_gp": 0.0,
+        "count": 0,
+    })
+
+    grand_total_sqft = 0.0
+    grand_total_revenue = 0.0
+    grand_total_gp = 0.0
+
+    for (
+        completion_date,
+        row_fab_id,
+        row_fab_type,
+        row_job_number,
+        row_job_name,
+        row_installer_id,
+        installer_first_name,
+        installer_last_name,
+        sqft_installed_raw,
+        revenue_raw,
+        gp_raw,
+    ) in records:
+        if completion_date is None:
+            continue
+
+        day_key = completion_date.date().isoformat()
+        sqft_value = round(_to_float(sqft_installed_raw), 2)
+        revenue_value = round(_to_float(revenue_raw), 2)
+        gp_value = round(_to_float(gp_raw), 2)
+
+        daily_totals_map[day_key]["total_sqft"] += sqft_value
+        daily_totals_map[day_key]["total_revenue"] += revenue_value
+        daily_totals_map[day_key]["total_gp"] += gp_value
+        daily_totals_map[day_key]["count"] += 1
+
+        grand_total_sqft += sqft_value
+        grand_total_revenue += revenue_value
+        grand_total_gp += gp_value
+
+        installer_name = (f"{(installer_first_name or '').strip()} {(installer_last_name or '').strip()}".strip() or None)
+        entries.append(
+            {
+                "install_date": day_key,
+                "fab_id": row_fab_id,
+                "fab_type": row_fab_type,
+                "job_number": row_job_number,
+                "job_name": row_job_name,
+                "installer_id": row_installer_id,
+                "installer_name": installer_name,
+                "sqft": sqft_value,
+                "revenue": revenue_value,
+                "gp": gp_value,
+            }
+        )
+
+    daily_totals = []
+    for day_key in sorted(daily_totals_map.keys()):
+        item = daily_totals_map[day_key]
+        daily_totals.append(
+            {
+                "install_date": day_key,
+                "total_sqft": round(item["total_sqft"], 2),
+                "total_revenue": round(item["total_revenue"], 2),
+                "total_gp": round(item["total_gp"], 2),
+                "entry_count": int(item["count"]),
+            }
+        )
+
+    return success_response(
+        {
+            "period": {
+                "start_date": start_date.isoformat() if start_date else None,
+                "end_date": end_date.isoformat() if end_date else None,
+            },
+            "filters": {
+                "job_number": job_number,
+                "fab_id": fab_id,
+                "installer_id": installer_id,
+            },
+            "grand_totals": {
+                "total_sqft": round(grand_total_sqft, 2),
+                "total_revenue": round(grand_total_revenue, 2),
+                "total_gp": round(grand_total_gp, 2),
+                "entry_count": len(entries),
+            },
+            "daily_totals": daily_totals,
+            "entries": entries,
+        },
+        "Daily Install Completion data retrieved successfully",
+    )
+
+
+@router.get("/reports/monthly-cut-completion", response_model=SuccessResponse[dict])
+async def get_monthly_cut_completion_report(
+    month: str = Query(..., description="Month number (1-12) or month name (e.g. April)"),
+    year: int = Query(..., ge=2000, le=2100),
+    fab_type: Optional[str] = Query(None, description="Optional FAB type filter"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Monthly cut completion report with summary and detailed entries."""
+    month_num = _parse_month_input(month)
+    if month_num is None:
+        return success_response(None, "Invalid month. Use month number (1-12) or month name", status_code=400)
+
+    start_dt, end_dt = _month_bounds(year, month_num)
+    cut_date_expr = func.coalesce(Fab.shop_date_schedule, Fab.final_programming_completed_date)
+
+    query = (
+        select(
+            cut_date_expr.label("cut_date"),
+            Fab.fab_type,
+            Fab.id,
+            BusinessJob.job_number,
+            Account.name.label("account_name"),
+            StoneType.name.label("stone_type_name"),
+            StoneColor.name.label("stone_color_name"),
+            StoneThickness.thickness.label("stone_thickness"),
+            Fab.no_of_pieces,
+            Fab.total_sqft,
+            CostOfStone.cost_per_sqft,
+            Fab.revenue,
+            Fab.cost_of_stone,
+            CostOfStone.total_cost,
+            Fab.gp,
+        )
+        .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+        .join(StoneType, StoneType.id == Fab.stone_type_id, isouter=True)
+        .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
+        .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
+        .join(CostOfStone, CostOfStone.id == Fab.cost_of_stone_id, isouter=True)
+        .where(cut_date_expr >= start_dt, cut_date_expr <= end_dt)
+        .order_by(cut_date_expr.asc(), Fab.id.asc())
+    )
+
+    if fab_type:
+        query = query.where(func.lower(Fab.fab_type) == fab_type.strip().lower())
+
+    records = (await db.execute(query)).all()
+
+    entries = []
+    total_pieces = 0
+    total_sqft = 0.0
+    total_revenue = 0.0
+    total_cost_of_stone = 0.0
+    total_gp = 0.0
+
+    for (
+        cut_date,
+        row_fab_type,
+        fab_id,
+        job_number,
+        account_name,
+        stone_type_name,
+        stone_color_name,
+        stone_thickness,
+        no_of_pieces,
+        sqft,
+        cost_per_sqft_raw,
+        revenue_raw,
+        fab_cost_of_stone,
+        cos_total_cost,
+        gp_raw,
+    ) in records:
+        if cut_date is None:
+            continue
+
+        pieces_value = int(_to_float(no_of_pieces))
+        sqft_value = round(_to_float(sqft), 2)
+        cost_per_sf = round(_to_float(cost_per_sqft_raw), 2)
+        revenue_value = round(_to_float(revenue_raw), 2)
+        cost_of_stone_value = round(_to_float(fab_cost_of_stone if fab_cost_of_stone is not None else cos_total_cost), 2)
+        gp_value = round(_to_float(gp_raw), 2)
+        if gp_raw is None:
+            gp_value = round(revenue_value - cost_of_stone_value, 2)
+
+        total_pieces += pieces_value
+        total_sqft += sqft_value
+        total_revenue += revenue_value
+        total_cost_of_stone += cost_of_stone_value
+        total_gp += gp_value
+
+        info_parts = [account_name, stone_type_name, stone_color_name, stone_thickness]
+        fab_info = " - ".join(str(part).strip() for part in info_parts if part and str(part).strip())
+
+        entries.append(
+            {
+                "cut_date": cut_date.date().isoformat(),
+                "fab_type": row_fab_type,
+                "fab_id": fab_id,
+                "job_number": job_number,
+                "fab_info": fab_info or None,
+                "no_of_pieces": pieces_value,
+                "sqft": sqft_value,
+                "cost/sf": cost_per_sf,
+                "revenue": revenue_value,
+                "revenue_per_sqft": round((revenue_value / sqft_value), 2) if sqft_value else 0.0,
+                "cost_of_stone": cost_of_stone_value,
+                "gp": gp_value,
+            }
+        )
+
+    total_sqft = round(total_sqft, 2)
+    total_revenue = round(total_revenue, 2)
+    total_cost_of_stone = round(total_cost_of_stone, 2)
+    total_gp = round(total_gp, 2)
+
+    return success_response(
+        {
+            "month": calendar.month_name[month_num],
+            "year": year,
+            "summary": {
+                "total_no_of_pieces": int(total_pieces),
+                "total_sqft": total_sqft,
+                "total_revenue": total_revenue,
+                "total_revenue/sqft": round((total_revenue / total_sqft), 2) if total_sqft else 0.0,
+                "total_cost_of_stone": total_cost_of_stone,
+                "total_gp": total_gp,
+            },
+            "entries": entries,
+        },
+        "Monthly Cut Completion data retrieved successfully",
     )
 
 

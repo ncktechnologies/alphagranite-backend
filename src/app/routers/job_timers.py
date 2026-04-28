@@ -815,6 +815,19 @@ async def get_templater_job_timer_history(
     current_user: User = Depends(get_current_user),
 ):
     """Get timer history for a templater on a job"""
+
+    # Resolve descriptive names
+    job_result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
+    job = job_result.scalar_one_or_none()
+
+    templater_result = await db.execute(select(User).where(User.id == templater_id))
+    templater = templater_result.scalar_one_or_none()
+
+    templater_name = None
+    if templater is not None:
+        templater_name = f"{(templater.first_name or '').strip()} {(templater.last_name or '').strip()}".strip()
+        if not templater_name:
+            templater_name = templater.username
     
     # Get all sessions
     sessions_result = await db.execute(
@@ -835,12 +848,18 @@ async def get_templater_job_timer_history(
         .order_by(TemplaterJobTimerEvent.event_at)
     )
     events = events_result.scalars().all()
+
+    latest_session = sessions[-1] if sessions else None
+    is_complete = bool(latest_session and latest_session.status == "stopped")
     
     return success_response(
         {
             "job_id": job_id,
+            "job_name": job.name if job else None,
             "templater_id": templater_id,
+            "templater_name": templater_name,
             "fab_id": fab_id,
+            "is_complete": is_complete,
             "sessions": [_serialize_templater_job_timer_session(s) for s in sessions],
             "events": [_serialize_templater_job_timer_event(e) for e in events],
         },
