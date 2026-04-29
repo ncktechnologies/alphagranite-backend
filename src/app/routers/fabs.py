@@ -390,6 +390,7 @@ def _stage_filter_condition(stage_name: str):
     - install_scheduling uses its redirected visibility rule
     - final_programming includes pending cut_list FABs with a shop date
     - cut_list excludes FABs counted as pending final_programming
+    - shop shows FABs with active (not yet 100%) shop cut plan work
     - all other stages use exact stage match
     """
     if stage_name == "install_completion":
@@ -403,6 +404,8 @@ def _stage_filter_condition(stage_name: str):
         return _pending_final_programming_filter()
     if stage_name == "cut_list":
         return _effective_cut_list_filter()
+    if stage_name == "shop":
+        return _active_shop_cut_plan_visibility_filter()
     return Fab.current_stage == stage_name
 
 
