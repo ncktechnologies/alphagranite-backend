@@ -1578,41 +1578,41 @@ async def get_daily_install_completion_report(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Daily install completion report with optional filters and daily/grand totals."""
+    """Daily install completion report based on scheduled install dates with optional filters and daily/grand totals."""
     start_dt, end_dt = _range_bounds(start_date, end_date)
 
     query = (
         select(
-            InstallCompletion.completion_date,
+            InstallScheduling.scheduled_install_date,
             Fab.id,
             Fab.fab_type,
             BusinessJob.job_number,
             BusinessJob.name,
-            InstallCompletion.installer_id,
+            InstallScheduling.installer_id,
             User.first_name,
             User.last_name,
-            InstallCompletion.total_sqft_installed,
+            InstallScheduling.total_sqft,
             Fab.revenue,
             Fab.gp,
         )
-        .select_from(InstallCompletion)
-        .join(Fab, Fab.id == InstallCompletion.fab_id)
+        .select_from(InstallScheduling)
+        .join(Fab, Fab.id == InstallScheduling.fab_id)
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
-        .join(User, User.id == InstallCompletion.installer_id, isouter=True)
-        .where(Fab.current_stage == "install_completion")
-        .order_by(InstallCompletion.completion_date.asc(), Fab.id.asc())
+        .join(User, User.id == InstallScheduling.installer_id, isouter=True)
+        .where(InstallScheduling.scheduled_install_date.is_not(None))
+        .order_by(InstallScheduling.scheduled_install_date.asc(), Fab.id.asc())
     )
 
     if start_dt is not None:
-        query = query.where(InstallCompletion.completion_date >= start_dt)
+        query = query.where(InstallScheduling.scheduled_install_date >= start_dt)
     if end_dt is not None:
-        query = query.where(InstallCompletion.completion_date <= end_dt)
+        query = query.where(InstallScheduling.scheduled_install_date <= end_dt)
     if job_number:
         query = query.where(BusinessJob.job_number.ilike(f"%{job_number.strip()}%"))
     if fab_id is not None:
         query = query.where(Fab.id == fab_id)
     if installer_id is not None:
-        query = query.where(InstallCompletion.installer_id == installer_id)
+        query = query.where(InstallScheduling.installer_id == installer_id)
 
     records = (await db.execute(query)).all()
 
@@ -1629,7 +1629,7 @@ async def get_daily_install_completion_report(
     grand_total_gp = 0.0
 
     for (
-        completion_date,
+        scheduled_install_date,
         row_fab_id,
         row_fab_type,
         row_job_number,
@@ -1641,10 +1641,7 @@ async def get_daily_install_completion_report(
         revenue_raw,
         gp_raw,
     ) in records:
-        if completion_date is None:
-            continue
-
-        day_key = completion_date.date().isoformat()
+        day_key = scheduled_install_date.date().isoformat()
         sqft_value = round(_to_float(sqft_installed_raw), 2)
         revenue_value = round(_to_float(revenue_raw), 2)
         gp_value = round(_to_float(gp_raw), 2)
@@ -1658,7 +1655,10 @@ async def get_daily_install_completion_report(
         grand_total_revenue += revenue_value
         grand_total_gp += gp_value
 
-        installer_name = (f"{(installer_first_name or '').strip()} {(installer_last_name or '').strip()}".strip() or None)
+        installer_name = (
+            f"{(installer_first_name or '').strip()} {(installer_last_name or '').strip()}".strip()
+            or (f"User {row_installer_id}" if row_installer_id else "Unknown")
+        )
         entries.append(
             {
                 "install_date": day_key,
@@ -1790,11 +1790,9 @@ async def get_monthly_cut_completion_report(
         pieces_value = int(_to_float(no_of_pieces))
         sqft_value = round(_to_float(sqft), 2)
         cost_per_sf = round(_to_float(cost_per_sqft_raw), 2)
-        revenue_value = round(_to_float(revenue_raw), 2)
+        revenue_value = round((-cost_per_sf * sqft_value), 2)
         cost_of_stone_value = round(_to_float(fab_cost_of_stone if fab_cost_of_stone is not None else cos_total_cost), 2)
-        gp_value = round(_to_float(gp_raw), 2)
-        if gp_raw is None:
-            gp_value = round(revenue_value - cost_of_stone_value, 2)
+        gp_value = round((-revenue_value - cost_of_stone_value), 2)
 
         total_pieces += pieces_value
         total_sqft += sqft_value
