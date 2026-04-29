@@ -124,6 +124,29 @@ def _effective_cut_list_filter():
     )
 
 
+def _active_shop_cut_plan_visibility_filter():
+    """Keep FABs visible until all related shop cut plans reach 100% work completion."""
+    any_shop_plan_exists = (
+        select(ShopCutPlan.id)
+        .where(ShopCutPlan.fab_id == Fab.id)
+        .exists()
+    )
+
+    any_incomplete_shop_plan_exists = (
+        select(ShopCutPlan.id)
+        .where(
+            ShopCutPlan.fab_id == Fab.id,
+            func.coalesce(ShopCutPlan.work_percentage, 0) < 100,
+        )
+        .exists()
+    )
+
+    return or_(
+        ~any_shop_plan_exists,
+        any_incomplete_shop_plan_exists,
+    )
+
+
 def _pending_cnc_widget_filter():
     latest_cnc_completed = (
         select(CNCDrafting.is_completed)
@@ -786,6 +809,8 @@ async def get_fabs(
         drafter_id,
     )
 
+    query = query.where(_active_shop_cut_plan_visibility_filter())
+
     # Apply search filter if present
     if search_filter is not None:
         query = query.where(search_filter)
@@ -838,6 +863,7 @@ async def get_fabs(
     count_query = select(func.count(Fab.id)).select_from(Fab)
     count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
     count_query = count_query.outerjoin(latest_templating, sa.literal(True))
+    count_query = count_query.where(_active_shop_cut_plan_visibility_filter())
 
     # Apply all basic filters to count query
     if job_id is not None:
@@ -935,7 +961,10 @@ async def get_fabs(
             func.sum(Fab.miter_linft).label("miter_linft"),
             func.sum(Fab.saw_cut_lnft).label("saw_cut_lnft"),
             func.sum(Fab.no_of_pieces).label("no_of_pieces")
-        ).select_from(Fab).where(_stage_filter_condition(current_stage))
+        ).select_from(Fab).where(
+            _stage_filter_condition(current_stage),
+            _active_shop_cut_plan_visibility_filter(),
+        )
 
         # Apply same basic filters
         if job_id is not None:
