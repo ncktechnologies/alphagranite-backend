@@ -554,7 +554,7 @@ async def get_owner_weekly_fabrication_labor_cost_report(
 
             cut_metrics = (
                 await db.execute(
-                    select(func.sum(Fab.saw_cut_lnft), func.sum(Fab.total_sqft)).where(
+                    select(func.sum(cast(Fab.saw_cut_lnft, Numeric)), func.sum(cast(Fab.total_sqft, Numeric))).where(
                         Fab.shop_date_schedule >= week_start_dt,
                         Fab.shop_date_schedule <= week_end_dt,
                     )
@@ -806,7 +806,7 @@ async def get_owner_weekly_installer_labor_cost_report(
 
             install_sqft_row = (
                 await db.execute(
-                    select(func.sum(InstallScheduling.total_sqft)).where(
+                    select(func.sum(cast(InstallScheduling.total_sqft, Numeric))).where(
                         InstallScheduling.scheduled_install_date >= week_start_dt,
                         InstallScheduling.scheduled_install_date <= week_end_dt,
                     )
