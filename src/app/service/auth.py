@@ -31,7 +31,7 @@ class AuthService:
     def __init__(self):
         self.SECRET_KEY = os.getenv("SECRET_KEY")
         self.ALGORITHM = os.getenv("ALGORITHM", "HS256")
-        self.ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 30))
+        self.ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 480))
         self.REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", 7))
     # Prefer a scheme that doesn't suffer from bcrypt's 72-byte limit.
     # pbkdf2_sha256 is a widely-supported, pure-Python scheme and will
@@ -60,8 +60,8 @@ class AuthService:
 
     def create_access_token(self, data: dict, expires_delta: Optional[timedelta] = None):
         to_encode = data.copy()
-        expire = datetime.utcnow() + (expires_delta or timedelta(minutes=self.ACCESS_TOKEN_EXPIRE_MINUTES))
-        to_encode.update({"exp": expire})
+        issued_at = datetime.utcnow()
+        to_encode.update({"iat": issued_at, "type": "access"})
         encoded_jwt = jwt.encode(to_encode, self.SECRET_KEY, algorithm=self.ALGORITHM)
         return encoded_jwt
 
@@ -219,6 +219,9 @@ class AuthService:
         
         # Get user permissions for action menus (existing functionality)
         user_permissions = await self.get_user_permissions(user.id, db_session)
+
+        user.updated_at = datetime.utcnow()
+        await db_session.commit()
 
         # Create tokens with claims
         token_data = {
