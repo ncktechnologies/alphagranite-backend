@@ -1,0 +1,62 @@
+name: Deploy to Dev Environment
+
+on:
+  push:
+    branches:
+      - dev
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEV_VPS_HOST }}
+          username: ${{ secrets.DEV_VPS_USERNAME }}
+          key: ${{ secrets.DEV_VPS_SSH_KEY }}
+          script: |
+            set -e
+            
+            echo "========================================="
+            echo "Starting deployment to staging server"
+            echo "========================================="
+            
+            # Navigate to project directory
+            echo "Navigating to project directory..."
+            cd /root/alphagranite/alpha-granit
+            
+            # Pull latest changes
+            echo "Pulling latest changes from Git..."
+            git pull
+            
+            # Start services
+            echo "Starting services..."
+            docker compose --env-file .env.dev -p ag_dev up -d --build
+            
+            # Check container status
+            echo "Checking container status..."
+            docker compose --env-file .env.dev -p ag_dev ps
+            
+            # Show recent logs
+            echo "Recent logs:"
+            docker compose --env-file .env.dev -p ag_dev logs --tail=50
+            
+            echo "========================================="
+            echo "Deployment completed successfully!"
+            echo "========================================="
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ ${{ job.status }} == 'success' ]; then
+            echo "✅ Deployment successful!"
+          else
+            echo "❌ Deployment failed!"
+          fi
