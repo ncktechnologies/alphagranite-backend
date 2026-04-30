@@ -57,6 +57,8 @@ from src.app.routers import job_timers
 from src.app.routers import job_fab_listing
 from src.app.routers import cnc
 from src.app.routers import reports
+from src.app.service.monthly_end_of_month_status_report import start_monthly_status_report_scheduler
+from src.app.service.monthly_end_of_month_status_report import stop_monthly_status_report_scheduler
 
 # Import logging configuration
 from src.app.utils.logger import setup_logging
@@ -98,6 +100,16 @@ if cors_origins == ["*"]:
     cors_credentials = False
 
 app = FastAPI(title="Alpha Granite Backend API", version="1.0.0")
+
+
+@app.on_event("startup")
+async def startup_event() -> None:
+    start_monthly_status_report_scheduler()
+
+
+@app.on_event("shutdown")
+async def shutdown_event() -> None:
+    await stop_monthly_status_report_scheduler()
 
 # Add request logging middleware (logs all incoming requests)
 app.add_middleware(RequestLoggerMiddleware)

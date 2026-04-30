@@ -3,8 +3,10 @@ import logging
 import smtplib
 import asyncio
 from typing import Optional
+from typing import Sequence
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,8 +24,7 @@ logger = logging.getLogger("notification_service")
 # `SessionLocal` is imported from `src.app.utils.config` above.
 
 
-def send_email(to_email: str, subject: str, body: str, is_html: bool = True):
-    """Synchronous SMTP send (will be executed in threadpool to avoid blocking)."""
+def _smtp_config() -> tuple[str, int, str, str, str, bool]:
     smtp_host = os.getenv("EMAIL_HOST")
     smtp_port = int(os.getenv("EMAIL_PORT", 587))
     smtp_user = os.getenv("EMAIL_HOST_USER")
@@ -43,31 +44,64 @@ def send_email(to_email: str, subject: str, body: str, is_html: bool = True):
     if missing:
         raise ValueError(f"Missing required email environment variables: {', '.join(missing)}")
 
-    smtp_host_value = str(smtp_host)
-    smtp_user_value = str(smtp_user)
-    smtp_password_value = str(smtp_password)
-    smtp_from_value = str(smtp_from)
+    return (
+        str(smtp_host),
+        smtp_port,
+        str(smtp_user),
+        str(smtp_password),
+        str(smtp_from),
+        use_tls,
+    )
+
+
+def send_email_with_attachments(
+    to_email: str,
+    subject: str,
+    body: str,
+    attachments: Optional[Sequence[tuple[str, bytes, str]]] = None,
+    is_html: bool = True,
+):
+    """Synchronous SMTP send with optional attachments.
+
+    attachments: sequence of (filename, content_bytes, mime_type)
+    """
+    smtp_host, smtp_port, smtp_user, smtp_password, smtp_from, use_tls = _smtp_config()
+
+    recipients = [item.strip() for item in to_email.split(",") if item.strip()]
+    if not recipients:
+        raise ValueError("No recipient email addresses provided")
 
     msg = MIMEMultipart()
-    msg["From"] = smtp_from_value
-    msg["To"] = to_email
+    msg["From"] = smtp_from
+    msg["To"] = ", ".join(recipients)
     msg["Subject"] = subject
-    
-    # Attach body as HTML or plain text based on is_html parameter
-    if is_html:
-        msg.attach(MIMEText(body, "html"))
-    else:
-        msg.attach(MIMEText(body, "plain"))
+    msg.attach(MIMEText(body, "html" if is_html else "plain"))
+
+    for filename, content, mime_type in (attachments or []):
+        part = MIMEApplication(content, _subtype=mime_type.split("/")[-1])
+        part.add_header("Content-Disposition", "attachment", filename=filename)
+        msg.attach(part)
 
     try:
-        with smtplib.SMTP(smtp_host_value, smtp_port) as server:
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
             if use_tls:
                 server.starttls()
-            server.login(smtp_user_value, smtp_password_value)
-            server.sendmail(smtp_from_value, to_email, msg.as_string())
+            server.login(smtp_user, smtp_password)
+            server.sendmail(smtp_from, recipients, msg.as_string())
     except Exception as e:
         logger.exception("Failed to send email to %s: %s", to_email, str(e))
         raise
+
+
+def send_email(to_email: str, subject: str, body: str, is_html: bool = True):
+    """Synchronous SMTP send (will be executed in threadpool to avoid blocking)."""
+    send_email_with_attachments(
+        to_email=to_email,
+        subject=subject,
+        body=body,
+        attachments=None,
+        is_html=is_html,
+    )
 
 async def save_audit_trail(
     db: AsyncSession,

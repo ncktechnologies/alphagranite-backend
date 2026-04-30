@@ -30,6 +30,7 @@ from src.app.database.user import User
 from src.app.interface.generated_schemas import CostOfStone, CutList, InstallCompletion, InstallScheduling, Revision, Templating
 from src.app.interface.response_wrappers import SuccessResponse, success_response
 from src.app.middleware.jwt_auth import get_current_user
+from src.app.service.monthly_end_of_month_status_report import send_monthly_end_of_month_status_report
 
 router = APIRouter()
 
@@ -3298,6 +3299,36 @@ async def get_owner_management_packet(
         },
         "Owner management packet generated",
     )
+
+
+@router.post("/reports/owner/end-of-month-status/send-test", response_model=SuccessResponse[dict])
+async def send_end_of_month_status_report_test(
+    year: Optional[int] = Query(None, ge=2000, le=2100, description="Target year; defaults to previous month year"),
+    month: Optional[int] = Query(None, ge=1, le=12, description="Target month; defaults to previous month"),
+    email: Optional[str] = Query(None, description="Optional recipient email(s), comma-separated"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    del db  # Route keeps consistent dependency pattern; service manages its own DB session.
+
+    if (year is None) != (month is None):
+        return success_response(None, "Provide both year and month, or neither", status_code=400)
+
+    if year is None and month is None:
+        previous_month_date = date.today().replace(day=1) - timedelta(days=1)
+        year = previous_month_date.year
+        month = previous_month_date.month
+
+    send_result = await send_monthly_end_of_month_status_report(
+        year=year,
+        month=month,
+        recipients_override=email,
+    )
+
+    if not send_result.get("sent"):
+        return success_response(send_result, "Unable to send end-of-month status report", status_code=400)
+
+    return success_response(send_result, "End-of-month status report sent successfully")
 
 
 @router.get("/reports/owner/export/{report_key}")
