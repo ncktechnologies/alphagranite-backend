@@ -61,7 +61,11 @@ FAB_STAGES = [
 ]
 
 BASE_URL = os.getenv("BASE_URL", "https://api.ag.easybusiness.ng")
-PUNCHOUT_REDIRECT_FAB_TYPES = ("PUNCHOUT-AG", "PUNCHOUT-BILLABLE")
+PUNCHOUT_REDIRECT_FAB_TYPES = (
+    "PUNCHOUT-AG",
+    "PUNCHOUT_BILLABLE",
+    "PUNCHOUT-BILLABLE",
+)
 
 
 def _install_to_schedule_filter():
@@ -141,9 +145,12 @@ def _active_shop_cut_plan_visibility_filter():
         .exists()
     )
 
-    return or_(
-        ~any_shop_plan_exists,
-        any_incomplete_shop_plan_exists,
+    return and_(
+        ~Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+        or_(
+            ~any_shop_plan_exists,
+            any_incomplete_shop_plan_exists,
+        ),
     )
 
 
