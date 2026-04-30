@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from src.app.database import get_db
 from src.app.database.user import User
 from src.app.database.fab import Fab
+from src.app.database.shop_cut_plan import ShopCutPlan
 from src.app.interface.generated_schemas import InstallScheduling
 from src.app.database.status import Status
 from src.app.interface.business_schemas import (
@@ -103,9 +104,28 @@ async def update_install_scheduling(
     
     if not install_scheduling:
         raise error_response("Install Scheduling not found", 404)
+
+    update_dict = update_data.model_dump(exclude_unset=True)
+    if update_dict.get("is_completed") is True:
+        plan_rows = (
+            await db.execute(
+                select(ShopCutPlan.work_percentage).where(ShopCutPlan.fab_id == install_scheduling.fab_id)
+            )
+        ).all()
+
+        if not plan_rows:
+            raise error_response(
+                "Install scheduling cannot be marked complete until all shop cut plans are 100% complete",
+                400,
+            )
+
+        if any((work_percentage or 0) < 100 for (work_percentage,) in plan_rows):
+            raise error_response(
+                "Install scheduling cannot be marked complete until all shop cut plans are 100% complete",
+                400,
+            )
     
     # Update fields
-    update_dict = update_data.model_dump(exclude_unset=True)
     for key, value in update_dict.items():
         setattr(install_scheduling, key, value)
     
