@@ -12,7 +12,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, case, func, literal_column, or_, select
+from sqlalchemy import and_, case, cast, func, literal_column, or_, select
+from sqlalchemy import Numeric
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.database import get_db
@@ -563,9 +564,9 @@ async def get_owner_weekly_fabrication_labor_cost_report(
             completion_metrics = (
                 await db.execute(
                     select(
-                        func.sum(InstallCompletion.total_sqft_installed),
-                        func.sum(Fab.revenue),
-                        func.sum(Fab.gp),
+                        func.sum(cast(InstallCompletion.total_sqft_installed, Numeric)),
+                        func.sum(cast(Fab.revenue, Numeric)),
+                        func.sum(cast(Fab.gp, Numeric)),
                     )
                     .join(Fab, Fab.id == InstallCompletion.fab_id, isouter=True)
                     .where(
@@ -815,9 +816,9 @@ async def get_owner_weekly_installer_labor_cost_report(
             completion_metrics = (
                 await db.execute(
                     select(
-                        func.sum(InstallCompletion.total_sqft_installed),
-                        func.sum(Fab.revenue),
-                        func.sum(Fab.gp),
+                        func.sum(cast(InstallCompletion.total_sqft_installed, Numeric)),
+                        func.sum(cast(Fab.revenue, Numeric)),
+                        func.sum(cast(Fab.gp, Numeric)),
                     )
                     .join(Fab, Fab.id == InstallCompletion.fab_id, isouter=True)
                     .where(
