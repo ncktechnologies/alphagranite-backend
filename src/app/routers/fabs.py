@@ -130,6 +130,15 @@ def _effective_cut_list_filter():
 
 def _active_shop_cut_plan_visibility_filter():
     """Keep FABs visible until all related shop cut plans reach 100% work completion."""
+    has_install_schedule = (
+        select(InstallScheduling.id)
+        .where(
+            InstallScheduling.fab_id == Fab.id,
+            InstallScheduling.scheduled_install_date.isnot(None),
+        )
+        .exists()
+    )
+
     any_shop_plan_exists = (
         select(ShopCutPlan.id)
         .where(ShopCutPlan.fab_id == Fab.id)
@@ -148,6 +157,7 @@ def _active_shop_cut_plan_visibility_filter():
     return and_(
         ~Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
         or_(
+            has_install_schedule,
             ~any_shop_plan_exists,
             any_incomplete_shop_plan_exists,
         ),
@@ -4764,6 +4774,20 @@ async def get_resurface_schedule(
 
     SalesUser = aliased(User)
 
+    any_shop_plan_exists = (
+        select(ShopCutPlan.id)
+        .where(ShopCutPlan.fab_id == Fab.id)
+        .exists()
+    )
+    any_incomplete_shop_plan_exists = (
+        select(ShopCutPlan.id)
+        .where(
+            ShopCutPlan.fab_id == Fab.id,
+            func.coalesce(ShopCutPlan.work_percentage, 0) < 100,
+        )
+        .exists()
+    )
+
     base_query = (
         select(
             Fab,
@@ -4791,6 +4815,7 @@ async def get_resurface_schedule(
         .where(
             func.upper(sa.func.trim(Fab.fab_type)) == "RESURFACE",
             Fab.shop_date_schedule.isnot(None),
+            or_(~any_shop_plan_exists, any_incomplete_shop_plan_exists),
         )
     )
 

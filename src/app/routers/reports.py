@@ -23,11 +23,12 @@ from src.app.database.department import Department
 from src.app.database.fab import Fab
 from src.app.database.installer_rate_history import InstallerRateHistory
 from src.app.database.installer_job_timer_session import InstallerJobTimerSession
+from src.app.database.shop_cut_plan import ShopCutPlan
 from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness
 from src.app.database.stone_type import StoneType
 from src.app.database.user import User
-from src.app.interface.generated_schemas import CostOfStone, CutList, InstallCompletion, InstallScheduling, Revision, Templating
+from src.app.interface.generated_schemas import CNCDrafting, CostOfStone, CutList, InstallCompletion, InstallScheduling, PlanningSection, Revision, Templating
 from src.app.interface.response_wrappers import SuccessResponse, success_response
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.service.monthly_end_of_month_status_report import send_monthly_end_of_month_status_report
@@ -2322,6 +2323,15 @@ async def get_monthly_cut_completion_report(
 
     start_dt, end_dt = _month_bounds(year, month_num)
     cut_date_expr = func.coalesce(Fab.shop_date_schedule, Fab.final_programming_completed_date)
+    cut_or_wj_plan_exists = (
+        select(ShopCutPlan.id)
+        .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
+        .where(
+            ShopCutPlan.fab_id == Fab.id,
+            func.lower(func.trim(PlanningSection.plan_name)).in_(["cut", "wj"]),
+        )
+        .exists()
+    )
 
     query = (
         select(
@@ -2347,7 +2357,7 @@ async def get_monthly_cut_completion_report(
         .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
         .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
         .join(CostOfStone, CostOfStone.id == Fab.cost_of_stone_id, isouter=True)
-        .where(cut_date_expr >= start_dt, cut_date_expr <= end_dt)
+        .where(cut_date_expr >= start_dt, cut_date_expr <= end_dt, cut_or_wj_plan_exists)
         .order_by(cut_date_expr.asc(), Fab.id.asc())
     )
 
@@ -2447,15 +2457,35 @@ async def get_owner_turnaround_times_report(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Turnaround-times report aligned to template/predraft/draft/sct/final-prog/cut/fab-complete milestones."""
+    """Turnaround-times report with full stage dates/days and stage statistics."""
     start_dt, end_dt = _month_bounds(year, month)
 
-    install_subquery = (
+    cut_end_subquery = (
         select(
-            InstallCompletion.fab_id.label("fab_id"),
-            func.max(InstallCompletion.completion_date).label("fab_complete_date"),
+            ShopCutPlan.fab_id.label("fab_id"),
+            func.max(ShopCutPlan.actual_end_date).label("cut_end_date"),
         )
-        .group_by(InstallCompletion.fab_id)
+        .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
+        .where(func.lower(func.trim(PlanningSection.plan_name)).in_(["cut", "wj"]))
+        .group_by(ShopCutPlan.fab_id)
+        .subquery()
+    )
+
+    cnc_end_subquery = (
+        select(
+            CNCDrafting.fab_id.label("fab_id"),
+            func.max(CNCDrafting.drafter_end_date).label("cnc_date"),
+        )
+        .group_by(CNCDrafting.fab_id)
+        .subquery()
+    )
+
+    revision_start_subquery = (
+        select(
+            Revision.fab_id.label("fab_id"),
+            func.max(func.coalesce(Revision.actual_start_date, Revision.scheduled_start_date, Revision.created_at)).label("revision_start_date"),
+        )
+        .group_by(Revision.fab_id)
         .subquery()
     )
 
@@ -2463,121 +2493,181 @@ async def get_owner_turnaround_times_report(
         select(
             Fab.id,
             BusinessJob.job_number,
+            BusinessJob.name.label("job_name"),
+            Account.name.label("account_name"),
+            StoneType.name.label("stone_type_name"),
+            StoneColor.name.label("stone_color_name"),
+            StoneThickness.thickness.label("stone_thickness"),
             Fab.no_of_pieces,
             Fab.total_sqft,
             Fab.template_completed_date,
             Fab.predraft_completed_date,
             Fab.draft_completed_date,
+            Fab.slabsmith_completed_date,
+            Fab.revision_completed_date,
+            revision_start_subquery.c.revision_start_date,
             func.coalesce(Fab.sales_ct_completed_date, Fab.sct_completed_date).label("sct_date"),
             Fab.final_programming_completed_date,
+            cnc_end_subquery.c.cnc_date,
             Fab.shop_date_schedule,
-            install_subquery.c.fab_complete_date,
+            cut_end_subquery.c.cut_end_date,
+            Fab.shop_est_completion_date,
         )
+        .select_from(Fab)
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
-        .join(install_subquery, install_subquery.c.fab_id == Fab.id, isouter=True)
+        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+        .join(StoneType, StoneType.id == Fab.stone_type_id, isouter=True)
+        .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
+        .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
+        .join(cut_end_subquery, cut_end_subquery.c.fab_id == Fab.id, isouter=True)
+        .join(cnc_end_subquery, cnc_end_subquery.c.fab_id == Fab.id, isouter=True)
+        .join(revision_start_subquery, revision_start_subquery.c.fab_id == Fab.id, isouter=True)
         .where(
-            install_subquery.c.fab_complete_date.is_not(None),
-            install_subquery.c.fab_complete_date >= start_dt,
-            install_subquery.c.fab_complete_date <= end_dt,
+            Fab.shop_est_completion_date.is_not(None),
+            Fab.shop_est_completion_date >= start_dt,
+            Fab.shop_est_completion_date <= end_dt,
         )
-        .order_by(install_subquery.c.fab_complete_date.desc(), Fab.id.asc())
+        .order_by(Fab.shop_est_completion_date.desc(), Fab.id.asc())
         .limit(limit)
     )
 
     records = (await db.execute(query)).all()
-    rows = []
+    rows: list[dict] = []
 
-    pd_days_values: list[int] = []
-    draft_days_values: list[int] = []
-    sct_days_values: list[int] = []
-    fp_days_values: list[int] = []
-    cut_days_values: list[int] = []
-    fab_days_values: list[int] = []
-    total_days_values: list[int] = []
+    day_columns = {
+        "predraft_days": [],
+        "draft_days": [],
+        "slabsmith_days": [],
+        "revision_days": [],
+        "sct_days": [],
+        "final_prog_days": [],
+        "cnc_days": [],
+        "cut_days": [],
+        "fab_days": [],
+        "total_days": [],
+    }
 
     for (
         fab_id,
         job_number,
+        job_name,
+        account_name,
+        stone_type_name,
+        stone_color_name,
+        stone_thickness,
         pieces,
         total_sqft,
         template_date,
         predraft_date,
         draft_date,
+        slabsmith_date,
+        revision_date,
+        revision_start_date,
         sct_date,
         final_prog_date,
+        cnc_date,
         cut_date,
+        cut_end_date,
         fab_complete_date,
     ) in records:
         predraft_days = _days_between(template_date, predraft_date)
-        draft_days = _days_between(predraft_date or template_date, draft_date)
+        draft_days = _days_between(predraft_date, draft_date)
+        slabsmith_days = _days_between(draft_date, slabsmith_date)
+        revision_days = _days_between(revision_start_date, revision_date)
         sct_days = _days_between(draft_date, sct_date)
         final_prog_days = _days_between(sct_date, final_prog_date)
-        cut_days = _days_between(final_prog_date, cut_date)
-        fab_days = _days_between(cut_date, fab_complete_date)
-        total_days = _days_between(template_date, fab_complete_date)
+        cnc_days = _days_between(final_prog_date, cnc_date)
+        cut_days = _days_between(cut_date, cut_end_date)
+        fab_days = _days_between(cut_end_date, fab_complete_date)
 
-        if predraft_days is not None:
-            pd_days_values.append(predraft_days)
-        if draft_days is not None:
-            draft_days_values.append(draft_days)
-        if sct_days is not None:
-            sct_days_values.append(sct_days)
-        if final_prog_days is not None:
-            fp_days_values.append(final_prog_days)
-        if cut_days is not None:
-            cut_days_values.append(cut_days)
-        if fab_days is not None:
-            fab_days_values.append(fab_days)
-        if total_days is not None:
-            total_days_values.append(total_days)
-
-        rows.append(
-            {
-                "fab_id": fab_id,
-                "job_number": job_number,
-                "pieces": int(_to_float(pieces)),
-                "total_sq_ft": round(_to_float(total_sqft), 2),
-                "template_date": template_date.isoformat() if template_date else None,
-                "predraft_date": predraft_date.isoformat() if predraft_date else None,
-                "predraft_days": predraft_days,
-                "draft_date": draft_date.isoformat() if draft_date else None,
-                "draft_days": draft_days,
-                "sct_date": sct_date.isoformat() if sct_date else None,
-                "sct_days": sct_days,
-                "final_prog_date": final_prog_date.isoformat() if final_prog_date else None,
-                "final_prog_days": final_prog_days,
-                "cut_date": cut_date.isoformat() if cut_date else None,
-                "cut_days": cut_days,
-                "fab_complete_date": fab_complete_date.isoformat() if fab_complete_date else None,
-                "fab_days": fab_days,
-                "total_days": total_days,
-            }
+        total_days = sum(
+            value or 0
+            for value in [
+                predraft_days,
+                draft_days,
+                slabsmith_days,
+                revision_days,
+                sct_days,
+                final_prog_days,
+                cnc_days,
+                cut_days,
+            ]
         )
 
-    def _stats(values: list[int]) -> dict:
-        if not values:
-            return {"min": None, "max": None, "avg": None}
-        return {
-            "min": min(values),
-            "max": max(values),
-            "avg": round(sum(values) / len(values), 2),
+        info_parts = [account_name, job_name, stone_type_name, stone_color_name, stone_thickness]
+        fab_info = " - ".join(str(part).strip() for part in info_parts if part and str(part).strip()) or None
+
+        row = {
+            "fab_id": fab_id,
+            "job_number": job_number,
+            "fab_info": fab_info,
+            "no_of_pieces": int(_to_float(pieces)),
+            "total_sqft": round(_to_float(total_sqft), 2),
+            "template_date": template_date.isoformat() if template_date else None,
+            "predraft_date": predraft_date.isoformat() if predraft_date else None,
+            "predraft_days": predraft_days,
+            "draft_date": draft_date.isoformat() if draft_date else None,
+            "draft_days": draft_days,
+            "slabsmith_date": slabsmith_date.isoformat() if slabsmith_date else None,
+            "slabsmith_days": slabsmith_days,
+            "revision_date": revision_date.isoformat() if revision_date else None,
+            "revision_start_date": revision_start_date.isoformat() if revision_start_date else None,
+            "revision_days": revision_days,
+            "sct_date": sct_date.isoformat() if sct_date else None,
+            "sct_days": sct_days,
+            "final_prog_date": final_prog_date.isoformat() if final_prog_date else None,
+            "final_prog_days": final_prog_days,
+            "cnc_date": cnc_date.isoformat() if cnc_date else None,
+            "cnc_days": cnc_days,
+            "cut_date": cut_date.isoformat() if cut_date else None,
+            "cut_end_date": cut_end_date.isoformat() if cut_end_date else None,
+            "cut_days": cut_days,
+            "fab_complete_date": fab_complete_date.isoformat() if fab_complete_date else None,
+            "fab_days": fab_days,
+            "total_days": total_days,
         }
+        rows.append(row)
+
+        for key in day_columns.keys():
+            value = row.get(key)
+            if value is not None:
+                day_columns[key].append(
+                    {
+                        "fab_id": fab_id,
+                        "job_number": job_number,
+                        "value": int(value),
+                    }
+                )
+
+    def _stage_stats(values: list[dict]) -> dict:
+        if not values:
+            return {
+                "average_days": None,
+                "highest": None,
+                "lowest": None,
+            }
+
+        sorted_values = sorted(values, key=lambda item: item["value"])
+        average_days = round(sum(item["value"] for item in values) / len(values), 2)
+
+        return {
+            "average_days": average_days,
+            "highest": sorted_values[-1],
+            "lowest": sorted_values[0],
+        }
+
+    summary = {
+        key: _stage_stats(values)
+        for key, values in day_columns.items()
+    }
+    summary["row_count"] = len(rows)
 
     return success_response(
         {
             "title": "Turnaround Times Report",
             "year": year,
             "month": month,
-            "summary": {
-                "predraft_days": _stats(pd_days_values),
-                "draft_days": _stats(draft_days_values),
-                "sct_days": _stats(sct_days_values),
-                "final_prog_days": _stats(fp_days_values),
-                "cut_days": _stats(cut_days_values),
-                "fab_days": _stats(fab_days_values),
-                "total_days": _stats(total_days_values),
-                "row_count": len(rows),
-            },
+            "summary": summary,
             "rows": rows,
         },
         "Owner turnaround times report generated",
