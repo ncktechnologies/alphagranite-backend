@@ -19,6 +19,7 @@ from sqlalchemy import select
 from src.app.database.account import Account
 from src.app.database.business_job import BusinessJob
 from src.app.database.fab import Fab
+from src.app.database.shop_cut_plan import ShopCutPlan
 from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness
 from src.app.database.stone_type import StoneType
@@ -49,16 +50,16 @@ DETAIL_COLUMNS = [
     "CutPercent",
     "WJLinFt",
     "WJPercent",
-    "EdingLinFt",
+    "EdgingLinFt",
     "EdgingPercent",
     "CNCLinFt",
     "CNCPercent",
     "MiterLinFt",
     "MiterPercent",
-    "TouchUpQCSqFt",
-    "TouchUpQCPercent",
+    "TouchupSqFt",
+    "TouchupPercent",
     "EstCompletionDate",
-    "FabPercent",
+    "PercentageComplete",
 ]
 
 SUMMARY_COLUMNS = [
@@ -152,6 +153,15 @@ async def _build_report_rows(year: int, month: int) -> tuple[list[dict], list[di
             .subquery()
         )
 
+        avg_work_pct_subq = (
+            select(
+                ShopCutPlan.fab_id.label("fab_id"),
+                func.avg(cast(ShopCutPlan.work_percentage, Numeric)).label("avg_work_pct"),
+            )
+            .group_by(ShopCutPlan.fab_id)
+            .subquery()
+        )
+
         detail_query = (
             select(
                 Fab.fab_type,
@@ -171,6 +181,7 @@ async def _build_report_rows(year: int, month: int) -> tuple[list[dict], list[di
                 Fab.miter_linft,
                 completed_sqft_subq.c.completed_sqft,
                 Fab.shop_est_completion_date,
+                avg_work_pct_subq.c.avg_work_pct,
             )
             .select_from(Fab)
             .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
@@ -180,6 +191,7 @@ async def _build_report_rows(year: int, month: int) -> tuple[list[dict], list[di
             .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
             .join(cut_sqft_subq, cut_sqft_subq.c.fab_id == Fab.id, isouter=True)
             .join(completed_sqft_subq, completed_sqft_subq.c.fab_id == Fab.id, isouter=True)
+            .join(avg_work_pct_subq, avg_work_pct_subq.c.fab_id == Fab.id, isouter=True)
             .where(Fab.created_at >= start_dt, Fab.created_at <= end_dt)
             .order_by(Fab.id.asc())
         )
@@ -205,6 +217,7 @@ async def _build_report_rows(year: int, month: int) -> tuple[list[dict], list[di
             miter_linft_raw,
             completed_sqft_raw,
             est_completion_date,
+            avg_work_pct_raw,
         ) in detail_result:
             total_sqft = round(_to_float(total_sqft_raw), 2)
             cut_sqft = round(_to_float(cut_sqft_raw), 2)
@@ -213,6 +226,7 @@ async def _build_report_rows(year: int, month: int) -> tuple[list[dict], list[di
             cnc_linft = round(_to_float(cnc_linft_raw), 2)
             miter_linft = round(_to_float(miter_linft_raw), 2)
             completed_sqft = round(_to_float(completed_sqft_raw), 2)
+            avg_work_pct = round(_to_float(avg_work_pct_raw), 2)
 
             linear_total = wj_linft + edging_linft + cnc_linft + miter_linft
 
@@ -232,16 +246,16 @@ async def _build_report_rows(year: int, month: int) -> tuple[list[dict], list[di
                     "CutPercent": _to_percent(cut_sqft, total_sqft),
                     "WJLinFt": wj_linft,
                     "WJPercent": _to_percent(wj_linft, linear_total),
-                    "EdingLinFt": edging_linft,
+                    "EdgingLinFt": edging_linft,
                     "EdgingPercent": _to_percent(edging_linft, linear_total),
                     "CNCLinFt": cnc_linft,
                     "CNCPercent": _to_percent(cnc_linft, linear_total),
                     "MiterLinFt": miter_linft,
                     "MiterPercent": _to_percent(miter_linft, linear_total),
-                    "TouchUpQCSqFt": completed_sqft,
-                    "TouchUpQCPercent": _to_percent(completed_sqft, total_sqft),
+                    "TouchupSqFt": completed_sqft,
+                    "TouchupPercent": _to_percent(completed_sqft, total_sqft),
                     "EstCompletionDate": est_completion_date.isoformat() if est_completion_date else None,
-                    "FabPercent": _to_percent(completed_sqft, total_sqft),
+                    "PercentageComplete": avg_work_pct,
                 }
             )
 
