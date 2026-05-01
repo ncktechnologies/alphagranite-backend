@@ -2454,6 +2454,11 @@ async def get_owner_turnaround_times_report(
     year: int = Query(..., ge=2000, le=2100),
     month: int = Query(..., ge=1, le=12),
     limit: int = Query(2000, ge=1, le=10000),
+    threshold_days: Optional[int] = Query(
+        None,
+        ge=0,
+        description="Optional threshold used to list jobs that exceeded the specified days in each stage and total days",
+    ),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -2546,6 +2551,18 @@ async def get_owner_turnaround_times_report(
         "fab_days": [],
         "total_days": [],
     }
+    stage_labels = {
+        "predraft_days": "predraft",
+        "draft_days": "draft",
+        "slabsmith_days": "slabsmith",
+        "revision_days": "revision",
+        "sct_days": "sct",
+        "final_prog_days": "final_programming",
+        "cnc_days": "cnc",
+        "cut_days": "cut",
+        "fab_days": "fab",
+        "total_days": "total",
+    }
 
     for (
         fab_id,
@@ -2635,6 +2652,7 @@ async def get_owner_turnaround_times_report(
                     {
                         "fab_id": fab_id,
                         "job_number": job_number,
+                        "fab_info": fab_info,
                         "value": int(value),
                     }
                 )
@@ -2662,12 +2680,48 @@ async def get_owner_turnaround_times_report(
     }
     summary["row_count"] = len(rows)
 
+    stage_averages = {
+        stage_labels[key]: stats["average_days"]
+        for key, stats in summary.items()
+        if key in stage_labels
+    }
+
+    threshold_analysis = None
+    if threshold_days is not None:
+        jobs_by_stage = {}
+        counts_by_stage = {}
+
+        for key, values in day_columns.items():
+            stage_name = stage_labels[key]
+            exceeded = [
+                {
+                    "fab_id": item["fab_id"],
+                    "job_number": item["job_number"],
+                    "fab_info": item.get("fab_info"),
+                    "days": item["value"],
+                    "days_over_threshold": item["value"] - threshold_days,
+                }
+                for item in values
+                if item["value"] > threshold_days
+            ]
+            exceeded.sort(key=lambda item: (item["days"], item["job_number"] or "", item["fab_id"]), reverse=True)
+            jobs_by_stage[stage_name] = exceeded
+            counts_by_stage[stage_name] = len(exceeded)
+
+        threshold_analysis = {
+            "threshold_days": threshold_days,
+            "counts_by_stage": counts_by_stage,
+            "jobs_by_stage": jobs_by_stage,
+        }
+
     return success_response(
         {
             "title": "Turnaround Times Report",
             "year": year,
             "month": month,
             "summary": summary,
+            "stage_averages": stage_averages,
+            "threshold_analysis": threshold_analysis,
             "rows": rows,
         },
         "Owner turnaround times report generated",
