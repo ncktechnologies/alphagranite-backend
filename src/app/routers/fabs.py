@@ -411,7 +411,18 @@ def _stage_filter_condition(stage_name: str):
     - all other stages use exact stage match
     """
     if stage_name == "install_completion":
-        return Fab.current_stage == "install_completion"
+        completed_install_schedule_exists = (
+            select(InstallScheduling.id)
+            .where(
+                InstallScheduling.fab_id == Fab.id,
+                InstallScheduling.is_completed.is_(True),
+            )
+            .exists()
+        )
+        return and_(
+            Fab.current_stage == "install_completion",
+            ~completed_install_schedule_exists,
+        )
     if stage_name == "install_scheduling":
         return and_(
             Fab.current_stage == "install_scheduling",
