@@ -157,6 +157,13 @@ def _active_shop_cut_plan_visibility_filter():
     return and_(
         ~Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
         or_(
+            Fab.current_stage == "shop",
+            and_(
+                Fab.current_stage == "cut_list",
+                Fab.cutlist_complete.is_(True),
+            ),
+        ),
+        or_(
             has_install_schedule,
             ~any_shop_plan_exists,
             any_incomplete_shop_plan_exists,
@@ -840,7 +847,8 @@ async def get_fabs(
         drafter_id,
     )
 
-    query = query.where(_active_shop_cut_plan_visibility_filter())
+    if current_stage == "shop":
+        query = query.where(_active_shop_cut_plan_visibility_filter())
 
     # Apply search filter if present
     if search_filter is not None:
@@ -894,7 +902,8 @@ async def get_fabs(
     count_query = select(func.count(Fab.id)).select_from(Fab)
     count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
     count_query = count_query.outerjoin(latest_templating, sa.literal(True))
-    count_query = count_query.where(_active_shop_cut_plan_visibility_filter())
+    if current_stage == "shop":
+        count_query = count_query.where(_active_shop_cut_plan_visibility_filter())
 
     # Apply all basic filters to count query
     if job_id is not None:
@@ -992,10 +1001,10 @@ async def get_fabs(
             func.sum(Fab.miter_linft).label("miter_linft"),
             func.sum(Fab.saw_cut_lnft).label("saw_cut_lnft"),
             func.sum(Fab.no_of_pieces).label("no_of_pieces")
-        ).select_from(Fab).where(
-            _stage_filter_condition(current_stage),
-            _active_shop_cut_plan_visibility_filter(),
-        )
+        ).select_from(Fab).where(_stage_filter_condition(current_stage))
+
+        if current_stage == "shop":
+            stage_totals_query = stage_totals_query.where(_active_shop_cut_plan_visibility_filter())
 
         # Apply same basic filters
         if job_id is not None:
