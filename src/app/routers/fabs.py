@@ -129,15 +129,13 @@ def _effective_cut_list_filter():
 
 
 def _active_shop_cut_plan_visibility_filter():
-    """Keep FABs visible until all related shop cut plans reach 100% work completion."""
-    has_install_schedule = (
-        select(InstallScheduling.id)
-        .where(
-            InstallScheduling.fab_id == Fab.id,
-            InstallScheduling.scheduled_install_date.isnot(None),
-        )
-        .exists()
-    )
+    """Visibility for current_stage=shop listing.
+
+    Rules:
+    - Include FABs in current_stage=shop while any shop plan is incomplete (<100),
+      or when there are no shop plans yet.
+    - Also include FABs still in current_stage=cut_list when cutlist_complete=true.
+    """
 
     any_shop_plan_exists = (
         select(ShopCutPlan.id)
@@ -154,19 +152,23 @@ def _active_shop_cut_plan_visibility_filter():
         .exists()
     )
 
-    return and_(
-        ~Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+    shop_stage_visibility = and_(
+        Fab.current_stage == "shop",
         or_(
-            Fab.current_stage == "shop",
-            and_(
-                Fab.current_stage == "cut_list",
-                Fab.cutlist_complete.is_(True),
-            ),
-        ),
-        or_(
-            has_install_schedule,
             ~any_shop_plan_exists,
             any_incomplete_shop_plan_exists,
+        ),
+    )
+
+    cut_list_ready_for_shop_visibility = and_(
+        Fab.current_stage == "cut_list",
+        Fab.cutlist_complete.is_(True),
+    )
+
+    return and_(
+        or_(
+            shop_stage_visibility,
+            cut_list_ready_for_shop_visibility,
         ),
     )
 
