@@ -64,6 +64,7 @@ DETAIL_COLUMNS = [
 
 SUMMARY_COLUMNS = [
     "Account",
+    "JobNumber",
     "JobName",
     "TotalSqFt_sum",
     "CompletedSqFt_sum",
@@ -96,6 +97,19 @@ def _to_percent(numerator: float, denominator: float) -> float:
     if denominator <= 0:
         return 0.0
     return round((numerator / denominator) * 100, 2)
+
+
+def _normalize_work_percent(value: Any) -> float:
+    """Normalize work percentage values to 0..100.
+
+    Some sources store work percentage as 0..1 and others as 0..100.
+    """
+    pct = _to_float(value)
+    if pct <= 0:
+        return 0.0
+    if pct <= 1:
+        pct = pct * 100
+    return round(min(pct, 100.0), 2)
 
 
 def _rows_to_csv_bytes(columns: list[str], rows: list[dict]) -> bytes:
@@ -192,7 +206,12 @@ async def _build_report_rows(year: int, month: int) -> tuple[list[dict], list[di
             .join(cut_sqft_subq, cut_sqft_subq.c.fab_id == Fab.id, isouter=True)
             .join(completed_sqft_subq, completed_sqft_subq.c.fab_id == Fab.id, isouter=True)
             .join(avg_work_pct_subq, avg_work_pct_subq.c.fab_id == Fab.id, isouter=True)
-            .where(Fab.created_at >= start_dt, Fab.created_at <= end_dt)
+            .where(
+                Fab.created_at >= start_dt,
+                Fab.created_at <= end_dt,
+                Fab.cutlist_complete.is_(True),
+                func.lower(func.coalesce(Fab.current_stage, "")) != "install_completion",
+            )
             .order_by(Fab.id.asc())
         )
 
@@ -226,7 +245,7 @@ async def _build_report_rows(year: int, month: int) -> tuple[list[dict], list[di
             cnc_linft = round(_to_float(cnc_linft_raw), 2)
             miter_linft = round(_to_float(miter_linft_raw), 2)
             completed_sqft = round(_to_float(completed_sqft_raw), 2)
-            avg_work_pct = round(_to_float(avg_work_pct_raw), 2)
+            avg_work_pct = _normalize_work_percent(avg_work_pct_raw)
 
             linear_total = wj_linft + edging_linft + cnc_linft + miter_linft
 
@@ -259,36 +278,50 @@ async def _build_report_rows(year: int, month: int) -> tuple[list[dict], list[di
                 }
             )
 
-        summary_query = (
-            select(
-                Account.name,
-                BusinessJob.name,
-                func.sum(cast(Fab.total_sqft, Numeric)).label("total_sqft_sum"),
-                func.sum(cast(completed_sqft_subq.c.completed_sqft, Numeric)).label("completed_sqft_sum"),
-                func.count(Fab.id).label("rows_count"),
-            )
-            .select_from(Fab)
-            .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
-            .join(Account, Account.id == BusinessJob.account_id, isouter=True)
-            .join(completed_sqft_subq, completed_sqft_subq.c.fab_id == Fab.id, isouter=True)
-            .where(Fab.created_at >= start_dt, Fab.created_at <= end_dt)
-            .group_by(Account.name, BusinessJob.name)
-            .order_by(Account.name.asc().nullslast(), BusinessJob.name.asc().nullslast())
-        )
+        summary_map: dict[tuple[str | None, str | None, str | None], dict[str, float | int | str | None]] = {}
+        for row in detail_rows:
+            account_name = row.get("Account")
+            job_number = row.get("JobNumber")
+            job_name = row.get("JobName")
+            key = (account_name, job_number, job_name)
 
-        summary_result = (await db.execute(summary_query)).all()
+            total_sqft = _to_float(row.get("TotalSqFt"))
+            work_pct = _to_float(row.get("PercentageComplete"))
+            completed_equivalent = total_sqft * (work_pct / 100.0)
+
+            if key not in summary_map:
+                summary_map[key] = {
+                    "Account": account_name,
+                    "JobNumber": job_number,
+                    "JobName": job_name,
+                    "TotalSqFt_sum": 0.0,
+                    "CompletedSqFt_sum": 0.0,
+                    "Rows": 0,
+                }
+
+            summary_map[key]["TotalSqFt_sum"] = _to_float(summary_map[key]["TotalSqFt_sum"]) + total_sqft
+            summary_map[key]["CompletedSqFt_sum"] = _to_float(summary_map[key]["CompletedSqFt_sum"]) + completed_equivalent
+            summary_map[key]["Rows"] = int(summary_map[key]["Rows"]) + 1
 
         summary_rows: list[dict] = []
-        for account_name, job_name, total_sqft_sum_raw, completed_sqft_sum_raw, rows_count in summary_result:
-            total_sqft_sum = round(_to_float(total_sqft_sum_raw), 2)
-            completed_sqft_sum = round(_to_float(completed_sqft_sum_raw), 2)
+        for _, summary in sorted(
+            summary_map.items(),
+            key=lambda item: (
+                str(item[0][0] or "").lower(),
+                str(item[0][1] or "").lower(),
+                str(item[0][2] or "").lower(),
+            ),
+        ):
+            total_sqft_sum = round(_to_float(summary["TotalSqFt_sum"]), 2)
+            completed_sqft_sum = round(_to_float(summary["CompletedSqFt_sum"]), 2)
             summary_rows.append(
                 {
-                    "Account": account_name,
-                    "JobName": job_name,
+                    "Account": summary["Account"],
+                    "JobNumber": summary["JobNumber"],
+                    "JobName": summary["JobName"],
                     "TotalSqFt_sum": total_sqft_sum,
                     "CompletedSqFt_sum": completed_sqft_sum,
-                    "Rows": int(rows_count or 0),
+                    "Rows": int(summary["Rows"]),
                     "PercentComplete": _to_percent(completed_sqft_sum, total_sqft_sum),
                 }
             )
