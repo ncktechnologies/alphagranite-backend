@@ -4796,18 +4796,18 @@ async def get_resurface_schedule(
 
     SalesUser = aliased(User)
 
-    any_shop_plan_exists = (
-        select(ShopCutPlan.id)
+    total_shop_plan_count = (
+        select(func.count(ShopCutPlan.id))
         .where(ShopCutPlan.fab_id == Fab.id)
-        .exists()
+        .scalar_subquery()
     )
-    any_incomplete_shop_plan_exists = (
-        select(ShopCutPlan.id)
+    completed_shop_plan_count = (
+        select(func.count(ShopCutPlan.id))
         .where(
             ShopCutPlan.fab_id == Fab.id,
-            func.coalesce(ShopCutPlan.work_percentage, 0) < 100,
+            func.coalesce(ShopCutPlan.work_percentage, 0) >= 100,
         )
-        .exists()
+        .scalar_subquery()
     )
 
     base_query = (
@@ -4837,7 +4837,12 @@ async def get_resurface_schedule(
         .where(
             func.upper(sa.func.trim(Fab.fab_type)) == "RESURFACE",
             Fab.shop_date_schedule.isnot(None),
-            or_(~any_shop_plan_exists, any_incomplete_shop_plan_exists),
+            # Keep FABs with no shop plans yet, or with at least one plan below 100%.
+            # Exclude FABs only when all related shop plans are fully complete.
+            or_(
+                total_shop_plan_count == 0,
+                completed_shop_plan_count < total_shop_plan_count,
+            ),
         )
     )
 
