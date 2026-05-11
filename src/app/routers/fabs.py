@@ -135,6 +135,7 @@ def _active_shop_cut_plan_visibility_filter():
     - Include FABs in current_stage=shop while any shop plan is incomplete (<100),
       or when there are no shop plans yet.
     - Also include FABs still in current_stage=cut_list when cutlist_complete=true.
+    - Also include FABs from any stage that have shop cut plans with work_percentage < 100%.
     """
 
     any_shop_plan_exists = (
@@ -165,10 +166,14 @@ def _active_shop_cut_plan_visibility_filter():
         Fab.cutlist_complete.is_(True),
     )
 
+    # Include FABs from any stage with incomplete shop plans
+    any_stage_with_incomplete_shop_plans = any_incomplete_shop_plan_exists
+
     return and_(
         or_(
             shop_stage_visibility,
             cut_list_ready_for_shop_visibility,
+            any_stage_with_incomplete_shop_plans,
         ),
     )
 
@@ -1513,29 +1518,15 @@ async def get_fabs_with_shop_est_completion(
 
     install_shop_est_stage_filter = Fab.current_stage == "install_scheduling"
 
-    estimated_completion_exists_filter = (
-        select(ShopCutPlan.id)
-        .where(
-            ShopCutPlan.fab_id == Fab.id,
-            or_(
-                ShopCutPlan.scheduled_start_date.isnot(None),
-                ShopCutPlan.actual_end_date.isnot(None),
-            ),
-        )
-        .exists()
-    )
+    # Filter for FABs with shop_est_completion_date set (exclude nulls, including install_scheduling without date)
+    shop_est_completion_filter = Fab.shop_est_completion_date.isnot(None)
 
     if effective_current_stage == "install_scheduling":
         query = query.where(install_shop_est_stage_filter)
     elif current_stage:
         query = query.where(_stage_filter_condition(current_stage))
 
-    shop_est_or_install_filter = or_(
-        Fab.shop_est_completion_date.isnot(None),
-        estimated_completion_exists_filter,
-        Fab.current_stage == "install_scheduling",
-    )
-    query = query.where(shop_est_or_install_filter)
+    query = query.where(shop_est_completion_filter)
 
     # Apply search filter if present
     if search_filter is not None:
@@ -1665,7 +1656,7 @@ async def get_fabs_with_shop_est_completion(
     count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
     count_query = count_query.outerjoin(latest_templating, sa.literal(True))
 
-    count_query = count_query.where(shop_est_or_install_filter)
+    count_query = count_query.where(shop_est_completion_filter)
 
     # Apply all basic filters to count query
     if job_id is not None:
@@ -1767,7 +1758,7 @@ async def get_fabs_with_shop_est_completion(
         elif current_stage:
             stage_totals_query = stage_totals_query.where(_stage_filter_condition(current_stage))
 
-        stage_totals_query = stage_totals_query.where(shop_est_or_install_filter)
+        stage_totals_query = stage_totals_query.where(shop_est_completion_filter)
 
         if job_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.job_id == job_id)
