@@ -138,6 +138,16 @@ async def update_install_scheduling(
     install_scheduling.updated_at = datetime.now()
     install_scheduling.updated_by = current_user.id
     
+    # Update FAB's current_stage to install_completion when install scheduling is updated
+    fab_result = await db.execute(select(Fab).where(Fab.id == install_scheduling.fab_id))
+    fab = fab_result.scalar_one_or_none()
+    
+    if fab:
+        fab.current_stage = "install_completion"
+        fab.next_stage = None  # install_completion is typically the final stage
+        fab.updated_at = datetime.now()
+        fab.updated_by = current_user.id
+    
     await db.commit()
     await db.refresh(install_scheduling)
     
