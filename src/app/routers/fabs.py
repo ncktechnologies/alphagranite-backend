@@ -204,6 +204,28 @@ def _add_total_cut_lnft(fab_dict: dict) -> None:
     fab_dict["total_cut_lnft"] = saw_cut_lnft + wj_lnft
 
 
+def _add_gp(fab_dict: dict) -> None:
+    revenue = fab_dict.get("revenue")
+    cost_of_stone = fab_dict.get("cost_of_stone")
+
+    # Keep GP nullable only when both source values are missing.
+    if revenue is None and cost_of_stone is None:
+        fab_dict["gp"] = None
+        return
+
+    try:
+        revenue_value = float(revenue) if revenue is not None else 0.0
+    except (TypeError, ValueError):
+        revenue_value = 0.0
+
+    try:
+        cost_of_stone_value = float(cost_of_stone) if cost_of_stone is not None else 0.0
+    except (TypeError, ValueError):
+        cost_of_stone_value = 0.0
+
+    fab_dict["gp"] = round(revenue_value - cost_of_stone_value, 2)
+
+
 def _compute_fab_progress_fields(plans: List[dict]) -> tuple[Optional[str], float]:
     """
     Returns:
@@ -2181,6 +2203,7 @@ async def get_fabs_by_job(
         # Convert to dict and serialize datetime/date/Decimal objects
         fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
                     for k, v in fab.__dict__.items() if not k.startswith('_')}
+        _add_gp(fab_dict)
         fab_dict["sales_person_name"] = f"{sales_person_first_name} {sales_person_last_name}" if sales_person_first_name else None
         fab_dict["stone_type_name"] = stone_type_name
         fab_dict["stone_color_name"] = stone_color_name
@@ -2390,6 +2413,7 @@ async def get_fabs_by_stage(
         # Convert to dict and serialize datetime/date/Decimal objects
         fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
                     for k, v in fab.__dict__.items() if not k.startswith('_')}
+        _add_gp(fab_dict)
         fab_dict["sales_person_name"] = f"{sales_person_first_name} {sales_person_last_name}" if sales_person_first_name else None
         fab_dict["stone_type_name"] = stone_type_name
         fab_dict["stone_color_name"] = stone_color_name
@@ -2662,6 +2686,7 @@ async def get_pending_final_programming_fabs(
         # Convert to dict and serialize datetime/date/Decimal objects
         fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
                     for k, v in fab.__dict__.items() if not k.startswith('_')}
+        _add_gp(fab_dict)
         
         # Ensure notes is always a list
         if fab_dict.get("notes") and not isinstance(fab_dict["notes"], list):
@@ -3404,6 +3429,7 @@ def _convert_fab_row_to_dict(row: tuple) -> dict:
     fab = row[0]
     fab_dict = {k: v.isoformat() if isinstance(v, (datetime, date)) else (float(v) if isinstance(v, Decimal) else v)
                 for k, v in fab.__dict__.items() if not k.startswith('_')}
+    _add_gp(fab_dict)
     
     if fab_dict.get("notes") and not isinstance(fab_dict["notes"], list):
         fab_dict["notes"] = [fab_dict["notes"]] if fab_dict["notes"] else None
@@ -3517,6 +3543,7 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
     # Attach to fab dicts
     for fab_dict in fab_dicts:
         fab_id = fab_dict["id"]
+        _add_gp(fab_dict)
         fab_dict["fab_notes"] = notes_by_fab.get(fab_id, [])
         fab_dict["draft_data"] = drafting_by_fab.get(fab_id)
         fab_dict["cnc_data"] = cnc_by_fab.get(fab_id)
