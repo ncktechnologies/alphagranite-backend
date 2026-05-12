@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional
 from sqlalchemy.future import select
+from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -8,9 +9,11 @@ from src.app.database import get_db
 from src.app.database.user import User
 from src.app.database.fab import Fab
 from src.app.database.shop_cut_plan import ShopCutPlan
+from src.app.interface.generated_schemas import InstallCompletion
 from src.app.interface.generated_schemas import InstallScheduling
 from src.app.database.status import Status
 from src.app.interface.business_schemas import (
+    InstallCompletionResponse,
     InstallSchedulingCreate,
     InstallSchedulingUpdate,
     InstallSchedulingResponse,
@@ -107,21 +110,24 @@ async def update_install_scheduling(
 
     update_dict = update_data.model_dump(exclude_unset=True)
     if update_dict.get("is_completed") is True:
-        plan_rows = (
-            await db.execute(
-                select(ShopCutPlan.work_percentage).where(ShopCutPlan.fab_id == install_scheduling.fab_id)
-            )
-        ).all()
+        progress_result = await db.execute(
+            select(
+                func.count(ShopCutPlan.id).label("plan_count"),
+                func.avg(func.coalesce(ShopCutPlan.work_percentage, 0)).label("percentage_completion"),
+            ).where(ShopCutPlan.fab_id == install_scheduling.fab_id)
+        )
+        plan_count, percentage_completion = progress_result.one()
+        percentage_completion = float(percentage_completion or 0.0)
 
-        if not plan_rows:
+        if (plan_count or 0) == 0:
             raise error_response(
-                "Install scheduling cannot be marked complete until all shop cut plans are 100% complete",
+                "Install scheduling cannot be marked complete until shop percentage_completion reaches 100%",
                 400,
             )
 
-        if any((work_percentage or 0) < 100 for (work_percentage,) in plan_rows):
+        if percentage_completion < 100.0:
             raise error_response(
-                "Install scheduling cannot be marked complete until all shop cut plans are 100% complete",
+                f"Install scheduling cannot be marked complete until shop percentage_completion reaches 100% (current: {round(percentage_completion, 2)}%)",
                 400,
             )
     
@@ -131,6 +137,16 @@ async def update_install_scheduling(
     
     install_scheduling.updated_at = datetime.now()
     install_scheduling.updated_by = current_user.id
+    
+    # Update FAB's current_stage to install_completion when install scheduling is updated
+    fab_result = await db.execute(select(Fab).where(Fab.id == install_scheduling.fab_id))
+    fab = fab_result.scalar_one_or_none()
+    
+    if fab:
+        fab.current_stage = "install_completion"
+        fab.next_stage = None  # install_completion is typically the final stage
+        fab.updated_at = datetime.now()
+        fab.updated_by = current_user.id
     
     await db.commit()
     await db.refresh(install_scheduling)
@@ -202,4 +218,49 @@ async def get_install_scheduling_by_fab(
             updated_by=install_scheduling.updated_by
         ),
         "Install Scheduling retrieved successfully"
+    )
+
+
+@router.patch("/install-completion/fab/{fab_id}/unmark", response_model=SuccessResponse[InstallCompletionResponse])
+async def unmark_install_completion(
+    fab_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Unmark (uncheck) install completion for a fab — reverts is_completed to False and clears completion_date"""
+
+    result = await db.execute(select(InstallCompletion).where(InstallCompletion.fab_id == fab_id))
+    install_completion = result.scalar_one_or_none()
+
+    if not install_completion:
+        raise error_response("Install Completion not found for this fab", 404)
+
+    if not install_completion.is_completed:
+        raise error_response("Install Completion is not marked as completed", 400)
+
+    install_completion.is_completed = False
+    install_completion.completion_date = None
+    install_completion.updated_at = datetime.now()
+    install_completion.updated_by = current_user.id
+
+    await db.commit()
+    await db.refresh(install_completion)
+
+    return success_response(
+        InstallCompletionResponse(
+            id=install_completion.id,
+            fab_id=install_completion.fab_id,
+            installer_id=install_completion.installer_id,
+            install_date=install_completion.install_date,
+            completion_date=install_completion.completion_date,
+            total_sqft_installed=install_completion.total_sqft_installed,
+            customer_signature=install_completion.customer_signature,
+            completion_notes=install_completion.completion_notes,
+            is_completed=install_completion.is_completed,
+            status_id=install_completion.status_id,
+            created_at=install_completion.created_at,
+            updated_at=install_completion.updated_at,
+            updated_by=install_completion.updated_by
+        ),
+        "Install Completion unmarked successfully"
     )

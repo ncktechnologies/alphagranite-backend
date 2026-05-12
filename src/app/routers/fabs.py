@@ -129,7 +129,15 @@ def _effective_cut_list_filter():
 
 
 def _active_shop_cut_plan_visibility_filter():
-    """Keep FABs visible until all related shop cut plans reach 100% work completion."""
+    """Visibility for current_stage=shop listing.
+
+    Rules:
+    - Include FABs in current_stage=shop while any shop plan is incomplete (<100),
+      or when there are no shop plans yet.
+    - Also include FABs still in current_stage=cut_list when cutlist_complete=true.
+    - Also include FABs from any stage that have shop cut plans with work_percentage < 100%.
+    """
+
     any_shop_plan_exists = (
         select(ShopCutPlan.id)
         .where(ShopCutPlan.fab_id == Fab.id)
@@ -145,11 +153,27 @@ def _active_shop_cut_plan_visibility_filter():
         .exists()
     )
 
-    return and_(
-        ~Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+    shop_stage_visibility = and_(
+        Fab.current_stage == "shop",
         or_(
             ~any_shop_plan_exists,
             any_incomplete_shop_plan_exists,
+        ),
+    )
+
+    cut_list_ready_for_shop_visibility = and_(
+        Fab.current_stage == "cut_list",
+        Fab.cutlist_complete.is_(True),
+    )
+
+    # Include FABs from any stage with incomplete shop plans
+    any_stage_with_incomplete_shop_plans = any_incomplete_shop_plan_exists
+
+    return and_(
+        or_(
+            shop_stage_visibility,
+            cut_list_ready_for_shop_visibility,
+            any_stage_with_incomplete_shop_plans,
         ),
     )
 
@@ -401,7 +425,18 @@ def _stage_filter_condition(stage_name: str):
     - all other stages use exact stage match
     """
     if stage_name == "install_completion":
-        return Fab.current_stage == "install_completion"
+        completed_install_schedule_exists = (
+            select(InstallScheduling.id)
+            .where(
+                InstallScheduling.fab_id == Fab.id,
+                InstallScheduling.is_completed.is_(True),
+            )
+            .exists()
+        )
+        return and_(
+            Fab.current_stage == "install_completion",
+            ~completed_install_schedule_exists,
+        )
     if stage_name == "install_scheduling":
         return and_(
             Fab.current_stage == "install_scheduling",
@@ -819,7 +854,8 @@ async def get_fabs(
         drafter_id,
     )
 
-    query = query.where(_active_shop_cut_plan_visibility_filter())
+    if current_stage == "shop":
+        query = query.where(_active_shop_cut_plan_visibility_filter())
 
     # Apply search filter if present
     if search_filter is not None:
@@ -873,7 +909,8 @@ async def get_fabs(
     count_query = select(func.count(Fab.id)).select_from(Fab)
     count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
     count_query = count_query.outerjoin(latest_templating, sa.literal(True))
-    count_query = count_query.where(_active_shop_cut_plan_visibility_filter())
+    if current_stage == "shop":
+        count_query = count_query.where(_active_shop_cut_plan_visibility_filter())
 
     # Apply all basic filters to count query
     if job_id is not None:
@@ -971,10 +1008,10 @@ async def get_fabs(
             func.sum(Fab.miter_linft).label("miter_linft"),
             func.sum(Fab.saw_cut_lnft).label("saw_cut_lnft"),
             func.sum(Fab.no_of_pieces).label("no_of_pieces")
-        ).select_from(Fab).where(
-            _stage_filter_condition(current_stage),
-            _active_shop_cut_plan_visibility_filter(),
-        )
+        ).select_from(Fab).where(_stage_filter_condition(current_stage))
+
+        if current_stage == "shop":
+            stage_totals_query = stage_totals_query.where(_active_shop_cut_plan_visibility_filter())
 
         # Apply same basic filters
         if job_id is not None:
@@ -1481,16 +1518,10 @@ async def get_fabs_with_shop_est_completion(
 
     install_shop_est_stage_filter = Fab.current_stage == "install_scheduling"
 
-    estimated_completion_exists_filter = (
-        select(ShopCutPlan.id)
-        .where(
-            ShopCutPlan.fab_id == Fab.id,
-            or_(
-                ShopCutPlan.scheduled_start_date.isnot(None),
-                ShopCutPlan.actual_end_date.isnot(None),
-            ),
-        )
-        .exists()
+    # Filter for FABs with shop_est_completion_date set OR PUNCHOUT fab types
+    shop_est_completion_filter = or_(
+        Fab.shop_est_completion_date.isnot(None),
+        Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
     )
 
     if effective_current_stage == "install_scheduling":
@@ -1498,12 +1529,7 @@ async def get_fabs_with_shop_est_completion(
     elif current_stage:
         query = query.where(_stage_filter_condition(current_stage))
 
-    shop_est_or_install_filter = or_(
-        Fab.shop_est_completion_date.isnot(None),
-        estimated_completion_exists_filter,
-        Fab.current_stage == "install_scheduling",
-    )
-    query = query.where(shop_est_or_install_filter)
+    query = query.where(shop_est_completion_filter)
 
     # Apply search filter if present
     if search_filter is not None:
@@ -1633,7 +1659,7 @@ async def get_fabs_with_shop_est_completion(
     count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
     count_query = count_query.outerjoin(latest_templating, sa.literal(True))
 
-    count_query = count_query.where(shop_est_or_install_filter)
+    count_query = count_query.where(shop_est_completion_filter)
 
     # Apply all basic filters to count query
     if job_id is not None:
@@ -1735,7 +1761,7 @@ async def get_fabs_with_shop_est_completion(
         elif current_stage:
             stage_totals_query = stage_totals_query.where(_stage_filter_condition(current_stage))
 
-        stage_totals_query = stage_totals_query.where(shop_est_or_install_filter)
+        stage_totals_query = stage_totals_query.where(shop_est_completion_filter)
 
         if job_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.job_id == job_id)
@@ -4764,6 +4790,20 @@ async def get_resurface_schedule(
 
     SalesUser = aliased(User)
 
+    total_shop_plan_count = (
+        select(func.count(ShopCutPlan.id))
+        .where(ShopCutPlan.fab_id == Fab.id)
+        .scalar_subquery()
+    )
+    completed_shop_plan_count = (
+        select(func.count(ShopCutPlan.id))
+        .where(
+            ShopCutPlan.fab_id == Fab.id,
+            func.coalesce(ShopCutPlan.work_percentage, 0) >= 100,
+        )
+        .scalar_subquery()
+    )
+
     base_query = (
         select(
             Fab,
@@ -4791,6 +4831,12 @@ async def get_resurface_schedule(
         .where(
             func.upper(sa.func.trim(Fab.fab_type)) == "RESURFACE",
             Fab.shop_date_schedule.isnot(None),
+            # Keep FABs with no shop plans yet, or with at least one plan below 100%.
+            # Exclude FABs only when all related shop plans are fully complete.
+            or_(
+                total_shop_plan_count == 0,
+                completed_shop_plan_count < total_shop_plan_count,
+            ),
         )
     )
 

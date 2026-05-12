@@ -79,6 +79,33 @@ async def create_shop_plans(
                 detail="This Planning Section has already been added. Please select a different Planning Section."
             )
 
+        # Prevent duplicates against existing persisted plans for the same FAB + planning section
+        existing_section_rows = await db.execute(
+            select(ShopCutPlan.planning_section_id).where(
+                ShopCutPlan.fab_id == plan_data.fab_id,
+                ShopCutPlan.planning_section_id.in_(section_ids),
+            )
+        )
+        existing_section_ids = sorted({row[0] for row in existing_section_rows.fetchall()})
+        if existing_section_ids:
+            section_names_result = await db.execute(
+                select(PlanningSection.id, PlanningSection.plan_name).where(
+                    PlanningSection.id.in_(existing_section_ids)
+                )
+            )
+            section_name_map = {
+                row[0]: (row[1] or "").strip() or f"ID {row[0]}"
+                for row in section_names_result.fetchall()
+            }
+            duplicate_names = [section_name_map.get(section_id, f"ID {section_id}") for section_id in existing_section_ids]
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Duplicate shop plan detected for this FAB and shop activity type: "
+                    + ", ".join(duplicate_names)
+                ),
+            )
+
         # Validate that incoming sequence numbers don't duplicate existing ones for this FAB
         incoming_sequences = [stage.sequence for stage in plan_data.stages]
         existing_seq_result = await db.execute(

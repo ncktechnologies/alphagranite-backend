@@ -16,3 +16,4 @@ logs/*
 applog/*.log
 applog/*.log.*
 !applog/.gitkeep
+.DS_Store
