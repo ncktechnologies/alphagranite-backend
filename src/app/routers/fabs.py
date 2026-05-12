@@ -207,10 +207,17 @@ def _add_total_cut_lnft(fab_dict: dict) -> None:
 def _add_gp(fab_dict: dict) -> None:
     revenue = fab_dict.get("revenue")
     cost_of_stone = fab_dict.get("cost_of_stone")
+    existing_gp = fab_dict.get("gp")
 
-    # Keep GP nullable only when both source values are missing.
+    # If both source values are missing from this payload, preserve any existing gp value.
     if revenue is None and cost_of_stone is None:
-        fab_dict["gp"] = None
+        if existing_gp is None:
+            fab_dict["gp"] = None
+        else:
+            try:
+                fab_dict["gp"] = round(float(existing_gp), 2)
+            except (TypeError, ValueError):
+                fab_dict["gp"] = None
         return
 
     try:
