@@ -1518,8 +1518,11 @@ async def get_fabs_with_shop_est_completion(
 
     install_shop_est_stage_filter = Fab.current_stage == "install_scheduling"
 
-    # Filter for FABs with shop_est_completion_date set (exclude nulls, including install_scheduling without date)
-    shop_est_completion_filter = Fab.shop_est_completion_date.isnot(None)
+    # Filter for FABs with shop_est_completion_date set OR PUNCHOUT fab types
+    shop_est_completion_filter = or_(
+        Fab.shop_est_completion_date.isnot(None),
+        Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+    )
 
     if effective_current_stage == "install_scheduling":
         query = query.where(install_shop_est_stage_filter)
