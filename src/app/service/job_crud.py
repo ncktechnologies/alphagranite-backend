@@ -195,8 +195,13 @@ async def get_jobs(
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
 
-    # Apply pagination
-    query = query.offset(skip).limit(limit).order_by(BusinessJob.created_at.desc())
+    # Apply ordering and pagination
+    if is_invoiced is True:
+        query = query.order_by(BusinessJob.invoiced_at.desc(), BusinessJob.created_at.desc())
+    else:
+        query = query.order_by(BusinessJob.created_at.desc())
+
+    query = query.offset(skip).limit(limit)
     
     result = await db.execute(query)
     rows = result.all()

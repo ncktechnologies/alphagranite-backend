@@ -1553,12 +1553,26 @@ async def get_fabs_with_shop_est_completion(
         Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
     )
 
+    # Exclude FABs that are already scheduled for install (assigned installer + scheduled date).
+    already_scheduled_for_install_exists = (
+        select(InstallScheduling.id)
+        .where(
+            InstallScheduling.fab_id == Fab.id,
+            InstallScheduling.installer_id.isnot(None),
+            InstallScheduling.scheduled_install_date.isnot(None),
+        )
+        .exists()
+    )
+
     if effective_current_stage == "install_scheduling":
         query = query.where(install_shop_est_stage_filter)
     elif current_stage:
         query = query.where(_stage_filter_condition(current_stage))
 
-    query = query.where(shop_est_completion_filter)
+    query = query.where(
+        shop_est_completion_filter,
+        ~already_scheduled_for_install_exists,
+    )
 
     # Apply search filter if present
     if search_filter is not None:
@@ -1601,7 +1615,12 @@ async def get_fabs_with_shop_est_completion(
         )
         f["shop_current_stage"] = _get_shop_current_stage(plans)
 
-    # Step 6.2: Group fabs by month → day using estimated_completion_date
+    # Step 6.2: Batch load install scheduling and attach per FAB
+    install_scheduling_map = await _batch_load_install_scheduling_responses(db, fab_ids)
+    for f in fabs:
+        f["install_details"] = install_scheduling_map.get(f["id"])
+
+    # Step 6.3: Group fabs by month → day using estimated_completion_date
     def _build_completion_date_groups(fab_list: list) -> list:
         """Group fabs by estimated_completion_date: month → day with sqft/revenue subtotals."""
         month_buckets: dict = {}
@@ -2837,28 +2856,28 @@ async def get_all_stages(
     )
     cnc_last_10_ids = [row[0] for row in cnc_ids_result.all()]
 
-    # Keep install_scheduling count aligned with /fabs/shop-est-completion default criteria.
-    estimated_completion_exists_filter = (
-        select(ShopCutPlan.id)
-        .where(
-            ShopCutPlan.fab_id == Fab.id,
-            or_(
-                ShopCutPlan.scheduled_start_date.isnot(None),
-                ShopCutPlan.actual_end_date.isnot(None),
-            ),
-        )
-        .exists()
-    )
+    # Keep install_scheduling count aligned with /fabs/shop-est-completion default criteria
+    # (shop_est_completion_date set OR PUNCHOUT fab type — same as the list endpoint).
     shop_est_or_install_filter = or_(
         Fab.shop_est_completion_date.isnot(None),
-        estimated_completion_exists_filter,
-        Fab.current_stage == "install_scheduling",
+        Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+    )
+
+    already_scheduled_for_install_exists = (
+        select(InstallScheduling.id)
+        .where(
+            InstallScheduling.fab_id == Fab.id,
+            InstallScheduling.installer_id.isnot(None),
+            InstallScheduling.scheduled_install_date.isnot(None),
+        )
+        .exists()
     )
 
     install_scheduling_count_result = await db.execute(
         select(func.count(Fab.id)).where(
             Fab.status_id == 1,
             shop_est_or_install_filter,
+            ~already_scheduled_for_install_exists,
         )
     )
     install_scheduling_count = install_scheduling_count_result.scalar() or 0
@@ -2868,6 +2887,7 @@ async def get_all_stages(
         .where(
             Fab.status_id == 1,
             shop_est_or_install_filter,
+            ~already_scheduled_for_install_exists,
         )
         .order_by(Fab.id.desc())
         .limit(10)
