@@ -2894,8 +2894,6 @@ async def get_all_stages(
         Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
     )
 
-    install_shop_est_stage_filter = Fab.current_stage == "install_scheduling"
-
     already_scheduled_for_install_exists = (
         select(InstallScheduling.id)
         .where(
@@ -2909,7 +2907,6 @@ async def get_all_stages(
     install_scheduling_count_result = await db.execute(
         select(func.count(Fab.id)).where(
             Fab.status_id == 1,
-            install_shop_est_stage_filter,
             shop_est_or_install_filter,
             ~already_scheduled_for_install_exists,
         )
@@ -2920,7 +2917,6 @@ async def get_all_stages(
         select(Fab.id)
         .where(
             Fab.status_id == 1,
-            install_shop_est_stage_filter,
             shop_est_or_install_filter,
             ~already_scheduled_for_install_exists,
         )
