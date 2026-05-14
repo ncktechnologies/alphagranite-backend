@@ -207,10 +207,17 @@ def _add_total_cut_lnft(fab_dict: dict) -> None:
 def _add_gp(fab_dict: dict) -> None:
     revenue = fab_dict.get("revenue")
     cost_of_stone = fab_dict.get("cost_of_stone")
+    existing_gp = fab_dict.get("gp")
 
-    # Keep GP nullable only when both source values are missing.
+    # If both source values are missing from this payload, preserve any existing gp value.
     if revenue is None and cost_of_stone is None:
-        fab_dict["gp"] = None
+        if existing_gp is None:
+            fab_dict["gp"] = None
+        else:
+            try:
+                fab_dict["gp"] = round(float(existing_gp), 2)
+            except (TypeError, ValueError):
+                fab_dict["gp"] = None
         return
 
     try:
@@ -1546,12 +1553,26 @@ async def get_fabs_with_shop_est_completion(
         Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
     )
 
+    # Exclude FABs that are already scheduled for install (assigned installer + scheduled date).
+    already_scheduled_for_install_exists = (
+        select(InstallScheduling.id)
+        .where(
+            InstallScheduling.fab_id == Fab.id,
+            InstallScheduling.installer_id.isnot(None),
+            InstallScheduling.scheduled_install_date.isnot(None),
+        )
+        .exists()
+    )
+
     if effective_current_stage == "install_scheduling":
         query = query.where(install_shop_est_stage_filter)
     elif current_stage:
         query = query.where(_stage_filter_condition(current_stage))
 
-    query = query.where(shop_est_completion_filter)
+    query = query.where(
+        shop_est_completion_filter,
+        ~already_scheduled_for_install_exists,
+    )
 
     # Apply search filter if present
     if search_filter is not None:
@@ -1594,7 +1615,32 @@ async def get_fabs_with_shop_est_completion(
         )
         f["shop_current_stage"] = _get_shop_current_stage(plans)
 
-    # Step 6.2: Group fabs by month → day using estimated_completion_date
+    # Step 6.2: Batch load install scheduling and attach per FAB
+    install_scheduling_map = await _batch_load_install_scheduling_responses(db, fab_ids)
+    for f in fabs:
+        install_details = install_scheduling_map.get(f["id"])
+        if install_details is not None:
+            # Ensure JSON-safe payload in this endpoint response.
+            f["install_details"] = jsonable_encoder(install_details)
+        else:
+            # Provide a default object so install_details is never null.
+            f["install_details"] = {
+                "id": None,
+                "fab_id": f["id"],
+                "installer_id": None,
+                "installer_name": None,
+                "scheduled_install_date": None,
+                "scheduled_end_date": None,
+                "actual_install_date": None,
+                "total_sqft": str(f.get("total_sqft")) if f.get("total_sqft") is not None else None,
+                "is_completed": False,
+                "status_id": f.get("status_id"),
+                "created_at": None,
+                "updated_at": None,
+                "updated_by": None,
+            }
+
+    # Step 6.3: Group fabs by month → day using estimated_completion_date
     def _build_completion_date_groups(fab_list: list) -> list:
         """Group fabs by estimated_completion_date: month → day with sqft/revenue subtotals."""
         month_buckets: dict = {}
@@ -1681,7 +1727,10 @@ async def get_fabs_with_shop_est_completion(
     count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
     count_query = count_query.outerjoin(latest_templating, sa.literal(True))
 
-    count_query = count_query.where(shop_est_completion_filter)
+    count_query = count_query.where(
+        shop_est_completion_filter,
+        ~already_scheduled_for_install_exists,
+    )
 
     # Apply all basic filters to count query
     if job_id is not None:
@@ -1783,7 +1832,10 @@ async def get_fabs_with_shop_est_completion(
         elif current_stage:
             stage_totals_query = stage_totals_query.where(_stage_filter_condition(current_stage))
 
-        stage_totals_query = stage_totals_query.where(shop_est_completion_filter)
+        stage_totals_query = stage_totals_query.where(
+            shop_est_completion_filter,
+            ~already_scheduled_for_install_exists,
+        )
 
         if job_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.job_id == job_id)
@@ -2796,6 +2848,11 @@ async def get_all_stages(
         select(func.count(Fab.id)).where(_stage_filter_condition("cut_list"))
     )
     stage_counts_dict["cut_list"] = cut_list_count_result.scalar() or 0
+
+    install_completion_count_result = await db.execute(
+        select(func.count(Fab.id)).where(_stage_filter_condition("install_completion"))
+    )
+    stage_counts_dict["install_completion"] = install_completion_count_result.scalar() or 0
     
     # NEW: slab_smith_request count should mirror /stages/slabsmith/pending
     slabsmith_pending_filters = [
@@ -2830,28 +2887,28 @@ async def get_all_stages(
     )
     cnc_last_10_ids = [row[0] for row in cnc_ids_result.all()]
 
-    # Keep install_scheduling count aligned with /fabs/shop-est-completion default criteria.
-    estimated_completion_exists_filter = (
-        select(ShopCutPlan.id)
-        .where(
-            ShopCutPlan.fab_id == Fab.id,
-            or_(
-                ShopCutPlan.scheduled_start_date.isnot(None),
-                ShopCutPlan.actual_end_date.isnot(None),
-            ),
-        )
-        .exists()
-    )
+    # Keep install_scheduling count aligned with the install-to-schedule widget
+    # list behavior from /fabs/shop-est-completion when scoped to this stage.
     shop_est_or_install_filter = or_(
         Fab.shop_est_completion_date.isnot(None),
-        estimated_completion_exists_filter,
-        Fab.current_stage == "install_scheduling",
+        Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+    )
+
+    already_scheduled_for_install_exists = (
+        select(InstallScheduling.id)
+        .where(
+            InstallScheduling.fab_id == Fab.id,
+            InstallScheduling.installer_id.isnot(None),
+            InstallScheduling.scheduled_install_date.isnot(None),
+        )
+        .exists()
     )
 
     install_scheduling_count_result = await db.execute(
         select(func.count(Fab.id)).where(
             Fab.status_id == 1,
             shop_est_or_install_filter,
+            ~already_scheduled_for_install_exists,
         )
     )
     install_scheduling_count = install_scheduling_count_result.scalar() or 0
@@ -2861,6 +2918,7 @@ async def get_all_stages(
         .where(
             Fab.status_id == 1,
             shop_est_or_install_filter,
+            ~already_scheduled_for_install_exists,
         )
         .order_by(Fab.id.desc())
         .limit(10)
@@ -2881,6 +2939,11 @@ async def get_all_stages(
             ).order_by(Fab.id.desc()).limit(10)
         elif stage_name == "cut_list":
             # For cut_list: EXCLUDE FABs that should be counted as final_programming
+            fab_ids_query = select(Fab.id).where(
+                _stage_filter_condition(stage_name)
+            ).order_by(Fab.id.desc()).limit(10)
+        elif stage_name == "install_completion":
+            # Keep install_completion IDs aligned with /fabs?current_stage=install_completion.
             fab_ids_query = select(Fab.id).where(
                 _stage_filter_condition(stage_name)
             ).order_by(Fab.id.desc()).limit(10)
@@ -4964,4 +5027,166 @@ async def get_resurface_schedule(
             "data": data
         },
         "Resurface schedule fetched successfully"
+    )
+
+
+@router.get("/fabs/cost-of-stone", response_model=SuccessResponse[dict])
+async def get_fabs_cost_of_stone_queue(
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
+    search: Optional[str] = Query(None, description="Search value"),
+    type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, fab_info"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Queue endpoint for entering cost_of_stone values.
+
+    Includes FABs where:
+    1) cost_of_stone is blank (NULL/empty string), but not 0
+    2) sct_completed is true
+    Returns rows grouped by sct_completed_date.
+    """
+    _ = current_user
+
+    base_query = (
+        select(
+            Fab.id.label("fab_id"),
+            Fab.fab_type.label("fab_type"),
+            BusinessJob.job_number.label("job_number"),
+            Fab.input_area.label("fab_info"),
+            Fab.total_sqft.label("total_sqft"),
+            Fab.revenue.label("revenue"),
+            Fab.cost_of_stone.label("cost_of_stone"),
+            Fab.sct_completed_date.label("sct_completed_date"),
+        )
+        .select_from(Fab)
+        .outerjoin(BusinessJob, Fab.job_id == BusinessJob.id)
+        .where(
+            Fab.sct_completed.is_(True),
+            or_(
+                Fab.cost_of_stone.is_(None),
+                func.trim(sa.cast(Fab.cost_of_stone, sa.String)) == "",
+            ),
+        )
+    )
+
+    search_filter = None
+    if search and type:
+        if type == "fab_id":
+            search_filter = sa.cast(Fab.id, sa.String) == search
+        elif type == "job_number":
+            search_filter = sa.cast(BusinessJob.job_number, sa.String) == search
+        elif type == "fab_info":
+            search_filter = Fab.input_area.ilike(f"%{search}%")
+
+    if search_filter is not None:
+        base_query = base_query.where(search_filter)
+    elif search:
+        search_term = f"%{search}%"
+        base_query = base_query.where(
+            or_(
+                sa.cast(Fab.id, sa.String) == search,
+                sa.cast(BusinessJob.job_number, sa.String) == search,
+                Fab.input_area.ilike(search_term),
+            )
+        )
+
+    total_result = await db.execute(select(func.count()).select_from(base_query.subquery()))
+    total = total_result.scalar() or 0
+
+    result = await db.execute(
+        base_query
+        .order_by(Fab.sct_completed_date.asc().nulls_last(), Fab.id.desc())
+        .offset(skip)
+        .limit(limit)
+    )
+    rows = result.all()
+
+    data = []
+    grouped_rows = defaultdict(list)
+    for row in rows:
+        sct_completed_dt = row.sct_completed_date
+        group_key = sct_completed_dt.date().isoformat() if sct_completed_dt else "unknown"
+
+        row_data = {
+            "fab_id": row.fab_id,
+            "fab_type": row.fab_type,
+            "job_number": row.job_number,
+            "fab_info": row.fab_info,
+            "total_sqft": float(row.total_sqft) if row.total_sqft is not None else None,
+            "revenue": float(row.revenue) if row.revenue is not None else None,
+            "cost_of_stone": float(row.cost_of_stone) if row.cost_of_stone is not None else None,
+            "sct_completed_date": sct_completed_dt.isoformat() if sct_completed_dt else None,
+            "is_cost_of_stone_editable": True,
+        }
+
+        data.append(row_data)
+        grouped_rows[group_key].append(row_data)
+
+    grouped_by_sct_completed_date = [
+        {
+            "sct_completed_date": date_key,
+            "count": len(items),
+            "rows": items,
+        }
+        for date_key, items in grouped_rows.items()
+    ]
+
+    return success_response(
+        {
+            "total": total,
+            "page": (skip // limit) + 1 if limit > 0 else 1,
+            "per_page": limit,
+            "data": data,
+            "grouped_by_sct_completed_date": grouped_by_sct_completed_date,
+        },
+        "Cost of stone queue fetched successfully",
+    )
+
+
+@router.patch("/fabs/{fab_id}/cost-of-stone", response_model=SuccessResponse[dict])
+async def update_fab_cost_of_stone(
+    fab_id: int,
+    fab_data: FabUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update only cost_of_stone for a FAB row in the cost-of-stone queue."""
+
+    if fab_data.cost_of_stone is None:
+        return error_response("cost_of_stone is required", 400)
+
+    result = await db.execute(select(Fab).where(Fab.id == fab_id))
+    fab = result.scalar_one_or_none()
+    if not fab:
+        return error_response("Fab not found", 404)
+
+    try:
+        cost_value = float(fab_data.cost_of_stone)
+    except (TypeError, ValueError):
+        return error_response("Invalid cost_of_stone value", 400)
+
+    fab.cost_of_stone = cost_value
+
+    try:
+        revenue_value = float(fab.revenue) if fab.revenue is not None else 0.0
+    except (TypeError, ValueError):
+        revenue_value = 0.0
+    fab.gp = round(revenue_value - cost_value, 2)
+
+    fab.updated_at = datetime.now()
+    fab.updated_by = current_user.id
+
+    await db.commit()
+    await db.refresh(fab)
+
+    return success_response(
+        {
+            "fab_id": fab.id,
+            "cost_of_stone": float(fab.cost_of_stone) if fab.cost_of_stone is not None else None,
+            "gp": float(fab.gp) if fab.gp is not None else None,
+            "removed_from_queue": True,
+        },
+        "Cost of stone updated successfully",
     )
