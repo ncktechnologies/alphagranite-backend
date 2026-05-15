@@ -1991,10 +1991,6 @@ async def get_fab(
     estimated_completion_date, percentage_completion = _compute_fab_progress_fields(plans)
     fab_dict["estimated_completion_date"] = estimated_completion_date
     fab_dict["percentage_completion"] = percentage_completion
-    fab_dict["shop_est_completion_date"] = _coalesce_shop_est_completion_date(
-        fab_dict.get("shop_est_completion_date"),
-        plans,
-    )
     fab_dict["shop_current_stage"] = _get_shop_current_stage(plans)
 
     resurface_scheduling_map = await _batch_load_resurface_scheduling_responses(db, [fab_id])
