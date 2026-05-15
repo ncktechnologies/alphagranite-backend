@@ -1912,7 +1912,7 @@ async def get_fabs_with_shop_est_completion(
     }
 
 
-@router.get("/fabs/{fab_id}", response_model=SuccessResponse[FabResponse])
+@router.get("/fabs/{fab_id:int}", response_model=SuccessResponse[FabResponse])
 async def get_fab(
     fab_id: int,
     db: AsyncSession = Depends(get_db),
