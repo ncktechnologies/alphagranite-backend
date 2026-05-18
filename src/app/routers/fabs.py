@@ -962,7 +962,7 @@ async def get_fabs(
         if current_stage == "pre_draft_review":
             date_start, date_end = template_completed_start, template_completed_end
         elif current_stage == "templating":
-            date_start, date_end = schedule_start_date, schedule_due_date
+            date_start, date_end = None, None
         elif current_stage == "drafting":
             date_start, date_end = predraft_completed_start, predraft_completed_end
         elif current_stage == "sales_ct":
@@ -1058,7 +1058,7 @@ async def get_fabs(
         if current_stage == "pre_draft_review":
             date_start, date_end = template_completed_start, template_completed_end
         elif current_stage == "templating":
-            date_start, date_end = schedule_start_date, schedule_due_date
+            date_start, date_end = None, None
         elif current_stage == "drafting":
             date_start, date_end = predraft_completed_start, predraft_completed_end
         elif current_stage == "sales_ct":
@@ -1163,10 +1163,10 @@ async def get_fabs_for_cnc_widget(
     templating_fab_ids = await _apply_templating_filters(
         db,
         templater_id,
-        schedule_start_date,
-        schedule_due_date,
+        None,
+        None,
         schedule_status,
-        date_filter if current_stage == "templating" else None
+        None,
     )
 
     if templating_fab_ids is not None and len(templating_fab_ids) == 0:
@@ -1205,7 +1205,7 @@ async def get_fabs_for_cnc_widget(
         templating_fab_ids, latest_templating, shop_date_start, shop_date_end,
         template_completed_start, template_completed_end, predraft_completed_start, predraft_completed_end,
         draft_completed_start, draft_completed_end, sct_completed_start, sct_completed_end,
-        date_filter,
+        None,
         drafter_id,
     )
 
@@ -1219,6 +1219,13 @@ async def get_fabs_for_cnc_widget(
 
     cnc_widget_filter = _pending_cnc_widget_filter()
     query = query.where(cnc_widget_filter)
+    query = _apply_date_field_filter(
+        query,
+        Fab.final_programming_completed_date,
+        date_filter,
+        schedule_start_date,
+        schedule_due_date,
+    )
 
     # Apply search filter if present
     if search_filter is not None:
@@ -1296,7 +1303,7 @@ async def get_fabs_for_cnc_widget(
         if current_stage == "pre_draft_review":
             date_start, date_end = template_completed_start, template_completed_end
         elif current_stage == "templating":
-            date_start, date_end = schedule_start_date, schedule_due_date
+            date_start, date_end = None, None
         elif current_stage == "drafting":
             date_start, date_end = predraft_completed_start, predraft_completed_end
         elif current_stage == "sales_ct":
@@ -1309,7 +1316,7 @@ async def get_fabs_for_cnc_widget(
             date_start, date_end = None, None
 
         count_query = _apply_stage_specific_date_filter(
-            count_query, current_stage, date_filter, date_start, date_end
+            count_query, current_stage, None, date_start, date_end
         )
     else:
         if shop_date_start:
@@ -1332,6 +1339,14 @@ async def get_fabs_for_cnc_widget(
             count_query = count_query.where(Fab.sct_completed_date >= sct_completed_start)
         if sct_completed_end:
             count_query = count_query.where(Fab.sct_completed_date <= sct_completed_end)
+
+    count_query = _apply_date_field_filter(
+        count_query,
+        Fab.final_programming_completed_date,
+        date_filter,
+        schedule_start_date,
+        schedule_due_date,
+    )
 
     if search_filter is not None:
         count_query = count_query.where(search_filter)
@@ -1397,7 +1412,7 @@ async def get_fabs_for_cnc_widget(
         if current_stage == "pre_draft_review":
             date_start, date_end = template_completed_start, template_completed_end
         elif current_stage == "templating":
-            date_start, date_end = schedule_start_date, schedule_due_date
+            date_start, date_end = None, None
         elif current_stage == "drafting":
             date_start, date_end = predraft_completed_start, predraft_completed_end
         elif current_stage == "sales_ct":
@@ -1410,7 +1425,15 @@ async def get_fabs_for_cnc_widget(
             date_start, date_end = None, None
 
         stage_totals_query = _apply_stage_specific_date_filter(
-            stage_totals_query, current_stage, date_filter, date_start, date_end
+            stage_totals_query, current_stage, None, date_start, date_end
+        )
+
+        stage_totals_query = _apply_date_field_filter(
+            stage_totals_query,
+            Fab.final_programming_completed_date,
+            date_filter,
+            schedule_start_date,
+            schedule_due_date,
         )
 
         if search_filter is not None:
@@ -3429,6 +3452,68 @@ def _apply_stage_specific_date_filter(
 
     # Apply custom date range when no predefined filter is applied, including date_filter=custom.
     if date_field is not None and not predefined_applied:
+        if date_start:
+            query = query.where(date_field_cast >= date_start)
+        if date_end:
+            query = query.where(date_field_cast <= date_end)
+
+    return query
+
+
+def _apply_date_field_filter(
+    query,
+    date_field,
+    date_filter: Optional[str],
+    date_start: Optional[date],
+    date_end: Optional[date],
+):
+    """Apply predefined date filters or a custom date range to a specific date field."""
+    if date_field is None:
+        return query
+
+    date_field_cast = sa.cast(date_field, sa.Date)
+    predefined_applied = False
+
+    if date_filter:
+        normalized_filter = date_filter.strip().lower()
+        today = date.today()
+
+        if normalized_filter == "today":
+            query = query.where(date_field_cast == today)
+            predefined_applied = True
+        elif normalized_filter == "this_week":
+            start = today - timedelta(days=today.weekday())
+            end = start + timedelta(days=6)
+            query = query.where(date_field_cast.between(start, end))
+            predefined_applied = True
+        elif normalized_filter == "last_week":
+            start = today - timedelta(days=today.weekday() + 7)
+            end = start + timedelta(days=6)
+            query = query.where(date_field_cast.between(start, end))
+            predefined_applied = True
+        elif normalized_filter == "this_month":
+            start = today.replace(day=1)
+            end = (start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+            query = query.where(date_field_cast.between(start, end))
+            predefined_applied = True
+        elif normalized_filter == "last_month":
+            first = today.replace(day=1)
+            last_month_end = first - timedelta(days=1)
+            last_month_start = last_month_end.replace(day=1)
+            query = query.where(date_field_cast.between(last_month_start, last_month_end))
+            predefined_applied = True
+        elif normalized_filter == "next_week":
+            start = today + timedelta(days=(7 - today.weekday()))
+            end = start + timedelta(days=6)
+            query = query.where(date_field_cast.between(start, end))
+            predefined_applied = True
+        elif normalized_filter == "next_month":
+            first_next = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
+            last_next = (first_next + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+            query = query.where(date_field_cast.between(first_next, last_next))
+            predefined_applied = True
+
+    if not predefined_applied:
         if date_start:
             query = query.where(date_field_cast >= date_start)
         if date_end:
