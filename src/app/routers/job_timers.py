@@ -14,6 +14,7 @@ from src.app.database.installer_job_timer_session import InstallerJobTimerSessio
 from src.app.database.templater_job_timer_event import TemplaterJobTimerEvent
 from src.app.database.templater_job_timer_session import TemplaterJobTimerSession
 from src.app.database.user import User
+from src.app.interface.generated_schemas import InstallScheduling
 from src.app.interface.business_schemas import (
     InstallerJobTimerActionRequest,
     InstallerJobTimerCommandRequest,
@@ -38,6 +39,9 @@ router = APIRouter(
     tags=["Job Timers"],
 )
 
+INSTALLER_ROLE_LEAD = "lead"
+INSTALLER_ROLE_EXTRA_CREW = "extra_crew"
+
 
 async def _get_fab_and_job_id(db: AsyncSession, fab_id: int) -> tuple[Fab, int]:
     """Helper to get fab and its job_id"""
@@ -56,12 +60,77 @@ def _format_duration_hms(total_seconds: int) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
+async def _resolve_installer_role_for_fab(
+    db: AsyncSession,
+    fab_id: int,
+    installer_id: int,
+) -> str:
+    result = await db.execute(
+        select(InstallScheduling)
+        .where(InstallScheduling.fab_id == fab_id)
+        .order_by(InstallScheduling.id.desc())
+        .limit(1)
+    )
+    install_scheduling = result.scalar_one_or_none()
+    if not install_scheduling:
+        raise error_response("Install Scheduling not found for this fab", 404)
+
+    if installer_id == install_scheduling.installer_id:
+        return INSTALLER_ROLE_LEAD
+
+    if installer_id in {
+        install_scheduling.extra_crew_1_id,
+        install_scheduling.extra_crew_2_id,
+        install_scheduling.extra_crew_3_id,
+    }:
+        return INSTALLER_ROLE_EXTRA_CREW
+
+    raise error_response("Installer is not assigned to this fab install crew", 403)
+
+
+def _payload_has_sqft(payload: Optional[InstallerJobTimerCommandRequest]) -> bool:
+    return bool(
+        payload
+        and (
+            payload.sqft_installed is not None
+            or payload.sqft_not_installed is not None
+        )
+    )
+
+
+def _enforce_lead_only_sqft(payload: Optional[InstallerJobTimerCommandRequest], installer_role: str) -> None:
+    if installer_role != INSTALLER_ROLE_LEAD and _payload_has_sqft(payload):
+        raise error_response(
+            "Only lead installer can input sqft_installed or sqft_not_installed",
+            403,
+        )
+
+
+async def _resolve_role_for_timer_session(
+    db: AsyncSession,
+    session: InstallerJobTimerSession,
+    installer_id: int,
+    requested_fab_id: Optional[int],
+) -> str:
+    if session.fab_id and requested_fab_id and session.fab_id != requested_fab_id:
+        raise error_response("fab_id does not match the timer session fab_id", 400)
+
+    resolved_fab_id = session.fab_id or requested_fab_id
+    if not resolved_fab_id:
+        raise error_response("fab_id is required for installer timer role checks", 400)
+
+    installer_role = await _resolve_installer_role_for_fab(db, resolved_fab_id, installer_id)
+    session.installer_role = installer_role
+    return installer_role
+
+
 def _serialize_installer_job_timer_session(session: InstallerJobTimerSession) -> dict:
     return {
         "id": session.id,
         "job_id": session.job_id,
         "fab_id": session.fab_id,
         "installer_id": session.installer_id,
+        "installer_role": session.installer_role,
         "status": session.status,
         "session_start_at": session.session_start_at.isoformat() if session.session_start_at else None,
         "current_run_start_at": session.current_run_start_at.isoformat() if session.current_run_start_at else None,
@@ -142,6 +211,11 @@ async def start_installer_job_timer(
         fab_result = await db.execute(select(Fab).where(Fab.id == fab_id))
         if not fab_result.scalar_one_or_none():
             raise error_response("Fab not found", 404)
+    else:
+        raise error_response("fab_id is required for installer timer", 400)
+
+    installer_role = await _resolve_installer_role_for_fab(db, fab_id, installer_id)
+    _enforce_lead_only_sqft(payload, installer_role)
     
     # Check if there's already a running timer for this installer at this stage
     conflict_result = await db.execute(
@@ -171,6 +245,7 @@ async def start_installer_job_timer(
         job_id=job_id,
         fab_id=fab_id,
         installer_id=installer_id,
+        installer_role=installer_role,
         status="running",
         session_start_at=now,
         current_run_start_at=now,
@@ -225,6 +300,9 @@ async def pause_installer_job_timer(
     
     if not session:
         raise error_response("No active timer found for this installer and job", 404)
+
+    installer_role = await _resolve_role_for_timer_session(db, session, installer_id, fab_id)
+    _enforce_lead_only_sqft(payload, installer_role)
     
     now = datetime.now()
     
@@ -287,6 +365,9 @@ async def resume_installer_job_timer(
     
     if not session:
         raise error_response("No paused timer found for this installer and job", 404)
+
+    installer_role = await _resolve_role_for_timer_session(db, session, installer_id, fab_id)
+    _enforce_lead_only_sqft(payload, installer_role)
     
     now = datetime.now()
     
@@ -349,6 +430,9 @@ async def stop_installer_job_timer(
     
     if not session:
         raise error_response("No active timer found for this installer and job", 404)
+
+    installer_role = await _resolve_role_for_timer_session(db, session, installer_id, fab_id)
+    _enforce_lead_only_sqft(payload, installer_role)
     
     now = datetime.now()
     

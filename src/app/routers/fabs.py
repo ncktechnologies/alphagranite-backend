@@ -1652,6 +1652,12 @@ async def get_fabs_with_shop_est_completion(
                 "fab_id": f["id"],
                 "installer_id": None,
                 "installer_name": None,
+                "extra_crew_1_id": None,
+                "extra_crew_1_name": None,
+                "extra_crew_2_id": None,
+                "extra_crew_2_name": None,
+                "extra_crew_3_id": None,
+                "extra_crew_3_name": None,
                 "scheduled_install_date": None,
                 "scheduled_end_date": None,
                 "actual_install_date": None,
@@ -4569,19 +4575,39 @@ async def _batch_load_install_scheduling_responses(db: AsyncSession, fab_ids: Li
     install_scheduling_responses_by_fab = {}
     for r in rows:
         if r.fab_id not in install_scheduling_responses_by_fab:
-            # Fetch installer name if installer_id is set
+            crew_ids = [
+                crew_id
+                for crew_id in [r.installer_id, r.extra_crew_1_id, r.extra_crew_2_id, r.extra_crew_3_id]
+                if crew_id
+            ]
             installer_name = None
-            if r.installer_id:
-                installer_result = await db.execute(select(User).where(User.id == r.installer_id))
-                installer = installer_result.scalar_one_or_none()
-                if installer:
-                    installer_name = f"{installer.first_name} {installer.last_name}".strip()
+            extra_crew_1_name = None
+            extra_crew_2_name = None
+            extra_crew_3_name = None
+
+            if crew_ids:
+                users_result = await db.execute(select(User).where(User.id.in_(crew_ids)))
+                users = users_result.scalars().all()
+                user_names = {
+                    u.id: f"{u.first_name or ''} {u.last_name or ''}".strip() or None
+                    for u in users
+                }
+                installer_name = user_names.get(r.installer_id)
+                extra_crew_1_name = user_names.get(r.extra_crew_1_id)
+                extra_crew_2_name = user_names.get(r.extra_crew_2_id)
+                extra_crew_3_name = user_names.get(r.extra_crew_3_id)
             
             install_scheduling_responses_by_fab[r.fab_id] = InstallSchedulingResponse(
                 id=r.id,
                 fab_id=r.fab_id,
                 installer_id=r.installer_id,
                 installer_name=installer_name,
+                extra_crew_1_id=r.extra_crew_1_id,
+                extra_crew_1_name=extra_crew_1_name,
+                extra_crew_2_id=r.extra_crew_2_id,
+                extra_crew_2_name=extra_crew_2_name,
+                extra_crew_3_id=r.extra_crew_3_id,
+                extra_crew_3_name=extra_crew_3_name,
                 scheduled_install_date=r.scheduled_install_date,
                 scheduled_end_date=r.scheduled_end_date,
                 actual_install_date=r.actual_install_date,
