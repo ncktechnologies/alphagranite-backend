@@ -824,6 +824,7 @@ async def get_fabs(
     draft_completed_end: Optional[date] = Query(None, description="Filter by draft_completed_date on or before this date (YYYY-MM-DD)"),
     sct_completed_start: Optional[date] = Query(None, description="Filter by sct_completed_date on or after this date (YYYY-MM-DD)"),  # NEW
     sct_completed_end: Optional[date] = Query(None, description="Filter by sct_completed_date on or before this date (YYYY-MM-DD)"),  # NEW
+    user_level: Optional[str] = Query(None, description="Requester user level flag; when 'installer', apply install_completion crew/date visibility"),
     search: Optional[str] = Query(None, description="Search value"),
     type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, job_name"),  # NEW
     db: AsyncSession = Depends(get_db),
@@ -889,7 +890,8 @@ async def get_fabs(
     # install_completion: restrict to logged-in user's crew and release after 4pm on scheduled day
     _install_completion_crew_filter = None
     _install_completion_date_filter = None
-    if current_stage == "install_completion":
+    is_installer_request = isinstance(user_level, str) and user_level.strip().lower() == "installer"
+    if current_stage == "install_completion" and is_installer_request:
         _install_completion_crew_filter = (
             select(InstallScheduling.id)
             .where(
