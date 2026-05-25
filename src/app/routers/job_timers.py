@@ -117,7 +117,9 @@ async def _resolve_role_for_timer_session(
 
     resolved_fab_id = session.fab_id or requested_fab_id
     if not resolved_fab_id:
-        raise error_response("fab_id is required for installer timer role checks", 400)
+        # No FAB context means we cannot verify crew assignment; preserve existing role
+        # (or default to lead for backward compatibility).
+        return session.installer_role or INSTALLER_ROLE_LEAD
 
     installer_role = await _resolve_installer_role_for_fab(db, resolved_fab_id, installer_id)
     session.installer_role = installer_role
@@ -207,14 +209,13 @@ async def start_installer_job_timer(
         raise error_response("Installer not found", 404)
     
     # Verify fab if provided
+    installer_role = INSTALLER_ROLE_LEAD
     if fab_id:
         fab_result = await db.execute(select(Fab).where(Fab.id == fab_id))
         if not fab_result.scalar_one_or_none():
             raise error_response("Fab not found", 404)
-    else:
-        raise error_response("fab_id is required for installer timer", 400)
+        installer_role = await _resolve_installer_role_for_fab(db, fab_id, installer_id)
 
-    installer_role = await _resolve_installer_role_for_fab(db, fab_id, installer_id)
     _enforce_lead_only_sqft(payload, installer_role)
     
     # Check if there's already a running timer for this installer at this stage
