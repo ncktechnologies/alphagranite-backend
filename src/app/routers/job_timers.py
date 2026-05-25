@@ -224,6 +224,7 @@ async def start_installer_job_timer(
         .join(BusinessJob, BusinessJob.id == InstallerJobTimerSession.job_id)
         .where(
             InstallerJobTimerSession.installer_id == installer_id,
+            InstallerJobTimerSession.job_id == job_id,
             InstallerJobTimerSession.status == "running",
         )
         .limit(1)
@@ -235,10 +236,6 @@ async def start_installer_job_timer(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Timer on Job #{conflict_job.job_number} and Fab_id {conflict_session.fab_id} is already running. Stop or pause it before starting another.",
         )
-
-    # Prevent starting if any running timer exists across all session types
-    if not getattr(current_user, "is_super_admin", False):
-        await assert_no_active_timer_session(db, installer_id)
 
     # Create new session
     now = datetime.now()
