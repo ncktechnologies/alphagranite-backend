@@ -1646,9 +1646,10 @@ async def get_fabs_with_shop_est_completion(
         )
 
     # Step 4: Apply pagination and ordering
-    install_scheduled_date = _latest_install_scheduled_date_expr()
+    # Keep FABs with shop_est_completion_date first (oldest to newest), then undated FABs.
     query = query.offset(skip).limit(limit).order_by(
-        install_scheduled_date.asc().nullslast(),
+        sa.case((Fab.shop_est_completion_date.is_(None), 1), else_=0),
+        Fab.shop_est_completion_date.asc().nullslast(),
         Fab.updated_at.asc().nullsfirst(),
         Fab.created_at.asc(),
     )
