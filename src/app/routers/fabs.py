@@ -3429,6 +3429,7 @@ def _apply_stage_specific_date_filter(
 
     # Determine which date field to filter on based on stage
     date_field = None
+    use_install_scheduling_date = False
 
     if current_stage == "templating":
         if latest_templating is not None:
@@ -3445,11 +3446,25 @@ def _apply_stage_specific_date_filter(
         date_field = Fab.sct_completed_date
     elif current_stage == "cut_list":
         date_field = Fab.shop_date_schedule
+    elif current_stage == "install_completion":
+        use_install_scheduling_date = True
+        date_field = InstallScheduling.scheduled_install_date
     else:
         return query
 
     date_field_cast = sa.cast(date_field, sa.Date)
     predefined_applied = False
+
+    def _apply_install_completion_date_condition(condition):
+        return query.where(
+            select(InstallScheduling.id)
+            .where(
+                InstallScheduling.fab_id == Fab.id,
+                InstallScheduling.scheduled_install_date.isnot(None),
+                condition,
+            )
+            .exists()
+        )
 
     # Apply predefined date filter if provided
     if date_filter and date_field is not None:
@@ -3457,46 +3472,75 @@ def _apply_stage_specific_date_filter(
         today = date.today()
 
         if normalized_filter == "today":
-            query = query.where(date_field_cast == today)
+            if use_install_scheduling_date:
+                query = _apply_install_completion_date_condition(date_field_cast == today)
+            else:
+                query = query.where(date_field_cast == today)
             predefined_applied = True
         elif normalized_filter == "this_week":
             start = today - timedelta(days=today.weekday())
             end = start + timedelta(days=6)
-            query = query.where(date_field_cast.between(start, end))
+            if use_install_scheduling_date:
+                query = _apply_install_completion_date_condition(date_field_cast.between(start, end))
+            else:
+                query = query.where(date_field_cast.between(start, end))
             predefined_applied = True
         elif normalized_filter == "last_week":
             start = today - timedelta(days=today.weekday() + 7)
             end = start + timedelta(days=6)
-            query = query.where(date_field_cast.between(start, end))
+            if use_install_scheduling_date:
+                query = _apply_install_completion_date_condition(date_field_cast.between(start, end))
+            else:
+                query = query.where(date_field_cast.between(start, end))
             predefined_applied = True
         elif normalized_filter == "this_month":
             start = today.replace(day=1)
             end = (start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
-            query = query.where(date_field_cast.between(start, end))
+            if use_install_scheduling_date:
+                query = _apply_install_completion_date_condition(date_field_cast.between(start, end))
+            else:
+                query = query.where(date_field_cast.between(start, end))
             predefined_applied = True
         elif normalized_filter == "last_month":
             first = today.replace(day=1)
             last_month_end = first - timedelta(days=1)
             last_month_start = last_month_end.replace(day=1)
-            query = query.where(date_field_cast.between(last_month_start, last_month_end))
+            if use_install_scheduling_date:
+                query = _apply_install_completion_date_condition(
+                    date_field_cast.between(last_month_start, last_month_end)
+                )
+            else:
+                query = query.where(date_field_cast.between(last_month_start, last_month_end))
             predefined_applied = True
         elif normalized_filter == "next_week":
             start = today + timedelta(days=(7 - today.weekday()))
             end = start + timedelta(days=6)
-            query = query.where(date_field_cast.between(start, end))
+            if use_install_scheduling_date:
+                query = _apply_install_completion_date_condition(date_field_cast.between(start, end))
+            else:
+                query = query.where(date_field_cast.between(start, end))
             predefined_applied = True
         elif normalized_filter == "next_month":
             first_next = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
             last_next = (first_next + timedelta(days=32)).replace(day=1) - timedelta(days=1)
-            query = query.where(date_field_cast.between(first_next, last_next))
+            if use_install_scheduling_date:
+                query = _apply_install_completion_date_condition(date_field_cast.between(first_next, last_next))
+            else:
+                query = query.where(date_field_cast.between(first_next, last_next))
             predefined_applied = True
 
     # Apply custom date range when no predefined filter is applied, including date_filter=custom.
     if date_field is not None and not predefined_applied:
         if date_start:
-            query = query.where(date_field_cast >= date_start)
+            if use_install_scheduling_date:
+                query = _apply_install_completion_date_condition(date_field_cast >= date_start)
+            else:
+                query = query.where(date_field_cast >= date_start)
         if date_end:
-            query = query.where(date_field_cast <= date_end)
+            if use_install_scheduling_date:
+                query = _apply_install_completion_date_condition(date_field_cast <= date_end)
+            else:
+                query = query.where(date_field_cast <= date_end)
 
     return query
 

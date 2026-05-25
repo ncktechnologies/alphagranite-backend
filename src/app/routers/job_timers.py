@@ -416,14 +416,20 @@ async def stop_installer_job_timer(
     current_user: User = Depends(get_current_user),
 ):
     """Stop an installer timer"""
-    
-    result = await db.execute(
-        select(InstallerJobTimerSession).where(
-            InstallerJobTimerSession.job_id == job_id,
-            InstallerJobTimerSession.installer_id == installer_id,
-            InstallerJobTimerSession.status.in_(["running", "paused"]),
-        )
+
+    stop_query = select(InstallerJobTimerSession).where(
+        InstallerJobTimerSession.job_id == job_id,
+        InstallerJobTimerSession.installer_id == installer_id,
+        InstallerJobTimerSession.status.in_(["running", "paused"]),
     )
+    if fab_id is not None:
+        stop_query = stop_query.where(InstallerJobTimerSession.fab_id == fab_id)
+
+    # Defensive ordering ensures we stop only one concrete active session,
+    # even if legacy data accidentally contains duplicates.
+    stop_query = stop_query.order_by(InstallerJobTimerSession.created_at.desc()).limit(1)
+
+    result = await db.execute(stop_query)
     session = result.scalar_one_or_none()
     
     if not session:
