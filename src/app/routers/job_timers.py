@@ -190,23 +190,18 @@ def _serialize_templater_job_timer_event(event: TemplaterJobTimerEvent) -> dict:
 @router.post("/installer/jobs/{job_id}/timer/start", response_model=SuccessResponse[dict])
 async def start_installer_job_timer(
     job_id: int,
-    installer_id: int = Query(..., gt=0, description="Installer user ID"),
     payload: InstallerJobTimerCommandRequest = None,
     fab_id: Optional[int] = Query(None, description="Optional FAB ID"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Start an installer timer for a job"""
+    installer_id = current_user.id
     
     # Verify job exists
     job_result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
     if not job_result.scalar_one_or_none():
         raise error_response("Job not found", 404)
-    
-    # Verify installer user exists
-    installer_result = await db.execute(select(User).where(User.id == installer_id))
-    if not installer_result.scalar_one_or_none():
-        raise error_response("Installer not found", 404)
     
     # Verify fab if provided
     installer_role = INSTALLER_ROLE_LEAD
@@ -279,13 +274,13 @@ async def start_installer_job_timer(
 @router.post("/installer/jobs/{job_id}/timer/pause", response_model=SuccessResponse[dict])
 async def pause_installer_job_timer(
     job_id: int,
-    installer_id: int = Query(..., gt=0, description="Installer user ID"),
     payload: InstallerJobTimerCommandRequest = None,
     fab_id: Optional[int] = Query(None, description="Optional FAB ID"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Pause an installer timer"""
+    installer_id = current_user.id
     
     result = await db.execute(
         select(InstallerJobTimerSession).where(
@@ -344,13 +339,13 @@ async def pause_installer_job_timer(
 @router.post("/installer/jobs/{job_id}/timer/resume", response_model=SuccessResponse[dict])
 async def resume_installer_job_timer(
     job_id: int,
-    installer_id: int = Query(..., gt=0, description="Installer user ID"),
     payload: InstallerJobTimerCommandRequest = None,
     fab_id: Optional[int] = Query(None, description="Optional FAB ID"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Resume a paused installer timer"""
+    installer_id = current_user.id
     
     result = await db.execute(
         select(InstallerJobTimerSession).where(
@@ -409,13 +404,13 @@ async def resume_installer_job_timer(
 @router.post("/installer/jobs/{job_id}/timer/stop", response_model=SuccessResponse[dict])
 async def stop_installer_job_timer(
     job_id: int,
-    installer_id: int = Query(..., gt=0, description="Installer user ID"),
     payload: InstallerJobTimerCommandRequest = None,
     fab_id: Optional[int] = Query(None, description="Optional FAB ID"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Stop an installer timer"""
+    installer_id = current_user.id
 
     stop_query = select(InstallerJobTimerSession).where(
         InstallerJobTimerSession.job_id == job_id,
@@ -485,12 +480,12 @@ async def stop_installer_job_timer(
 @router.get("/installer/jobs/{job_id}/timer", response_model=SuccessResponse[dict])
 async def get_installer_job_timer_state(
     job_id: int,
-    installer_id: int = Query(..., gt=0, description="Installer user ID"),
     fab_id: Optional[int] = Query(None, description="Optional FAB ID"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Get current installer timer state for a job"""
+    installer_id = current_user.id
     
     # Get latest session
     result = await db.execute(
@@ -529,12 +524,12 @@ async def get_installer_job_timer_state(
 @router.get("/installer/jobs/{job_id}/timer/history", response_model=SuccessResponse[dict])
 async def get_installer_job_timer_history(
     job_id: int,
-    installer_id: int = Query(..., gt=0, description="Installer user ID"),
     fab_id: Optional[int] = Query(None, description="Optional FAB ID"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Get timer history for an installer on a job"""
+    installer_id = current_user.id
     
     # Get all sessions
     sessions_result = await db.execute(
