@@ -1646,7 +1646,12 @@ async def get_fabs_with_shop_est_completion(
         )
 
     # Step 4: Apply pagination and ordering
-    query = _apply_pagination_and_ordering(query, skip, limit, current_stage, latest_templating)
+    install_scheduled_date = _latest_install_scheduled_date_expr()
+    query = query.offset(skip).limit(limit).order_by(
+        install_scheduled_date.asc().nullslast(),
+        Fab.updated_at.asc().nullsfirst(),
+        Fab.created_at.asc(),
+    )
 
     result = await db.execute(query)
     rows = result.all()
@@ -3606,6 +3611,17 @@ def _apply_date_field_filter(
 
     return query
 
+
+def _latest_install_scheduled_date_expr():
+    """Return latest install scheduled date per FAB for consistent ordering."""
+    return (
+        select(InstallScheduling.scheduled_install_date)
+        .where(InstallScheduling.fab_id == Fab.id)
+        .order_by(InstallScheduling.id.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+
 def _apply_pagination_and_ordering(query, skip: int, limit: int, current_stage: Optional[str], latest_templating):
     """Apply pagination and stage-specific ordering."""
     if current_stage == "templating":
@@ -3643,6 +3659,13 @@ def _apply_pagination_and_ordering(query, skip: int, limit: int, current_stage: 
     elif current_stage == "cut_list":
         return query.offset(skip).limit(limit).order_by(
             Fab.shop_date_schedule.asc().nullsfirst(),
+            Fab.updated_at.asc().nullsfirst(),
+            Fab.created_at.asc()
+        )
+    elif current_stage == "install_completion":
+        install_scheduled_date = _latest_install_scheduled_date_expr()
+        return query.offset(skip).limit(limit).order_by(
+            install_scheduled_date.asc().nullslast(),
             Fab.updated_at.asc().nullsfirst(),
             Fab.created_at.asc()
         )
