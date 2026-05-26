@@ -1054,6 +1054,10 @@ class CostOfStoneResponse(BaseModel):
 # Install Scheduling Schemas
 class InstallSchedulingCreate(BaseModel):
     fab_id: int = Field(..., gt=0)
+    installer_id: Optional[int] = None
+    extra_crew_1_id: Optional[int] = None
+    extra_crew_2_id: Optional[int] = None
+    extra_crew_3_id: Optional[int] = None
     scheduled_install_date: Optional[datetime] = None
     scheduled_end_date: Optional[datetime] = None
     total_sqft: Optional[str] = None
@@ -1061,6 +1065,9 @@ class InstallSchedulingCreate(BaseModel):
 
 class InstallSchedulingUpdate(BaseModel):
     installer_id: Optional[int] = None
+    extra_crew_1_id: Optional[int] = None
+    extra_crew_2_id: Optional[int] = None
+    extra_crew_3_id: Optional[int] = None
     scheduled_install_date: Optional[datetime] = None
     scheduled_end_date: Optional[datetime] = None
     actual_install_date: Optional[datetime] = None
@@ -1072,8 +1079,14 @@ class InstallSchedulingUpdate(BaseModel):
 class InstallSchedulingResponse(BaseModel):
     id: int
     fab_id: int
-    installer_id: Optional[int]
+    installer_id: Optional[int] = None
     installer_name: Optional[str] = None
+    extra_crew_1_id: Optional[int] = None
+    extra_crew_1_name: Optional[str] = None
+    extra_crew_2_id: Optional[int] = None
+    extra_crew_2_name: Optional[str] = None
+    extra_crew_3_id: Optional[int] = None
+    extra_crew_3_name: Optional[str] = None
     scheduled_install_date: Optional[datetime]
     scheduled_end_date: Optional[datetime]
     actual_install_date: Optional[datetime]
@@ -1488,6 +1501,7 @@ class InstallerJobTimerSessionResponse(BaseModel):
     job_id: int
     fab_id: Optional[int] = None
     installer_id: int
+    installer_role: Optional[str] = None
     status: str
     session_start_at: datetime
     current_run_start_at: Optional[datetime] = None

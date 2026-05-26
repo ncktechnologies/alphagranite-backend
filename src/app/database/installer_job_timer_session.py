@@ -11,6 +11,7 @@ class InstallerJobTimerSession(SQLModel, table=True):
     job_id: int = Field(foreign_key="business_jobs.id", index=True)
     fab_id: Optional[int] = Field(default=None, foreign_key="fabs.id", index=True)
     installer_id: int = Field(foreign_key="users.id", index=True)
+    installer_role: str = Field(default="lead", max_length=20)
     status: str = Field(max_length=20)
 
     session_start_at: datetime

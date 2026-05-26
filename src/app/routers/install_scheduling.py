@@ -25,6 +25,32 @@ from src.app.utils.helpers import error_response, success_response
 router = APIRouter()
 
 
+async def _resolve_install_crew_names(
+    db: AsyncSession,
+    installer_id: Optional[int],
+    extra_crew_1_id: Optional[int],
+    extra_crew_2_id: Optional[int],
+    extra_crew_3_id: Optional[int],
+):
+    crew_ids = [crew_id for crew_id in [installer_id, extra_crew_1_id, extra_crew_2_id, extra_crew_3_id] if crew_id]
+    if not crew_ids:
+        return None, None, None, None
+
+    users_result = await db.execute(select(User).where(User.id.in_(crew_ids)))
+    users = users_result.scalars().all()
+    user_names = {
+        u.id: f"{u.first_name or ''} {u.last_name or ''}".strip() or None
+        for u in users
+    }
+
+    return (
+        user_names.get(installer_id),
+        user_names.get(extra_crew_1_id),
+        user_names.get(extra_crew_2_id),
+        user_names.get(extra_crew_3_id),
+    )
+
+
 @router.post("/install-scheduling", response_model=SuccessResponse[InstallSchedulingResponse], status_code=201)
 async def create_install_scheduling(
     install_data: InstallSchedulingCreate,
@@ -49,6 +75,10 @@ async def create_install_scheduling(
     # Create install scheduling
     install_scheduling = InstallScheduling(
         fab_id=install_data.fab_id,
+        installer_id=install_data.installer_id,
+        extra_crew_1_id=install_data.extra_crew_1_id,
+        extra_crew_2_id=install_data.extra_crew_2_id,
+        extra_crew_3_id=install_data.extra_crew_3_id,
         scheduled_install_date=install_data.scheduled_install_date,
         scheduled_end_date=install_data.scheduled_end_date,
         total_sqft=install_data.total_sqft,
@@ -65,13 +95,13 @@ async def create_install_scheduling(
     await db.commit()
     await db.refresh(install_scheduling)
     
-    # Fetch installer name if installer_id is set
-    installer_name = None
-    if install_scheduling.installer_id:
-        installer_result = await db.execute(select(User).where(User.id == install_scheduling.installer_id))
-        installer = installer_result.scalar_one_or_none()
-        if installer:
-            installer_name = f"{installer.first_name} {installer.last_name}".strip()
+    installer_name, extra_crew_1_name, extra_crew_2_name, extra_crew_3_name = await _resolve_install_crew_names(
+        db,
+        install_scheduling.installer_id,
+        install_scheduling.extra_crew_1_id,
+        install_scheduling.extra_crew_2_id,
+        install_scheduling.extra_crew_3_id,
+    )
     
     return success_response(
         InstallSchedulingResponse(
@@ -79,6 +109,12 @@ async def create_install_scheduling(
             fab_id=install_scheduling.fab_id,
             installer_id=install_scheduling.installer_id,
             installer_name=installer_name,
+            extra_crew_1_id=install_scheduling.extra_crew_1_id,
+            extra_crew_1_name=extra_crew_1_name,
+            extra_crew_2_id=install_scheduling.extra_crew_2_id,
+            extra_crew_2_name=extra_crew_2_name,
+            extra_crew_3_id=install_scheduling.extra_crew_3_id,
+            extra_crew_3_name=extra_crew_3_name,
             scheduled_install_date=install_scheduling.scheduled_install_date,
             scheduled_end_date=install_scheduling.scheduled_end_date,
             actual_install_date=install_scheduling.actual_install_date,
@@ -151,13 +187,13 @@ async def update_install_scheduling(
     await db.commit()
     await db.refresh(install_scheduling)
     
-    # Fetch installer name if installer_id is set
-    installer_name = None
-    if install_scheduling.installer_id:
-        installer_result = await db.execute(select(User).where(User.id == install_scheduling.installer_id))
-        installer = installer_result.scalar_one_or_none()
-        if installer:
-            installer_name = f"{installer.first_name} {installer.last_name}".strip()
+    installer_name, extra_crew_1_name, extra_crew_2_name, extra_crew_3_name = await _resolve_install_crew_names(
+        db,
+        install_scheduling.installer_id,
+        install_scheduling.extra_crew_1_id,
+        install_scheduling.extra_crew_2_id,
+        install_scheduling.extra_crew_3_id,
+    )
     
     return success_response(
         InstallSchedulingResponse(
@@ -165,6 +201,12 @@ async def update_install_scheduling(
             fab_id=install_scheduling.fab_id,
             installer_id=install_scheduling.installer_id,
             installer_name=installer_name,
+            extra_crew_1_id=install_scheduling.extra_crew_1_id,
+            extra_crew_1_name=extra_crew_1_name,
+            extra_crew_2_id=install_scheduling.extra_crew_2_id,
+            extra_crew_2_name=extra_crew_2_name,
+            extra_crew_3_id=install_scheduling.extra_crew_3_id,
+            extra_crew_3_name=extra_crew_3_name,
             scheduled_install_date=install_scheduling.scheduled_install_date,
             scheduled_end_date=install_scheduling.scheduled_end_date,
             actual_install_date=install_scheduling.actual_install_date,
@@ -193,13 +235,13 @@ async def get_install_scheduling_by_fab(
     if not install_scheduling:
         raise error_response("Install Scheduling not found for this fab", 404)
     
-    # Fetch installer name if installer_id is set
-    installer_name = None
-    if install_scheduling.installer_id:
-        installer_result = await db.execute(select(User).where(User.id == install_scheduling.installer_id))
-        installer = installer_result.scalar_one_or_none()
-        if installer:
-            installer_name = f"{installer.first_name} {installer.last_name}".strip()
+    installer_name, extra_crew_1_name, extra_crew_2_name, extra_crew_3_name = await _resolve_install_crew_names(
+        db,
+        install_scheduling.installer_id,
+        install_scheduling.extra_crew_1_id,
+        install_scheduling.extra_crew_2_id,
+        install_scheduling.extra_crew_3_id,
+    )
     
     return success_response(
         InstallSchedulingResponse(
@@ -207,6 +249,12 @@ async def get_install_scheduling_by_fab(
             fab_id=install_scheduling.fab_id,
             installer_id=install_scheduling.installer_id,
             installer_name=installer_name,
+            extra_crew_1_id=install_scheduling.extra_crew_1_id,
+            extra_crew_1_name=extra_crew_1_name,
+            extra_crew_2_id=install_scheduling.extra_crew_2_id,
+            extra_crew_2_name=extra_crew_2_name,
+            extra_crew_3_id=install_scheduling.extra_crew_3_id,
+            extra_crew_3_name=extra_crew_3_name,
             scheduled_install_date=install_scheduling.scheduled_install_date,
             scheduled_end_date=install_scheduling.scheduled_end_date,
             actual_install_date=install_scheduling.actual_install_date,

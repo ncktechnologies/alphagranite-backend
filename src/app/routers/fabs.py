@@ -824,6 +824,7 @@ async def get_fabs(
     draft_completed_end: Optional[date] = Query(None, description="Filter by draft_completed_date on or before this date (YYYY-MM-DD)"),
     sct_completed_start: Optional[date] = Query(None, description="Filter by sct_completed_date on or after this date (YYYY-MM-DD)"),  # NEW
     sct_completed_end: Optional[date] = Query(None, description="Filter by sct_completed_date on or before this date (YYYY-MM-DD)"),  # NEW
+    user_level: Optional[str] = Query(None, description="Requester user level flag; when 'installer', apply install_completion crew/date visibility"),
     search: Optional[str] = Query(None, description="Search value"),
     type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, job_name"),  # NEW
     db: AsyncSession = Depends(get_db),
@@ -885,6 +886,36 @@ async def get_fabs(
 
     if current_stage == "shop":
         query = query.where(_active_shop_cut_plan_visibility_filter())
+
+    # install_completion: restrict to logged-in user's crew and release after 4pm on scheduled day
+    _install_completion_crew_filter = None
+    _install_completion_date_filter = None
+    is_installer_request = isinstance(user_level, str) and user_level.strip().lower() == "installer"
+    if current_stage == "install_completion" and is_installer_request:
+        _install_completion_crew_filter = (
+            select(InstallScheduling.id)
+            .where(
+                InstallScheduling.fab_id == Fab.id,
+                or_(
+                    InstallScheduling.installer_id == current_user.id,
+                    InstallScheduling.extra_crew_1_id == current_user.id,
+                    InstallScheduling.extra_crew_2_id == current_user.id,
+                    InstallScheduling.extra_crew_3_id == current_user.id,
+                ),
+            )
+            .exists()
+        )
+        _install_completion_date_filter = (
+            select(InstallScheduling.id)
+            .where(
+                InstallScheduling.fab_id == Fab.id,
+                func.date_trunc("day", InstallScheduling.scheduled_install_date)
+                + sa.text("interval '16 hours'")
+                <= func.now(),
+            )
+            .exists()
+        )
+        query = query.where(_install_completion_crew_filter, _install_completion_date_filter)
 
     # Apply search filter if present
     if search_filter is not None:
@@ -954,6 +985,8 @@ async def get_fabs(
         count_query = count_query.where(Fab.status_id == status_id)
     if current_stage:
         count_query = count_query.where(_stage_filter_condition(current_stage))
+        if current_stage == "install_completion" and _install_completion_crew_filter is not None:
+            count_query = count_query.where(_install_completion_crew_filter, _install_completion_date_filter)
     if next_stage:
         count_query = count_query.where(Fab.next_stage == next_stage)
 
@@ -1041,6 +1074,8 @@ async def get_fabs(
 
         if current_stage == "shop":
             stage_totals_query = stage_totals_query.where(_active_shop_cut_plan_visibility_filter())
+        if current_stage == "install_completion" and _install_completion_crew_filter is not None:
+            stage_totals_query = stage_totals_query.where(_install_completion_crew_filter, _install_completion_date_filter)
 
         # Apply same basic filters
         if job_id is not None:
@@ -1611,7 +1646,13 @@ async def get_fabs_with_shop_est_completion(
         )
 
     # Step 4: Apply pagination and ordering
-    query = _apply_pagination_and_ordering(query, skip, limit, current_stage, latest_templating)
+    # Keep FABs with shop_est_completion_date first (oldest to newest), then undated FABs.
+    query = query.offset(skip).limit(limit).order_by(
+        sa.case((Fab.shop_est_completion_date.is_(None), 1), else_=0),
+        Fab.shop_est_completion_date.asc().nullslast(),
+        Fab.updated_at.asc().nullsfirst(),
+        Fab.created_at.asc(),
+    )
 
     result = await db.execute(query)
     rows = result.all()
@@ -1652,6 +1693,12 @@ async def get_fabs_with_shop_est_completion(
                 "fab_id": f["id"],
                 "installer_id": None,
                 "installer_name": None,
+                "extra_crew_1_id": None,
+                "extra_crew_1_name": None,
+                "extra_crew_2_id": None,
+                "extra_crew_2_name": None,
+                "extra_crew_3_id": None,
+                "extra_crew_3_name": None,
                 "scheduled_install_date": None,
                 "scheduled_end_date": None,
                 "actual_install_date": None,
@@ -3388,6 +3435,7 @@ def _apply_stage_specific_date_filter(
 
     # Determine which date field to filter on based on stage
     date_field = None
+    use_install_scheduling_date = False
 
     if current_stage == "templating":
         if latest_templating is not None:
@@ -3404,11 +3452,25 @@ def _apply_stage_specific_date_filter(
         date_field = Fab.sct_completed_date
     elif current_stage == "cut_list":
         date_field = Fab.shop_date_schedule
+    elif current_stage == "install_completion":
+        use_install_scheduling_date = True
+        date_field = InstallScheduling.scheduled_install_date
     else:
         return query
 
     date_field_cast = sa.cast(date_field, sa.Date)
     predefined_applied = False
+
+    def _apply_install_completion_date_condition(condition):
+        return query.where(
+            select(InstallScheduling.id)
+            .where(
+                InstallScheduling.fab_id == Fab.id,
+                InstallScheduling.scheduled_install_date.isnot(None),
+                condition,
+            )
+            .exists()
+        )
 
     # Apply predefined date filter if provided
     if date_filter and date_field is not None:
@@ -3416,46 +3478,75 @@ def _apply_stage_specific_date_filter(
         today = date.today()
 
         if normalized_filter == "today":
-            query = query.where(date_field_cast == today)
+            if use_install_scheduling_date:
+                query = _apply_install_completion_date_condition(date_field_cast == today)
+            else:
+                query = query.where(date_field_cast == today)
             predefined_applied = True
         elif normalized_filter == "this_week":
             start = today - timedelta(days=today.weekday())
             end = start + timedelta(days=6)
-            query = query.where(date_field_cast.between(start, end))
+            if use_install_scheduling_date:
+                query = _apply_install_completion_date_condition(date_field_cast.between(start, end))
+            else:
+                query = query.where(date_field_cast.between(start, end))
             predefined_applied = True
         elif normalized_filter == "last_week":
             start = today - timedelta(days=today.weekday() + 7)
             end = start + timedelta(days=6)
-            query = query.where(date_field_cast.between(start, end))
+            if use_install_scheduling_date:
+                query = _apply_install_completion_date_condition(date_field_cast.between(start, end))
+            else:
+                query = query.where(date_field_cast.between(start, end))
             predefined_applied = True
         elif normalized_filter == "this_month":
             start = today.replace(day=1)
             end = (start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
-            query = query.where(date_field_cast.between(start, end))
+            if use_install_scheduling_date:
+                query = _apply_install_completion_date_condition(date_field_cast.between(start, end))
+            else:
+                query = query.where(date_field_cast.between(start, end))
             predefined_applied = True
         elif normalized_filter == "last_month":
             first = today.replace(day=1)
             last_month_end = first - timedelta(days=1)
             last_month_start = last_month_end.replace(day=1)
-            query = query.where(date_field_cast.between(last_month_start, last_month_end))
+            if use_install_scheduling_date:
+                query = _apply_install_completion_date_condition(
+                    date_field_cast.between(last_month_start, last_month_end)
+                )
+            else:
+                query = query.where(date_field_cast.between(last_month_start, last_month_end))
             predefined_applied = True
         elif normalized_filter == "next_week":
             start = today + timedelta(days=(7 - today.weekday()))
             end = start + timedelta(days=6)
-            query = query.where(date_field_cast.between(start, end))
+            if use_install_scheduling_date:
+                query = _apply_install_completion_date_condition(date_field_cast.between(start, end))
+            else:
+                query = query.where(date_field_cast.between(start, end))
             predefined_applied = True
         elif normalized_filter == "next_month":
             first_next = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
             last_next = (first_next + timedelta(days=32)).replace(day=1) - timedelta(days=1)
-            query = query.where(date_field_cast.between(first_next, last_next))
+            if use_install_scheduling_date:
+                query = _apply_install_completion_date_condition(date_field_cast.between(first_next, last_next))
+            else:
+                query = query.where(date_field_cast.between(first_next, last_next))
             predefined_applied = True
 
     # Apply custom date range when no predefined filter is applied, including date_filter=custom.
     if date_field is not None and not predefined_applied:
         if date_start:
-            query = query.where(date_field_cast >= date_start)
+            if use_install_scheduling_date:
+                query = _apply_install_completion_date_condition(date_field_cast >= date_start)
+            else:
+                query = query.where(date_field_cast >= date_start)
         if date_end:
-            query = query.where(date_field_cast <= date_end)
+            if use_install_scheduling_date:
+                query = _apply_install_completion_date_condition(date_field_cast <= date_end)
+            else:
+                query = query.where(date_field_cast <= date_end)
 
     return query
 
@@ -3521,6 +3612,17 @@ def _apply_date_field_filter(
 
     return query
 
+
+def _latest_install_scheduled_date_expr():
+    """Return latest install scheduled date per FAB for consistent ordering."""
+    return (
+        select(InstallScheduling.scheduled_install_date)
+        .where(InstallScheduling.fab_id == Fab.id)
+        .order_by(InstallScheduling.id.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+
 def _apply_pagination_and_ordering(query, skip: int, limit: int, current_stage: Optional[str], latest_templating):
     """Apply pagination and stage-specific ordering."""
     if current_stage == "templating":
@@ -3558,6 +3660,13 @@ def _apply_pagination_and_ordering(query, skip: int, limit: int, current_stage: 
     elif current_stage == "cut_list":
         return query.offset(skip).limit(limit).order_by(
             Fab.shop_date_schedule.asc().nullsfirst(),
+            Fab.updated_at.asc().nullsfirst(),
+            Fab.created_at.asc()
+        )
+    elif current_stage == "install_completion":
+        install_scheduled_date = _latest_install_scheduled_date_expr()
+        return query.offset(skip).limit(limit).order_by(
+            install_scheduled_date.asc().nullslast(),
             Fab.updated_at.asc().nullsfirst(),
             Fab.created_at.asc()
         )
@@ -4569,19 +4678,39 @@ async def _batch_load_install_scheduling_responses(db: AsyncSession, fab_ids: Li
     install_scheduling_responses_by_fab = {}
     for r in rows:
         if r.fab_id not in install_scheduling_responses_by_fab:
-            # Fetch installer name if installer_id is set
+            crew_ids = [
+                crew_id
+                for crew_id in [r.installer_id, r.extra_crew_1_id, r.extra_crew_2_id, r.extra_crew_3_id]
+                if crew_id
+            ]
             installer_name = None
-            if r.installer_id:
-                installer_result = await db.execute(select(User).where(User.id == r.installer_id))
-                installer = installer_result.scalar_one_or_none()
-                if installer:
-                    installer_name = f"{installer.first_name} {installer.last_name}".strip()
+            extra_crew_1_name = None
+            extra_crew_2_name = None
+            extra_crew_3_name = None
+
+            if crew_ids:
+                users_result = await db.execute(select(User).where(User.id.in_(crew_ids)))
+                users = users_result.scalars().all()
+                user_names = {
+                    u.id: f"{u.first_name or ''} {u.last_name or ''}".strip() or None
+                    for u in users
+                }
+                installer_name = user_names.get(r.installer_id)
+                extra_crew_1_name = user_names.get(r.extra_crew_1_id)
+                extra_crew_2_name = user_names.get(r.extra_crew_2_id)
+                extra_crew_3_name = user_names.get(r.extra_crew_3_id)
             
             install_scheduling_responses_by_fab[r.fab_id] = InstallSchedulingResponse(
                 id=r.id,
                 fab_id=r.fab_id,
                 installer_id=r.installer_id,
                 installer_name=installer_name,
+                extra_crew_1_id=r.extra_crew_1_id,
+                extra_crew_1_name=extra_crew_1_name,
+                extra_crew_2_id=r.extra_crew_2_id,
+                extra_crew_2_name=extra_crew_2_name,
+                extra_crew_3_id=r.extra_crew_3_id,
+                extra_crew_3_name=extra_crew_3_name,
                 scheduled_install_date=r.scheduled_install_date,
                 scheduled_end_date=r.scheduled_end_date,
                 actual_install_date=r.actual_install_date,
