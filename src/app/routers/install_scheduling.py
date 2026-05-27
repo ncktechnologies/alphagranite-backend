@@ -275,7 +275,7 @@ async def unmark_install_completion(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Unmark (uncheck) install completion for a fab — reverts is_completed to False and clears completion_date"""
+    """Unmark (uncheck) install completion for a fab by reverting is_completed to False."""
 
     result = await db.execute(select(InstallCompletion).where(InstallCompletion.fab_id == fab_id))
     install_completion = result.scalar_one_or_none()
@@ -287,7 +287,6 @@ async def unmark_install_completion(
         raise error_response("Install Completion is not marked as completed", 400)
 
     install_completion.is_completed = False
-    install_completion.completion_date = None
     install_completion.updated_at = datetime.now()
     install_completion.updated_by = current_user.id
 
