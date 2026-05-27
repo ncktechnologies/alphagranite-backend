@@ -1125,7 +1125,7 @@ class InstallCompletionResponse(BaseModel):
     fab_id: int
     installer_id: int
     install_date: datetime
-    completion_date: datetime
+    completion_date: Optional[datetime]
     total_sqft_installed: Optional[str]
     customer_signature: Optional[str]
     completion_notes: Optional[str]
