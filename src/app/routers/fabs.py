@@ -2953,6 +2953,27 @@ async def get_all_stages(
     )
     cnc_last_10_ids = [row[0] for row in cnc_ids_result.all()]
 
+    # Keep cost_of_stone count aligned with /fabs/cost-of-stone queue behavior.
+    cost_of_stone_queue_filters = [
+        Fab.sct_completed.is_(True),
+        or_(
+            Fab.cost_of_stone.is_(None),
+            func.trim(sa.cast(Fab.cost_of_stone, sa.String)) == "",
+        ),
+    ]
+    cost_of_stone_count_result = await db.execute(
+        select(func.count(Fab.id)).where(*cost_of_stone_queue_filters)
+    )
+    cost_of_stone_queue_count = cost_of_stone_count_result.scalar() or 0
+
+    cost_of_stone_ids_result = await db.execute(
+        select(Fab.id)
+        .where(*cost_of_stone_queue_filters)
+        .order_by(Fab.sct_completed_date.asc().nulls_last(), Fab.id.desc())
+        .limit(10)
+    )
+    cost_of_stone_last_10_ids = [row[0] for row in cost_of_stone_ids_result.all()]
+
     # Keep install_scheduling count aligned with the install-to-schedule widget
     # list behavior from /fabs/shop-est-completion when scoped to this stage.
     shop_est_or_install_filter = or_(
@@ -3038,6 +3059,17 @@ async def get_all_stages(
         elif stage_name == "cnc":
             fab_count = cnc_widget_count
             fab_ids = cnc_last_10_ids
+            stages_data.append({
+                "stage_name": stage_name,
+                "stage_order": idx + 1,
+                "fab_count": fab_count,
+                "last_10_fab_ids": fab_ids,
+                "next_stage": get_next_stage(stage_name)
+            })
+            continue
+        elif stage_name == "cost_of_stone":
+            fab_count = cost_of_stone_queue_count
+            fab_ids = cost_of_stone_last_10_ids
             stages_data.append({
                 "stage_name": stage_name,
                 "stage_order": idx + 1,

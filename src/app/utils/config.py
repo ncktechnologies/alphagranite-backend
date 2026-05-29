@@ -43,7 +43,7 @@ ALLOWED_EXTENSIONS = os.getenv("ALLOWED_EXTENSIONS", "jpg,jpeg,png,gif,pdf,doc,d
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 
 # Support Email Configuration
-SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "support@alphagraniteaustin.com")
+SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "odyssey@alphagraniteaustin.com")
 
 class Settings(BaseSettings):
     """Application settings."""
