@@ -481,6 +481,13 @@ def _stage_filter_condition(stage_name: str):
     return Fab.current_stage == stage_name
 
 
+def _normalize_installer_install_completion_date_filter(date_filter: Optional[str]) -> Optional[str]:
+    if not isinstance(date_filter, str):
+        return None
+    normalized_filter = date_filter.strip().lower()
+    return normalized_filter or None
+
+
 def _needs_slabsmith(
     slab_smith_ag_needed: Optional[bool] = None,
     slab_smith_cust_needed: Optional[bool] = None,
@@ -893,6 +900,14 @@ async def get_fabs(
     _install_completion_date_filter = None
     is_installer_request = isinstance(user_level, str) and user_level.strip().lower() == "installer"
     if current_stage == "install_completion" and is_installer_request:
+        normalized_install_completion_filter = _normalize_installer_install_completion_date_filter(date_filter)
+        allowed_install_completion_filters = {None, "today", "next_day", "previous_job"}
+        if normalized_install_completion_filter not in allowed_install_completion_filters:
+            raise HTTPException(
+                status_code=400,
+                detail="Install completion installers only support date_filter values: today, next_day, previous_job",
+            )
+        date_filter = normalized_install_completion_filter
         _install_completion_crew_filter = (
             select(InstallScheduling.id)
             .where(
@@ -3516,6 +3531,20 @@ def _apply_stage_specific_date_filter(
                 query = _apply_install_completion_date_condition(date_field_cast == today)
             else:
                 query = query.where(date_field_cast == today)
+            predefined_applied = True
+        elif normalized_filter == "next_day":
+            next_day = today + timedelta(days=1)
+            if use_install_scheduling_date:
+                query = _apply_install_completion_date_condition(date_field_cast == next_day)
+            else:
+                query = query.where(date_field_cast == next_day)
+            predefined_applied = True
+        elif normalized_filter == "previous_job":
+            previous_day = today - timedelta(days=1)
+            if use_install_scheduling_date:
+                query = _apply_install_completion_date_condition(date_field_cast <= previous_day)
+            else:
+                query = query.where(date_field_cast <= previous_day)
             predefined_applied = True
         elif normalized_filter == "this_week":
             start = today - timedelta(days=today.weekday())
