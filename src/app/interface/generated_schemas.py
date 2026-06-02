@@ -322,6 +322,21 @@ class Revision(SQLModel, table=True):
     updated_by: Optional[int] = Field(default=None)
     file_ids: Optional[str] = Field(default=None)
 
+
+# --- Shop Revisions ---
+class ShopRevision(SQLModel, table=True):
+    __tablename__ = "shop_revisions"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    fab_id: int = Field(foreign_key="fabs.id", index=True)
+    revision_note: str = Field(description="Shop revision note")
+    requested_by: int = Field(foreign_key="users.id")
+    assigned_to: Optional[int] = Field(default=None, foreign_key="users.id")
+    revision_completed: bool = Field(default=False, index=True)
+    completed_at: Optional[datetime] = Field(default=None)
+    created_at: datetime = Field(default_factory=datetime.now, index=True)
+    updated_at: Optional[datetime] = Field(default=None)
+    updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
+
 # --- Cost of Stone ---
 class CostOfStone(SQLModel, table=True):
     __tablename__ = "cost_of_stones"

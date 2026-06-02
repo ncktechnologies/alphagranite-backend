@@ -21,6 +21,7 @@ from src.app.database.installer_job_timer_session import InstallerJobTimerSessio
 from src.app.database.operator_job_timer_session import OperatorJobTimerSession
 from src.app.database.shop_cut_plan_timer_session import ShopCutPlanTimerSession
 from src.app.database.templater_job_timer_session import TemplaterJobTimerSession
+from src.app.interface.generated_schemas import ShopRevision
 
 
 async def assert_no_active_timer_session(db: AsyncSession, user_id: int) -> None:
@@ -52,6 +53,32 @@ async def assert_no_active_timer_session(db: AsyncSession, user_id: int) -> None
                 f"A drafting session for Job #{job.job_number} "
                 f"(FAB #{sess.fab_id}) is already running. "
                 "Pause it before starting another timer."
+            ),
+        )
+
+
+async def assert_no_pending_shop_revision(db: AsyncSession, fab_id: int) -> None:
+    """Raise HTTP 409 if a FAB has any pending shop revision."""
+    if fab_id is None:
+        return
+
+    pending_revision = (
+        await db.execute(
+            select(ShopRevision)
+            .where(
+                ShopRevision.fab_id == fab_id,
+                ShopRevision.revision_completed.is_(False),
+            )
+            .order_by(ShopRevision.created_at.desc(), ShopRevision.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if pending_revision:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"FAB #{fab_id} has a pending shop revision. "
+                "Complete the revision before starting or stopping an operator timer."
             ),
         )
 

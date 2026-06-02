@@ -34,7 +34,7 @@ from src.app.middleware.jwt_auth import get_current_user
 from src.app.service.file import FileService
 from src.app.utils.config import get_settings
 from src.app.utils.helpers import success_response
-from src.app.utils.timer_guards import assert_no_active_timer_session
+from src.app.utils.timer_guards import assert_no_active_timer_session, assert_no_pending_shop_revision
 
 
 router = APIRouter(
@@ -1117,6 +1117,9 @@ async def _process_current_operator_job_timer_action(
                 raise HTTPException(status_code=404, detail=f"Workstation with ID {workstation_id} not found")
             if operator_id not in (workstation.operator_ids or []):
                 raise HTTPException(status_code=400, detail="Workstation is not assigned to this operator")
+
+        if normalized_action in {"start", "stop"} and fab_id is not None:
+            await assert_no_pending_shop_revision(db, fab_id)
 
         active_session = await _get_active_operator_job_session(
             db,

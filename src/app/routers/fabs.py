@@ -29,6 +29,7 @@ from src.app.database.sales_ct import SalesCT
 from src.app.database.cnc import CNCDrafting
 from src.app.database.status import Status
 from src.app.interface.generated_schemas import ResurfaceScheduling, InstallScheduling, Revision
+from src.app.interface.generated_schemas import ShopRevision
 
 from src.app.interface.business_schemas import (
     FabCreate, FabUpdate, FabResponse, FabStageUpdate, ResurfaceSchedulingResponse, InstallSchedulingResponse
@@ -2068,6 +2069,7 @@ async def get_fab(
 
     install_scheduling_map = await _batch_load_install_scheduling_responses(db, [fab_id])
     fab_dict["install_details"] = install_scheduling_map.get(fab_id)
+    fab_dict["has_pending_shop_revision"] = (await _batch_load_pending_shop_revision_flags(db, [fab_id])).get(fab_id, False)
     
     # Determine success message based on stage
     message = "Fab fetched successfully"
@@ -3794,6 +3796,7 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
             fab_dict["resurface_details"] = None
             fab_dict["install_details"] = None
             fab_dict["latest_revision"] = None
+            fab_dict["has_pending_shop_revision"] = False
             fab_dict["drafting_session"] = None
             fab_dict["is_complete"] = False
             fab_dict["stage_data"] = None
@@ -3824,6 +3827,7 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
     stage_data_by_fab = await _batch_load_stage_data(db, fab_ids)
     drafting_sessions_by_fab = await _batch_load_drafting_sessions(db, fab_ids)
     latest_revisions_by_fab = await _batch_load_latest_revisions(db, fab_ids)
+    pending_shop_revision_by_fab = await _batch_load_pending_shop_revision_flags(db, fab_ids)
     
     # Attach to fab dicts
     for fab_dict in fab_dicts:
@@ -3837,6 +3841,7 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
         fab_dict["resurface_details"] = resurface_by_fab.get(fab_id)
         fab_dict["install_details"] = install_by_fab.get(fab_id)
         fab_dict["latest_revision"] = latest_revisions_by_fab.get(fab_id)
+        fab_dict["has_pending_shop_revision"] = pending_shop_revision_by_fab.get(fab_id, False)
         fab_dict["drafting_session"] = drafting_sessions_by_fab.get(fab_id)
 
         current_stage = fab_dict.get("current_stage")
@@ -4985,6 +4990,22 @@ async def _batch_load_latest_revisions(db: AsyncSession, fab_ids: List[int]) -> 
             }
     
     return latest_revisions
+
+
+async def _batch_load_pending_shop_revision_flags(db: AsyncSession, fab_ids: List[int]) -> dict:
+    """Return a mapping of fab_id -> True when a pending shop revision exists."""
+    if not fab_ids:
+        return {}
+
+    result = await db.execute(
+        select(ShopRevision.fab_id)
+        .where(
+            ShopRevision.fab_id.in_(fab_ids),
+            ShopRevision.revision_completed.is_(False),
+        )
+        .distinct()
+    )
+    return {row[0]: True for row in result.all()}
 
 
 from src.app.database.drafting import DraftingSession, DraftingSessionNote  # add with other imports
