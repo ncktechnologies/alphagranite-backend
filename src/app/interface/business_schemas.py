@@ -423,6 +423,7 @@ class FabResponse(BaseModel):
     fab_notes: Optional[List[dict]] = None
     cost_of_stone_id: Optional[int] = Field(None, description="Cost of stone record ID")
     cost_of_stone: Optional[Decimal] = Field(None, description="Cost of stone amount")
+    has_pending_shop_revision: Optional[bool] = None
 
     predraft_completed_date: Optional[datetime] = None
     template_review_complete: Optional[bool] = None
@@ -1007,6 +1008,34 @@ class RevisionResponse(BaseModel):
     revision_notes: Optional[str]
     is_completed: bool
     status_id: int
+    created_at: datetime
+    updated_at: Optional[datetime]
+    updated_by: Optional[int]
+
+
+# Shop Revision Schemas
+class ShopRevisionCreate(BaseModel):
+    fab_id: int = Field(..., gt=0)
+    revision_note: str = Field(..., min_length=1)
+    requested_by: Optional[int] = Field(default=None, gt=0)
+    assigned_to: Optional[int] = Field(default=None, gt=0)
+    revision_completed: bool = Field(default=False)
+
+
+class ShopRevisionUpdate(BaseModel):
+    revision_note: Optional[str] = Field(default=None, min_length=1)
+    assigned_to: Optional[int] = Field(default=None, gt=0)
+    revision_completed: Optional[bool] = None
+
+
+class ShopRevisionResponse(BaseModel):
+    id: int
+    fab_id: int
+    revision_note: str
+    requested_by: int
+    assigned_to: Optional[int]
+    revision_completed: bool
+    completed_at: Optional[datetime]
     created_at: datetime
     updated_at: Optional[datetime]
     updated_by: Optional[int]

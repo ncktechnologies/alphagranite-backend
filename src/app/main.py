@@ -48,6 +48,7 @@ from src.app.routers import wj_programming
 from src.app.routers import wj_scheduling
 from src.app.routers import resurface_scheduling
 from src.app.routers import revisions
+from src.app.routers import shop_revisions
 from src.app.routers import cost_of_stone
 from src.app.routers import install_scheduling
 from src.app.routers import install_completion  
@@ -285,6 +286,7 @@ app.include_router(wj_programming.router, prefix="/api/v1", tags=["WJ Programmin
 app.include_router(wj_scheduling.router, prefix="/api/v1", tags=["WJ Scheduling"])
 app.include_router(resurface_scheduling.router, prefix="/api/v1", tags=["Resurface Scheduling"])
 app.include_router(revisions.router, prefix="/api/v1", tags=["Revisions"])
+app.include_router(shop_revisions.router, prefix="/api/v1", tags=["Shop Revisions"])
 app.include_router(cost_of_stone.router, prefix="/api/v1", tags=["Cost of Stone"])
 app.include_router(install_scheduling.router, prefix="/api/v1", tags=["Install Scheduling"])
 app.include_router(install_completion.router, prefix="/api/v1", tags=["Install Completion"])
