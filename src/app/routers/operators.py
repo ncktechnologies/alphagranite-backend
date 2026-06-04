@@ -5,7 +5,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File as FileUpload, Form, status
 from fastapi.responses import FileResponse
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, select as sa_select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -16,7 +16,7 @@ from src.app.database.file import File
 from src.app.database.fab import Fab
 from src.app.database.operator_job_timer_event import OperatorJobTimerEvent
 from src.app.database.operator_job_timer_session import OperatorJobTimerSession
-from src.app.interface.generated_schemas import PlanningSection
+from src.app.interface.generated_schemas import PlanningSection, ShopRevision
 from src.app.database.shop_cut_plan import ShopCutPlan
 from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness
@@ -241,6 +241,7 @@ def _serialize_operator_task(row) -> dict:
         "workstation_name": row[5],
         "planning_section_id": plan.planning_section_id,
         "planning_section_name": row[6],
+        "has_pending_shop_revision": bool(row[7]),
         "sequence": plan.sequence,
         "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
         "scheduled_end_date": _compute_schedule_end_time_iso(plan.scheduled_start_date, plan.estimated_hours),
@@ -1031,6 +1032,15 @@ async def get_current_operator_tasks(
     target_date = reference_date or date.today()
     range_start, range_end = _build_calendar_window(normalized_view, target_date)
 
+    pending_shop_revision_exists = (
+        sa_select(ShopRevision.id)
+        .where(
+            ShopRevision.fab_id == Fab.id,
+            ShopRevision.revision_completed.is_(False),
+        )
+        .exists()
+    )
+
     query = (
         select(
             ShopCutPlan,
@@ -1040,6 +1050,7 @@ async def get_current_operator_tasks(
             Account.name.label("account_name"),
             WorkStation.name.label("workstation_name"),
             PlanningSection.plan_name.label("planning_section_name"),
+            pending_shop_revision_exists.label("has_pending_shop_revision"),
         )
         .join(Fab, Fab.id == ShopCutPlan.fab_id)
         .join(BusinessJob, BusinessJob.id == Fab.job_id)

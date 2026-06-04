@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from src.app.database import get_db
+from src.app.database.account import Account
 from src.app.database.business_job import BusinessJob
 from src.app.database.fab import Fab
 from src.app.database.user import User
@@ -240,8 +241,9 @@ async def get_fabs_with_pending_shop_revisions(
 
     fab_rows = (
         await db.execute(
-            select(Fab, BusinessJob)
+            select(Fab, BusinessJob, Account)
             .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+            .join(Account, Account.id == BusinessJob.account_id, isouter=True)
             .where(Fab.id.in_(fab_ids))
             .order_by(Fab.id.desc())
         )
@@ -277,13 +279,14 @@ async def get_fabs_with_pending_shop_revisions(
             }
 
     data = []
-    for fab, job in fab_rows:
+    for fab, job, account in fab_rows:
         data.append(
             {
                 "fab_id": fab.id,
                 "job_id": fab.job_id,
                 "job_number": job.job_number if job else None,
                 "job_name": job.name if job else None,
+                "account_name": account.name if account else None,
                 "fab_type": fab.fab_type,
                 "current_stage": fab.current_stage,
                 "status_id": fab.status_id,
