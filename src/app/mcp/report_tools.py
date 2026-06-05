@@ -160,16 +160,38 @@ def _merge_date_range_params(question: str, params: dict[str, Any]) -> dict[str,
             if index > 0
         }
     )
-    month_match = re.search(
-        r"\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b",
-        lower,
+    month_matches = list(
+        re.finditer(
+            r"\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b",
+            lower,
+        )
     )
-    if month_match:
-        month_token = month_match.group(1)
-        if month_token == "sept":
-            month_token = "sep"
-        merged["month"] = month_aliases.get(month_token, merged.get("month"))
-        merged["year"] = merged.get("year", today.year)
+    if month_matches:
+        explicit_year_match = re.search(r"\b(20\d{2})\b", lower)
+        resolved_year = int(explicit_year_match.group(1)) if explicit_year_match else today.year
+
+        month_numbers: list[int] = []
+        for match in month_matches:
+            token = match.group(1)
+            if token == "sept":
+                token = "sep"
+            month_index = month_aliases.get(token)
+            if month_index and month_index not in month_numbers:
+                month_numbers.append(month_index)
+
+        if month_numbers:
+            earliest_month = min(month_numbers)
+            latest_month = max(month_numbers)
+            # Build an inclusive date range spanning the referenced month(s) so
+            # date-range tools (e.g. shop_status, overview) target the right window.
+            start = date(resolved_year, earliest_month, 1)
+            last_day = calendar.monthrange(resolved_year, latest_month)[1]
+            end = date(resolved_year, latest_month, last_day)
+            merged["start_date"] = start.isoformat()
+            merged["end_date"] = end.isoformat()
+            # Month/year tools use the latest referenced month.
+            merged["month"] = latest_month
+            merged["year"] = resolved_year
 
     year_match = re.search(r"\b(20\d{2})\b", lower)
     if year_match:
