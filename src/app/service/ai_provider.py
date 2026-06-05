@@ -115,6 +115,106 @@ def _extract_json_object(text: str) -> Optional[dict[str, Any]]:
         return None
 
 
+def _anthropic_agent_id() -> str:
+    return os.getenv("ANTHROPIC_AGENT_ID", "").strip()
+
+
+def _extract_text_from_anthropic_payload(parsed: dict[str, Any]) -> str:
+    if not isinstance(parsed, dict):
+        return ""
+
+    direct_text = parsed.get("output_text")
+    if isinstance(direct_text, str) and direct_text.strip():
+        return direct_text
+
+    text_parts: list[str] = []
+
+    content = parsed.get("content")
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            block_text = block.get("text")
+            if isinstance(block_text, str) and block_text.strip():
+                text_parts.append(block_text)
+                continue
+            nested_content = block.get("content")
+            if isinstance(nested_content, list):
+                for nested_block in nested_content:
+                    if isinstance(nested_block, dict):
+                        nested_text = nested_block.get("text")
+                        if isinstance(nested_text, str) and nested_text.strip():
+                            text_parts.append(nested_text)
+
+    if text_parts:
+        return "\n".join(text_parts)
+
+    result = parsed.get("result")
+    if isinstance(result, dict):
+        nested_text = _extract_text_from_anthropic_payload(result)
+        if nested_text:
+            return nested_text
+
+    return ""
+
+
+def _call_anthropic_agent_json(
+    prompt: str,
+    timeout_seconds: int,
+    *,
+    max_tokens: Optional[int] = None,
+    phase: str,
+) -> Optional[tuple[dict[str, Any], str]]:
+    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    agent_id = _anthropic_agent_id()
+    if not api_key or not agent_id:
+        return None
+
+    endpoint = os.getenv(
+        "ANTHROPIC_AGENT_ENDPOINT",
+        f"https://api.anthropic.com/v1/agents/{urllib.parse.quote(agent_id)}/messages",
+    ).strip()
+    model_hint = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022").strip()
+    max_token_budget = max_tokens or _int_env("MCP_AI_ADVISOR_MAX_TOKENS", 1200, minimum=256, maximum=8192)
+
+    payload = {
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_token_budget,
+        "temperature": 0,
+        "metadata": {
+            "phase": phase,
+            "model_hint": model_hint,
+        },
+    }
+
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    beta_header = os.getenv("ANTHROPIC_BETA_HEADER", "").strip()
+    if beta_header:
+        headers["anthropic-beta"] = beta_header
+
+    parsed = _post_json(endpoint, payload, headers, timeout_seconds)
+    if not parsed:
+        logger.info("mcp.ai anthropic_agent_no_payload phase=%s agent_id=%s", phase, agent_id)
+        return None
+
+    text = _extract_text_from_anthropic_payload(parsed)
+    output = _extract_json_object(text)
+    if output is None:
+        logger.info(
+            "mcp.ai anthropic_agent_invalid_json phase=%s agent_id=%s text_preview=%s",
+            phase,
+            agent_id,
+            text[:300],
+        )
+        return None
+
+    return output, f"agent:{agent_id}"
+
+
 def _build_planner_prompt(question: str, tool_catalog: list[dict[str, Any]]) -> str:
     catalog_lines = []
     for tool in tool_catalog:
@@ -137,24 +237,88 @@ def _build_advisor_prompt(
     resolved_params: dict[str, Any],
     insights: list[str],
     result: dict[str, Any],
+    *,
+    response_mode: str,
+    focus: str,
 ) -> str:
+    evidence_summary = _build_evidence_summary(result, insights)
+    style_instruction = {
+        "brief": "Keep total output compact and prioritize the most critical points.",
+        "standard": "Provide balanced detail across findings, risks, and actions.",
+        "deep": "Provide comprehensive detail with nuanced metric and risk breakdown.",
+    }.get(response_mode, "Provide balanced detail across findings, risks, and actions.")
+
     payload = {
         "question": question,
         "tool_name": tool_name,
         "resolved_params": resolved_params,
         "insights": insights,
-        "result": result,
+        "focus": focus,
+        "response_mode": response_mode,
+        "evidence_summary": evidence_summary,
+        "result_preview": _build_result_preview(result),
     }
     payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     return (
         "You are an operations advisor for a granite fabrication business.\n"
-        "Write a concise, practical, conversational response based only on the provided data.\n"
+        "Write a practical, decision-ready response based only on provided data.\n"
         "Do not invent facts. Do not mention that you are an AI.\n"
         "Return a single JSON object only.\n"
-        '{"summary":"string","what_this_means":"string","likely_causes":["string"],"recommended_actions":["string"],"priority":"high|medium|low","follow_up_question":"string","conversation_reply":"string"}\n'
-        "Rules: keep it specific, managerial, and action-oriented.\n"
+        '{"executive_summary":"string","what_this_means":"string","key_findings":["string"],"metric_breakdown":["string"],"risk_flags":["string"],"recommended_actions":["string"],"assumptions_and_gaps":["string"],"next_questions":["string"],"priority":"high|medium|low","conversation_reply":"string","evidence":["string"]}\n'
+        "Rules:\n"
+        "- Answer first, then explain.\n"
+        "- Include quantified findings when numbers are available.\n"
+        "- Include explicit gaps when data is missing.\n"
+        "- Keep recommendations actionable and prioritized.\n"
+        "- Evidence must reference concrete keys from context (example: summary.row_count, rows[0].total_sqft).\n"
+        f"- {style_instruction}\n"
         f"Context:\n{payload_json}\n"
     )
+
+
+def _build_result_preview(result: dict[str, Any], max_list_items: int = 5, max_keys: int = 12) -> dict[str, Any]:
+    preview: dict[str, Any] = {}
+    for idx, (key, value) in enumerate((result or {}).items()):
+        if idx >= max_keys:
+            break
+        if isinstance(value, list):
+            preview[key] = value[:max_list_items]
+        elif isinstance(value, dict):
+            preview[key] = {k: value[k] for k in list(value.keys())[:max_keys]}
+        else:
+            preview[key] = value
+    return preview
+
+
+def _build_evidence_summary(result: dict[str, Any], insights: list[str]) -> dict[str, Any]:
+    row_collections: list[dict[str, Any]] = []
+    key_metrics: dict[str, Any] = {}
+    for key, value in (result or {}).items():
+        if isinstance(value, list):
+            row_collections.append({"key": key, "count": len(value)})
+            if value and isinstance(value[0], dict):
+                row_collections[-1]["sample_keys"] = list(value[0].keys())[:8]
+        elif isinstance(value, dict) and key in {"summary", "kpis", "filters", "period"}:
+            numeric_items = {
+                nested_key: nested_value
+                for nested_key, nested_value in value.items()
+                if isinstance(nested_value, (int, float))
+            }
+            if numeric_items:
+                key_metrics[key] = numeric_items
+
+    missing_signals: list[str] = []
+    if not row_collections:
+        missing_signals.append("no_row_collections_detected")
+    if not key_metrics:
+        missing_signals.append("no_numeric_metric_blocks_detected")
+
+    return {
+        "insights": insights,
+        "row_collections": row_collections[:12],
+        "key_metrics": key_metrics,
+        "missing_signals": missing_signals,
+    }
 
 
 def _call_json_claude(
@@ -162,16 +326,27 @@ def _call_json_claude(
     timeout_seconds: int,
     *,
     model: Optional[str] = None,
+    max_tokens: Optional[int] = None,
 ) -> Optional[tuple[dict[str, Any], str]]:
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     resolved_model = (model or os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")).strip()
-    max_tokens = _int_env("MCP_AI_ADVISOR_MAX_TOKENS", 1200, minimum=256, maximum=8192)
+    resolved_max_tokens = max_tokens or _int_env("MCP_AI_ADVISOR_MAX_TOKENS", 1200, minimum=256, maximum=8192)
     if not api_key:
         return None
 
+    agent_result = _call_anthropic_agent_json(
+        prompt,
+        timeout_seconds,
+        max_tokens=resolved_max_tokens,
+        phase="advisor",
+    )
+    if agent_result is not None:
+        logger.info("mcp.ai advisor_success_via_agent model=%s", agent_result[1])
+        return agent_result
+
     payload = {
         "model": resolved_model,
-        "max_tokens": max_tokens,
+        "max_tokens": resolved_max_tokens,
         "temperature": 0,
         "messages": [{"role": "user", "content": prompt}],
     }
@@ -199,10 +374,11 @@ def _call_json_gemini(
     timeout_seconds: int,
     *,
     model: Optional[str] = None,
+    max_tokens: Optional[int] = None,
 ) -> Optional[tuple[dict[str, Any], str]]:
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     resolved_model = (model or os.getenv("GEMINI_MODEL", "gemini-3.5-flash")).strip()
-    max_output_tokens = _int_env("MCP_AI_ADVISOR_MAX_TOKENS", 1024, minimum=256, maximum=8192)
+    max_output_tokens = max_tokens or _int_env("MCP_AI_ADVISOR_MAX_TOKENS", 1024, minimum=256, maximum=8192)
     if not api_key:
         return None
 
@@ -219,22 +395,30 @@ def _call_json_gemini(
             "responseSchema": {
                 "type": "OBJECT",
                 "properties": {
-                    "summary": {"type": "STRING"},
+                    "executive_summary": {"type": "STRING"},
                     "what_this_means": {"type": "STRING"},
-                    "likely_causes": {"type": "ARRAY", "items": {"type": "STRING"}},
+                    "key_findings": {"type": "ARRAY", "items": {"type": "STRING"}},
+                    "metric_breakdown": {"type": "ARRAY", "items": {"type": "STRING"}},
+                    "risk_flags": {"type": "ARRAY", "items": {"type": "STRING"}},
                     "recommended_actions": {"type": "ARRAY", "items": {"type": "STRING"}},
+                    "assumptions_and_gaps": {"type": "ARRAY", "items": {"type": "STRING"}},
+                    "next_questions": {"type": "ARRAY", "items": {"type": "STRING"}},
                     "priority": {"type": "STRING", "enum": ["high", "medium", "low"]},
-                    "follow_up_question": {"type": "STRING"},
                     "conversation_reply": {"type": "STRING"},
+                    "evidence": {"type": "ARRAY", "items": {"type": "STRING"}},
                 },
                 "required": [
-                    "summary",
+                    "executive_summary",
                     "what_this_means",
-                    "likely_causes",
+                    "key_findings",
+                    "metric_breakdown",
+                    "risk_flags",
                     "recommended_actions",
+                    "assumptions_and_gaps",
+                    "next_questions",
                     "priority",
-                    "follow_up_question",
                     "conversation_reply",
+                    "evidence",
                 ],
             },
         },
@@ -263,10 +447,16 @@ def _call_json_gemini(
 
 
 def _normalize_advisor_output(raw: dict[str, Any]) -> Optional[dict[str, Any]]:
-    summary = str(raw.get("summary") or "").strip()
+    summary = str(raw.get("executive_summary") or raw.get("summary") or "").strip()
     what_this_means = str(raw.get("what_this_means") or "").strip()
+    key_findings = raw.get("key_findings") if isinstance(raw.get("key_findings"), list) else []
+    metric_breakdown = raw.get("metric_breakdown") if isinstance(raw.get("metric_breakdown"), list) else []
+    risk_flags = raw.get("risk_flags") if isinstance(raw.get("risk_flags"), list) else []
     likely_causes = raw.get("likely_causes") if isinstance(raw.get("likely_causes"), list) else []
     recommended_actions = raw.get("recommended_actions") if isinstance(raw.get("recommended_actions"), list) else []
+    assumptions_and_gaps = raw.get("assumptions_and_gaps") if isinstance(raw.get("assumptions_and_gaps"), list) else []
+    next_questions = raw.get("next_questions") if isinstance(raw.get("next_questions"), list) else []
+    evidence = raw.get("evidence") if isinstance(raw.get("evidence"), list) else []
     priority = str(raw.get("priority") or "medium").strip().lower()
     if priority not in {"high", "medium", "low"}:
         priority = "medium"
@@ -276,14 +466,41 @@ def _normalize_advisor_output(raw: dict[str, Any]) -> Optional[dict[str, Any]]:
     if not summary or not what_this_means or not conversation_reply:
         return None
 
+    normalized_key_findings = [str(item).strip() for item in key_findings if str(item).strip()]
+    if not normalized_key_findings:
+        normalized_key_findings = [summary]
+
+    normalized_metric_breakdown = [str(item).strip() for item in metric_breakdown if str(item).strip()]
+    normalized_risk_flags = [str(item).strip() for item in risk_flags if str(item).strip()]
+    if not normalized_risk_flags:
+        normalized_risk_flags = [str(item).strip() for item in likely_causes if str(item).strip()]
+
+    normalized_recommended_actions = [str(item).strip() for item in recommended_actions if str(item).strip()]
+    normalized_assumptions_and_gaps = [str(item).strip() for item in assumptions_and_gaps if str(item).strip()]
+    normalized_next_questions = [str(item).strip() for item in next_questions if str(item).strip()]
+    if not normalized_next_questions and follow_up_question:
+        normalized_next_questions = [follow_up_question]
+
+    normalized_evidence = [str(item).strip() for item in evidence if str(item).strip()]
+    if not normalized_evidence:
+        normalized_evidence = ["insights[0]"]
+
     return {
-        "summary": summary,
+        "executive_summary": summary,
         "what_this_means": what_this_means,
-        "likely_causes": [str(item).strip() for item in likely_causes if str(item).strip()],
-        "recommended_actions": [str(item).strip() for item in recommended_actions if str(item).strip()],
+        "key_findings": normalized_key_findings,
+        "metric_breakdown": normalized_metric_breakdown,
+        "risk_flags": normalized_risk_flags,
+        "recommended_actions": normalized_recommended_actions,
+        "assumptions_and_gaps": normalized_assumptions_and_gaps,
+        "next_questions": normalized_next_questions,
+        "evidence": normalized_evidence,
         "priority": priority,
-        "follow_up_question": follow_up_question,
         "conversation_reply": conversation_reply,
+        # Backward-compatible aliases for existing clients.
+        "summary": summary,
+        "likely_causes": normalized_risk_flags,
+        "follow_up_question": normalized_next_questions[0] if normalized_next_questions else "",
     }
 
 
@@ -292,6 +509,9 @@ def _build_local_advisor_output(
     tool_name: str,
     insights: list[str],
     result: dict[str, Any],
+    *,
+    response_mode: str,
+    focus: str,
 ) -> dict[str, Any]:
     summary = " ".join(insights[:2]).strip()
     if not summary:
@@ -356,16 +576,60 @@ def _build_local_advisor_output(
         + "; ".join(recommended_actions[:3])
     ).strip()
 
+    evidence_summary = _build_evidence_summary(result, insights)
+    metric_breakdown = [f"{item.get('key')}: {item.get('count')} rows" for item in evidence_summary.get("row_collections", [])]
+    assumptions_and_gaps = []
+    if evidence_summary.get("missing_signals"):
+        assumptions_and_gaps = [
+            "Some requested breakdown fields are not present in the selected tool result.",
+            "Consider running a more specific ranking/detail tool for deeper attribution.",
+        ]
+
     return {
+        "executive_summary": summary,
         "summary": summary,
         "what_this_means": what_this_means,
+        "key_findings": [summary],
+        "metric_breakdown": metric_breakdown,
+        "risk_flags": likely_causes,
         "likely_causes": likely_causes,
         "recommended_actions": recommended_actions,
+        "assumptions_and_gaps": assumptions_and_gaps,
+        "next_questions": [follow_up_question],
+        "evidence": ["insights[0]", "evidence_summary.row_collections"],
         "priority": priority,
         "follow_up_question": follow_up_question,
         "conversation_reply": conversation_reply,
         "question": question,
+        "response_mode": response_mode,
+        "focus": focus,
     }
+
+
+def _normalize_response_mode(value: str) -> str:
+    normalized = (value or "").strip().lower()
+    if normalized in {"brief", "standard", "deep"}:
+        return normalized
+    env_default = os.getenv("MCP_AI_ADVISOR_DETAIL_LEVEL", "standard").strip().lower()
+    if env_default in {"brief", "standard", "deep"}:
+        return env_default
+    return "standard"
+
+
+def _normalize_focus(value: str) -> str:
+    normalized = (value or "").strip().lower()
+    if normalized in {"finance", "operations", "dispatch", "quality", "mixed"}:
+        return normalized
+    return "mixed"
+
+
+def _advisor_max_tokens_for_mode(response_mode: str) -> int:
+    base = _int_env("MCP_AI_ADVISOR_MAX_TOKENS", 1200, minimum=256, maximum=8192)
+    if response_mode == "brief":
+        return min(base, 900)
+    if response_mode == "deep":
+        return _int_env("MCP_AI_ADVISOR_MAX_TOKENS_DEEP", min(base + 1200, 8192), minimum=512, maximum=8192)
+    return base
 
 
 async def maybe_generate_advisor_response(
@@ -374,31 +638,57 @@ async def maybe_generate_advisor_response(
     resolved_params: dict[str, Any],
     insights: list[str],
     result: dict[str, Any],
+    *,
+    response_mode: str = "standard",
+    focus: str = "mixed",
 ) -> Optional[AIAdvisorResult]:
     if not _is_enabled():
         return None
 
     timeout_seconds = int(os.getenv("MCP_AI_TIMEOUT_SECONDS", "20") or 20)
+    normalized_response_mode = _normalize_response_mode(response_mode)
+    normalized_focus = _normalize_focus(focus)
+    advisor_max_tokens = _advisor_max_tokens_for_mode(normalized_response_mode)
     primary = os.getenv("MCP_AI_PRIMARY_PROVIDER", "gemini").strip().lower()
     provider_order = [p for p in [primary, "gemini", "claude"] if p in {"claude", "gemini"}]
     provider_order = list(dict.fromkeys(provider_order))
 
-    prompt = _build_advisor_prompt(question, tool_name, resolved_params, insights, result)
+    prompt = _build_advisor_prompt(
+        question,
+        tool_name,
+        resolved_params,
+        insights,
+        result,
+        response_mode=normalized_response_mode,
+        focus=normalized_focus,
+    )
     logger.info(
-        "mcp.ai advisor_start primary=%s order=%s timeout=%s tool_name=%s question_preview=%s",
+        "mcp.ai advisor_start primary=%s order=%s timeout=%s tool_name=%s response_mode=%s focus=%s question_preview=%s",
         primary,
         provider_order,
         timeout_seconds,
         tool_name,
+        normalized_response_mode,
+        normalized_focus,
         question[:120],
     )
 
     for provider in provider_order:
         try:
             if provider == "gemini":
-                candidate = await asyncio.to_thread(_call_json_gemini, prompt, timeout_seconds)
+                candidate = await asyncio.to_thread(
+                    _call_json_gemini,
+                    prompt,
+                    timeout_seconds,
+                    max_tokens=advisor_max_tokens,
+                )
             else:
-                candidate = await asyncio.to_thread(_call_json_claude, prompt, timeout_seconds)
+                candidate = await asyncio.to_thread(
+                    _call_json_claude,
+                    prompt,
+                    timeout_seconds,
+                    max_tokens=advisor_max_tokens,
+                )
         except Exception:
             logger.exception("mcp.ai advisor_provider_exception provider=%s", provider)
             candidate = None
@@ -413,12 +703,28 @@ async def maybe_generate_advisor_response(
             logger.info("mcp.ai advisor_provider_invalid_output provider=%s model=%s", provider, model)
             continue
 
-        logger.info("mcp.ai advisor_success provider=%s model=%s tool_name=%s", provider, model, tool_name)
+        normalized["response_mode"] = normalized_response_mode
+        normalized["focus"] = normalized_focus
+        logger.info(
+            "mcp.ai advisor_success provider=%s model=%s tool_name=%s response_mode=%s focus=%s",
+            provider,
+            model,
+            tool_name,
+            normalized_response_mode,
+            normalized_focus,
+        )
         return AIAdvisorResult(advisor=normalized, provider=provider, model=model)
 
     logger.info("mcp.ai advisor_fallback_rule_based reason=no_valid_provider_result tool_name=%s", tool_name)
     return AIAdvisorResult(
-        advisor=_build_local_advisor_output(question, tool_name, insights, result),
+        advisor=_build_local_advisor_output(
+            question,
+            tool_name,
+            insights,
+            result,
+            response_mode=normalized_response_mode,
+            focus=normalized_focus,
+        ),
         provider="local",
         model="rule-based",
     )
@@ -476,12 +782,23 @@ def _call_claude(question: str, tool_catalog: list[dict[str, Any]], timeout_seco
         question[:120],
     )
 
+    planner_prompt = _build_planner_prompt(question, tool_catalog)
+    agent_result = _call_anthropic_agent_json(
+        planner_prompt,
+        timeout_seconds,
+        max_tokens=2048,
+        phase="planner",
+    )
+    if agent_result is not None:
+        logger.info("mcp.ai planner_success_via_agent model=%s", agent_result[1])
+        return agent_result
+
     payload = {
         "model": model,
         "max_tokens": 4096,
         "temperature": 0,
         "messages": [
-            {"role": "user", "content": _build_planner_prompt(question, tool_catalog)}
+            {"role": "user", "content": planner_prompt}
         ],
     }
     headers = {

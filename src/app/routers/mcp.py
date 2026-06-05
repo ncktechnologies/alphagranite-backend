@@ -37,6 +37,8 @@ class MCPToolInvokeRequest(BaseModel):
 class MCPQuestionRequest(BaseModel):
     question: str = Field(..., min_length=1)
     params: dict[str, Any] = Field(default_factory=dict)
+    response_mode: str = Field(default="standard")
+    focus: str = Field(default="mixed")
 
 
 @router.get("/tools", response_model=SuccessResponse[list[dict]])
@@ -204,6 +206,8 @@ async def ask_mcp_bi_question(
         resolved_params,
         insights,
         result,
+        response_mode=payload.response_mode,
+        focus=payload.focus,
     )
 
     await save_audit_trail(
@@ -234,6 +238,8 @@ async def ask_mcp_bi_question(
             "model": model,
             "planner_candidates": candidate_rankings,
             "resolved_params": resolved_params,
+            "response_mode": payload.response_mode,
+            "focus": payload.focus,
             "insights": insights,
             "advisor": advisor_response.advisor if advisor_response is not None else None,
             "advisor_provider": advisor_response.provider if advisor_response is not None else None,

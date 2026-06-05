@@ -1,6 +1,7 @@
 import pytest
 
 from src.app.mcp.report_tools import NLToolSelection
+from src.app.service.ai_provider import AIAdvisorResult
 
 
 @pytest.mark.asyncio
@@ -158,3 +159,84 @@ async def test_ask_mcp_bi_question_accepts_param_overrides(client, test_db, monk
     body = response.json()
     assert body["data"]["resolved_params"]["top_n"] == 5
     assert body["data"]["matched_tool"] == "owner.install_performance"
+
+
+@pytest.mark.asyncio
+async def test_ask_mcp_bi_question_passes_response_mode_and_focus(client, test_db, monkeypatch):
+    from tests.conftest import get_test_token_header
+    from src.app.routers import mcp as mcp_router
+
+    def fake_select_tool_for_question(question: str):
+        return NLToolSelection(
+            tool_name="owner.largest_jobs",
+            confidence="high",
+            rationale="Matched job-size ranking language.",
+            params={"top_n": 10},
+        )
+
+    async def fake_invoke_report_tool(name, params, *, db, current_user):
+        assert name == "owner.largest_jobs"
+        return {
+            "summary": {"row_count": 1},
+            "rows": [{"job_number": "J-1", "job_name": "HQ", "total_sqft": 999}],
+        }
+
+    def fake_summarize_tool_result(tool_name: str, result: dict):
+        return ["Returned top jobs by square footage."]
+
+    async def fake_maybe_generate_advisor_response(
+        question,
+        tool_name,
+        resolved_params,
+        insights,
+        result,
+        *,
+        response_mode="standard",
+        focus="mixed",
+    ):
+        assert response_mode == "deep"
+        assert focus == "operations"
+        return AIAdvisorResult(
+            advisor={
+                "executive_summary": "Largest jobs identified.",
+                "what_this_means": "Top jobs concentrate demand.",
+                "key_findings": ["J-1 leads by sqft."],
+                "metric_breakdown": ["rows: 1"],
+                "risk_flags": ["Concentration risk"],
+                "recommended_actions": ["Balance workload"],
+                "assumptions_and_gaps": [],
+                "next_questions": ["Show margin for these jobs?"],
+                "priority": "medium",
+                "conversation_reply": "Largest jobs identified with clear concentration risk.",
+                "evidence": ["rows[0].total_sqft"],
+                "summary": "Largest jobs identified.",
+            },
+            provider="local",
+            model="rule-based",
+        )
+
+    async def fake_save_audit_trail(*args, **kwargs):
+        return {"audit_id": 8}
+
+    monkeypatch.setattr(mcp_router, "select_tool_for_question", fake_select_tool_for_question)
+    monkeypatch.setattr(mcp_router, "invoke_report_tool", fake_invoke_report_tool)
+    monkeypatch.setattr(mcp_router, "summarize_tool_result", fake_summarize_tool_result)
+    monkeypatch.setattr(mcp_router, "maybe_generate_advisor_response", fake_maybe_generate_advisor_response)
+    monkeypatch.setattr(mcp_router, "save_audit_trail", fake_save_audit_trail)
+
+    auth_headers = await get_test_token_header(client)
+    response = await client.post(
+        "/api/v1/mcp/ask",
+        headers=auth_headers,
+        json={
+            "question": "List the jobs with the most square footage",
+            "response_mode": "deep",
+            "focus": "operations",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"]["response_mode"] == "deep"
+    assert body["data"]["focus"] == "operations"
+    assert body["data"]["advisor"]["executive_summary"] == "Largest jobs identified."
