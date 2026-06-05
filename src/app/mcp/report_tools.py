@@ -500,6 +500,56 @@ def get_report_tool_definition(name: str) -> MCPToolDefinition | None:
     return _TOOL_DEFINITIONS.get((name or "").strip().lower())
 
 
+def sanitize_params_for_tool(tool_name: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Keep only schema-allowed params and coerce simple scalar types."""
+    definition = get_report_tool_definition(tool_name)
+    if definition is None:
+        return {}
+
+    properties = (definition.input_schema or {}).get("properties") or {}
+    cleaned: dict[str, Any] = {}
+
+    for key, schema in properties.items():
+        if key not in params:
+            continue
+
+        value = params.get(key)
+        expected_type = (schema or {}).get("type")
+
+        if expected_type == "integer":
+            try:
+                cleaned[key] = int(value)
+            except (TypeError, ValueError):
+                continue
+            continue
+
+        if expected_type == "number":
+            try:
+                cleaned[key] = float(value)
+            except (TypeError, ValueError):
+                continue
+            continue
+
+        if expected_type == "boolean":
+            if isinstance(value, bool):
+                cleaned[key] = value
+            elif isinstance(value, str):
+                normalized = value.strip().lower()
+                if normalized in {"true", "1", "yes", "y"}:
+                    cleaned[key] = True
+                elif normalized in {"false", "0", "no", "n"}:
+                    cleaned[key] = False
+            elif isinstance(value, (int, float)):
+                cleaned[key] = bool(value)
+            continue
+
+        # Default to string for any text/date field.
+        if value is not None:
+            cleaned[key] = str(value)
+
+    return cleaned
+
+
 async def invoke_report_tool(
     name: str,
     params: dict[str, Any],

@@ -15,9 +15,11 @@ from src.app.mcp.report_tools import (
     get_report_tool_definition,
     invoke_report_tool,
     list_report_tools,
+    sanitize_params_for_tool,
     select_tool_for_question,
     summarize_tool_result,
 )
+from src.app.service.ai_provider import maybe_plan_tool_with_llm
 from src.app.utils.helpers import error_response, success_response
 from src.app.utils.permissions import PermissionChecker
 
@@ -77,10 +79,12 @@ async def run_mcp_tool(
     if tool_definition is None:
         raise error_response("MCP tool not found", 404)
 
+    cleaned_params = sanitize_params_for_tool(tool_definition.name, payload.params)
+
     try:
         result = await invoke_report_tool(
             tool_name,
-            payload.params,
+            cleaned_params,
             db=db,
             current_user=current_user,
         )
@@ -91,7 +95,7 @@ async def run_mcp_tool(
         db,
         "mcp_tool_invoked",
         current_user.id,
-        f"MCP tool invoked: {tool_definition.name} params={payload.params}",
+        f"MCP tool invoked: {tool_definition.name} params={cleaned_params}",
         0,
     )
 
@@ -100,7 +104,7 @@ async def run_mcp_tool(
             "tool": tool_definition.name,
             "description": tool_definition.description,
             "executed_at": datetime.now(timezone.utc).isoformat(),
-            "params": payload.params,
+            "params": cleaned_params,
             "result": result,
         },
         "MCP tool executed successfully",
@@ -113,13 +117,30 @@ async def ask_mcp_bi_question(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(PermissionChecker("reports", "read")),
 ):
-    try:
-        selection = select_tool_for_question(payload.question)
-    except ValueError as exc:
-        raise error_response(str(exc), 400)
+    tool_catalog = list_report_tools()
+    llm_plan = await maybe_plan_tool_with_llm(payload.question, tool_catalog)
 
-    resolved_params = dict(selection.params)
-    resolved_params.update(payload.params or {})
+    if llm_plan is not None:
+        selection = llm_plan.selection
+        source = "llm"
+        provider = llm_plan.provider
+        model = llm_plan.model
+    else:
+        try:
+            selection = select_tool_for_question(payload.question)
+        except ValueError as exc:
+            raise error_response(str(exc), 400)
+        source = "deterministic"
+        provider = None
+        model = None
+
+    resolved_params = sanitize_params_for_tool(
+        selection.tool_name,
+        {
+            **dict(selection.params),
+            **(payload.params or {}),
+        },
+    )
 
     tool_definition = get_report_tool_definition(selection.tool_name)
     if tool_definition is None:
@@ -141,7 +162,8 @@ async def ask_mcp_bi_question(
         db,
         "mcp_bi_question",
         current_user.id,
-        f"MCP BI question matched tool={selection.tool_name} question={payload.question} params={resolved_params}",
+        f"MCP BI question matched tool={selection.tool_name} source={source} provider={provider} model={model} "
+        f"question={payload.question} params={resolved_params}",
         0,
     )
 
@@ -151,6 +173,9 @@ async def ask_mcp_bi_question(
             "matched_tool": selection.tool_name,
             "confidence": selection.confidence,
             "rationale": selection.rationale,
+            "source": source,
+            "provider": provider,
+            "model": model,
             "resolved_params": resolved_params,
             "insights": insights,
             "result": result,
