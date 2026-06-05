@@ -51,6 +51,37 @@ def _extract_json_object(text: str) -> Optional[dict[str, Any]]:
     except json.JSONDecodeError:
         pass
 
+    # Try parsing the first balanced JSON object in the text.
+    in_string = False
+    escaped = False
+    depth = 0
+    start_idx = -1
+    for idx, ch in enumerate(text):
+        if ch == "\\" and in_string:
+            escaped = not escaped
+            continue
+        if ch == '"' and not escaped:
+            in_string = not in_string
+        escaped = False
+
+        if in_string:
+            continue
+
+        if ch == "{":
+            if depth == 0:
+                start_idx = idx
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start_idx >= 0:
+                candidate = text[start_idx : idx + 1]
+                try:
+                    parsed = json.loads(candidate)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except json.JSONDecodeError:
+                    pass
+
     start = text.find("{")
     end = text.rfind("}")
     if start == -1 or end == -1 or end <= start:
@@ -169,7 +200,7 @@ def _call_claude(question: str, tool_catalog: list[dict[str, Any]], timeout_seco
 
 def _call_gemini(question: str, tool_catalog: list[dict[str, Any]], timeout_seconds: int) -> Optional[tuple[dict[str, Any], str]]:
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    model = os.getenv("GEMINI_MODEL", "gemini-1.5-pro").strip()
+    model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash").strip()
     if not api_key:
         logger.info("mcp.ai gemini_skipped reason=missing_api_key")
         return None
@@ -183,8 +214,12 @@ def _call_gemini(question: str, tool_catalog: list[dict[str, Any]], timeout_seco
         question[:120],
     )
 
-    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{urllib.parse.quote(model)}:generateContent?key={urllib.parse.quote(api_key)}"
-    payload = {
+    def _request_for_model(request_model: str) -> Optional[tuple[dict[str, Any], str]]:
+        endpoint = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{urllib.parse.quote(request_model)}:generateContent?key={urllib.parse.quote(api_key)}"
+        )
+        payload = {
         "contents": [
             {
                 "role": "user",
@@ -193,7 +228,7 @@ def _call_gemini(question: str, tool_catalog: list[dict[str, Any]], timeout_seco
         ],
         "generationConfig": {
             "temperature": 0,
-            "maxOutputTokens": 400,
+            "maxOutputTokens": 800,
             "responseMimeType": "application/json",
             "responseSchema": {
                 "type": "OBJECT",
@@ -206,27 +241,53 @@ def _call_gemini(question: str, tool_catalog: list[dict[str, Any]], timeout_seco
                 "required": ["tool_name", "confidence", "rationale", "params"],
             },
         },
-    }
-    headers = {"content-type": "application/json"}
-    parsed = _post_json(endpoint, payload, headers, timeout_seconds)
-    if not parsed:
-        logger.info("mcp.ai gemini_request_no_payload model=%s", model)
-        return None
+        }
+        headers = {"content-type": "application/json"}
+        parsed = _post_json(endpoint, payload, headers, timeout_seconds)
+        if not parsed:
+            logger.info("mcp.ai gemini_request_no_payload model=%s", request_model)
+            return None
 
-    candidates = parsed.get("candidates") or []
-    if not candidates:
-        logger.info("mcp.ai gemini_empty_candidates model=%s", model)
-        return None
-    first = candidates[0] if isinstance(candidates[0], dict) else {}
-    content = first.get("content") or {}
-    parts = content.get("parts") or []
-    text = "\n".join(part.get("text", "") for part in parts if isinstance(part, dict))
-    output = _extract_json_object(text)
-    if output is None:
-        logger.info("mcp.ai gemini_invalid_json_response model=%s response_preview=%s", model, text[:300])
-        return None
-    logger.info("mcp.ai gemini_request_success model=%s", model)
-    return output, model
+        try:
+            logger.info("mcp.ai gemini_raw_response model=%s payload=%s", request_model, json.dumps(parsed))
+        except (TypeError, ValueError):
+            logger.info("mcp.ai gemini_raw_response model=%s payload=%s", request_model, str(parsed))
+
+        candidates = parsed.get("candidates") or []
+        if not candidates:
+            logger.info("mcp.ai gemini_empty_candidates model=%s", request_model)
+            return None
+
+        first = candidates[0] if isinstance(candidates[0], dict) else {}
+        finish_reason = first.get("finishReason")
+        logger.info("mcp.ai gemini_finish_reason model=%s finish_reason=%s", request_model, finish_reason)
+
+        content = first.get("content") or {}
+        parts = content.get("parts") or []
+        text = "\n".join(part.get("text", "") for part in parts if isinstance(part, dict))
+        output = _extract_json_object(text)
+        if output is None:
+            logger.info(
+                "mcp.ai gemini_invalid_json_response model=%s finish_reason=%s response_preview=%s",
+                request_model,
+                finish_reason,
+                text[:300],
+            )
+            return None
+
+        logger.info("mcp.ai gemini_request_success model=%s", request_model)
+        return output, request_model
+
+    first_try = _request_for_model(model)
+    if first_try is not None:
+        return first_try
+
+    fallback_model = os.getenv("GEMINI_FALLBACK_MODEL", "").strip()
+    if fallback_model and fallback_model != model:
+        logger.info("mcp.ai gemini_retry_with_fallback_model from=%s to=%s", model, fallback_model)
+        return _request_for_model(fallback_model)
+
+    return None
 
 
 def _normalize_selection(raw: dict[str, Any], provider: str) -> Optional[NLToolSelection]:
