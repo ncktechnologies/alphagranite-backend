@@ -130,6 +130,7 @@ def _build_advisor_prompt(
         "insights": insights,
         "result": result,
     }
+    payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     return (
         "You are an operations advisor for a granite fabrication business.\n"
         "Write a concise, practical, conversational response based only on the provided data.\n"
@@ -137,7 +138,7 @@ def _build_advisor_prompt(
         "Return a single JSON object only.\n"
         '{"summary":"string","what_this_means":"string","likely_causes":["string"],"recommended_actions":["string"],"priority":"high|medium|low","follow_up_question":"string","conversation_reply":"string"}\n'
         "Rules: keep it specific, managerial, and action-oriented.\n"
-        f"Context:\n{json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}\n"
+        f"Context:\n{payload_json}\n"
     )
 
 
