@@ -20,7 +20,7 @@ from src.app.mcp.report_tools import (
     select_tool_for_question,
     summarize_tool_result,
 )
-from src.app.service.ai_provider import maybe_plan_tool_with_llm
+from src.app.service.ai_provider import maybe_generate_advisor_response, maybe_plan_tool_with_llm
 from src.app.utils.helpers import error_response, success_response
 from src.app.utils.permissions import PermissionChecker
 
@@ -183,6 +183,14 @@ async def ask_mcp_bi_question(
 
     insights = summarize_tool_result(selection.tool_name, result)
 
+    advisor_response = await maybe_generate_advisor_response(
+        payload.question,
+        selection.tool_name,
+        resolved_params,
+        insights,
+        result,
+    )
+
     await save_audit_trail(
         db,
         "mcp_bi_question",
@@ -191,6 +199,14 @@ async def ask_mcp_bi_question(
         f"question={payload.question} params={resolved_params}",
         0,
     )
+
+    if advisor_response is not None:
+        logger.info(
+            "mcp.ask advisor_ready provider=%s model=%s tool=%s",
+            advisor_response.provider,
+            advisor_response.model,
+            selection.tool_name,
+        )
 
     return success_response(
         {
@@ -203,6 +219,9 @@ async def ask_mcp_bi_question(
             "model": model,
             "resolved_params": resolved_params,
             "insights": insights,
+            "advisor": advisor_response.advisor if advisor_response is not None else None,
+            "advisor_provider": advisor_response.provider if advisor_response is not None else None,
+            "advisor_model": advisor_response.model if advisor_response is not None else None,
             "result": result,
         },
         "MCP BI question answered successfully",

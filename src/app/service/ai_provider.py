@@ -23,6 +23,13 @@ class AIPlannerResult:
     model: str
 
 
+@dataclass(frozen=True)
+class AIAdvisorResult:
+    advisor: dict[str, Any]
+    provider: str
+    model: str
+
+
 def _is_enabled() -> bool:
     return os.getenv("MCP_AI_ENABLE_LLM", "false").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -107,6 +114,211 @@ def _build_planner_prompt(question: str, tool_catalog: list[dict[str, Any]]) -> 
         f"Tools:\n{chr(10).join(catalog_lines)}\n"
         f"Question: {question}\n"
     )
+
+
+def _build_advisor_prompt(
+    question: str,
+    tool_name: str,
+    resolved_params: dict[str, Any],
+    insights: list[str],
+    result: dict[str, Any],
+) -> str:
+    payload = {
+        "question": question,
+        "tool_name": tool_name,
+        "resolved_params": resolved_params,
+        "insights": insights,
+        "result": result,
+    }
+    return (
+        "You are an operations advisor for a granite fabrication business.\n"
+        "Write a concise, practical, conversational response based only on the provided data.\n"
+        "Do not invent facts. Do not mention that you are an AI.\n"
+        "Return a single JSON object only.\n"
+        '{"summary":"string","what_this_means":"string","likely_causes":["string"],"recommended_actions":["string"],"priority":"high|medium|low","follow_up_question":"string","conversation_reply":"string"}\n'
+        "Rules: keep it specific, managerial, and action-oriented.\n"
+        f"Context:\n{json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}\n"
+    )
+
+
+def _call_json_claude(
+    prompt: str,
+    timeout_seconds: int,
+    *,
+    model: Optional[str] = None,
+) -> Optional[tuple[dict[str, Any], str]]:
+    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    resolved_model = (model or os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")).strip()
+    if not api_key:
+        return None
+
+    payload = {
+        "model": resolved_model,
+        "max_tokens": 1200,
+        "temperature": 0,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    parsed = _post_json("https://api.anthropic.com/v1/messages", payload, headers, timeout_seconds)
+    if not parsed:
+        return None
+
+    content = parsed.get("content") or []
+    if not content or not isinstance(content, list):
+        return None
+    text_chunks = [chunk.get("text", "") for chunk in content if isinstance(chunk, dict)]
+    output = _extract_json_object("\n".join(text_chunks))
+    if output is None:
+        return None
+    return output, resolved_model
+
+
+def _call_json_gemini(
+    prompt: str,
+    timeout_seconds: int,
+    *,
+    model: Optional[str] = None,
+) -> Optional[tuple[dict[str, Any], str]]:
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    resolved_model = (model or os.getenv("GEMINI_MODEL", "gemini-3.5-flash")).strip()
+    if not api_key:
+        return None
+
+    endpoint = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{urllib.parse.quote(resolved_model)}:generateContent?key={urllib.parse.quote(api_key)}"
+    )
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0,
+            "maxOutputTokens": 1024,
+            "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "OBJECT",
+                "properties": {
+                    "summary": {"type": "STRING"},
+                    "what_this_means": {"type": "STRING"},
+                    "likely_causes": {"type": "ARRAY", "items": {"type": "STRING"}},
+                    "recommended_actions": {"type": "ARRAY", "items": {"type": "STRING"}},
+                    "priority": {"type": "STRING", "enum": ["high", "medium", "low"]},
+                    "follow_up_question": {"type": "STRING"},
+                    "conversation_reply": {"type": "STRING"},
+                },
+                "required": [
+                    "summary",
+                    "what_this_means",
+                    "likely_causes",
+                    "recommended_actions",
+                    "priority",
+                    "follow_up_question",
+                    "conversation_reply",
+                ],
+            },
+        },
+    }
+    headers = {"content-type": "application/json"}
+    parsed = _post_json(endpoint, payload, headers, timeout_seconds)
+    if not parsed:
+        return None
+
+    try:
+        logger.info("mcp.ai advisor_raw_response model=%s payload=%s", resolved_model, json.dumps(parsed))
+    except (TypeError, ValueError):
+        logger.info("mcp.ai advisor_raw_response model=%s payload=%s", resolved_model, str(parsed))
+
+    candidates = parsed.get("candidates") or []
+    if not candidates:
+        return None
+    first = candidates[0] if isinstance(candidates[0], dict) else {}
+    content = first.get("content") or {}
+    parts = content.get("parts") or []
+    text = "\n".join(part.get("text", "") for part in parts if isinstance(part, dict))
+    output = _extract_json_object(text)
+    if output is None:
+        return None
+    return output, resolved_model
+
+
+def _normalize_advisor_output(raw: dict[str, Any]) -> Optional[dict[str, Any]]:
+    summary = str(raw.get("summary") or "").strip()
+    what_this_means = str(raw.get("what_this_means") or "").strip()
+    likely_causes = raw.get("likely_causes") if isinstance(raw.get("likely_causes"), list) else []
+    recommended_actions = raw.get("recommended_actions") if isinstance(raw.get("recommended_actions"), list) else []
+    priority = str(raw.get("priority") or "medium").strip().lower()
+    if priority not in {"high", "medium", "low"}:
+        priority = "medium"
+    follow_up_question = str(raw.get("follow_up_question") or "").strip()
+    conversation_reply = str(raw.get("conversation_reply") or "").strip()
+
+    if not summary or not what_this_means or not conversation_reply:
+        return None
+
+    return {
+        "summary": summary,
+        "what_this_means": what_this_means,
+        "likely_causes": [str(item).strip() for item in likely_causes if str(item).strip()],
+        "recommended_actions": [str(item).strip() for item in recommended_actions if str(item).strip()],
+        "priority": priority,
+        "follow_up_question": follow_up_question,
+        "conversation_reply": conversation_reply,
+    }
+
+
+async def maybe_generate_advisor_response(
+    question: str,
+    tool_name: str,
+    resolved_params: dict[str, Any],
+    insights: list[str],
+    result: dict[str, Any],
+) -> Optional[AIAdvisorResult]:
+    if not _is_enabled():
+        return None
+
+    timeout_seconds = int(os.getenv("MCP_AI_TIMEOUT_SECONDS", "20") or 20)
+    primary = os.getenv("MCP_AI_PRIMARY_PROVIDER", "gemini").strip().lower()
+    provider_order = [p for p in [primary, "gemini", "claude"] if p in {"claude", "gemini"}]
+    provider_order = list(dict.fromkeys(provider_order))
+
+    prompt = _build_advisor_prompt(question, tool_name, resolved_params, insights, result)
+    logger.info(
+        "mcp.ai advisor_start primary=%s order=%s timeout=%s tool_name=%s question_preview=%s",
+        primary,
+        provider_order,
+        timeout_seconds,
+        tool_name,
+        question[:120],
+    )
+
+    for provider in provider_order:
+        try:
+            if provider == "gemini":
+                candidate = await asyncio.to_thread(_call_json_gemini, prompt, timeout_seconds)
+            else:
+                candidate = await asyncio.to_thread(_call_json_claude, prompt, timeout_seconds)
+        except Exception:
+            logger.exception("mcp.ai advisor_provider_exception provider=%s", provider)
+            candidate = None
+
+        if not candidate:
+            logger.info("mcp.ai advisor_provider_no_candidate provider=%s", provider)
+            continue
+
+        raw_advisor, model = candidate
+        normalized = _normalize_advisor_output(raw_advisor)
+        if normalized is None:
+            logger.info("mcp.ai advisor_provider_invalid_output provider=%s model=%s", provider, model)
+            continue
+
+        logger.info("mcp.ai advisor_success provider=%s model=%s tool_name=%s", provider, model, tool_name)
+        return AIAdvisorResult(advisor=normalized, provider=provider, model=model)
+
+    logger.info("mcp.ai advisor_fallback_unavailable reason=no_valid_provider_result")
+    return None
 
 
 def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeout_seconds: int) -> Optional[dict[str, Any]]:
