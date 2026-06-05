@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -25,6 +26,7 @@ from src.app.utils.permissions import PermissionChecker
 
 
 router = APIRouter(prefix="/mcp", tags=["MCP"])
+logger = logging.getLogger(__name__)
 
 
 class MCPToolInvokeRequest(BaseModel):
@@ -117,6 +119,13 @@ async def ask_mcp_bi_question(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(PermissionChecker("reports", "read")),
 ):
+    logger.info(
+        "mcp.ask request_received user_id=%s question_preview=%s explicit_params=%s",
+        current_user.id,
+        payload.question[:160],
+        payload.params,
+    )
+
     tool_catalog = list_report_tools()
     llm_plan = await maybe_plan_tool_with_llm(payload.question, tool_catalog)
 
@@ -133,6 +142,15 @@ async def ask_mcp_bi_question(
         source = "deterministic"
         provider = None
         model = None
+
+    logger.info(
+        "mcp.ask planner_decision source=%s provider=%s model=%s selected_tool=%s confidence=%s",
+        source,
+        provider,
+        model,
+        selection.tool_name,
+        selection.confidence,
+    )
 
     resolved_params = sanitize_params_for_tool(
         selection.tool_name,
@@ -155,6 +173,13 @@ async def ask_mcp_bi_question(
         )
     except ValueError as exc:
         raise error_response(str(exc), 400)
+
+    logger.info(
+        "mcp.ask tool_invoked source=%s tool=%s resolved_params=%s",
+        source,
+        selection.tool_name,
+        resolved_params,
+    )
 
     insights = summarize_tool_result(selection.tool_name, result)
 

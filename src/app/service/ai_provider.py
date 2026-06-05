@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import urllib.error
 import urllib.parse
@@ -10,6 +11,9 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from src.app.mcp.report_tools import NLToolSelection, get_report_tool_definition, sanitize_params_for_tool
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -21,6 +25,10 @@ class AIPlannerResult:
 
 def _is_enabled() -> bool:
     return os.getenv("MCP_AI_ENABLE_LLM", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _key_present(value: str) -> bool:
+    return bool((value or "").strip())
 
 
 def _extract_json_object(text: str) -> Optional[dict[str, Any]]:
@@ -77,8 +85,29 @@ def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeo
         with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
             body = response.read().decode("utf-8")
             parsed = json.loads(body)
+            logger.info("mcp.ai provider_http_success url=%s timeout=%s", url, timeout_seconds)
             return parsed if isinstance(parsed, dict) else None
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError):
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read().decode("utf-8")
+        except Exception:
+            body = ""
+        logger.warning(
+            "mcp.ai provider_http_error url=%s status=%s reason=%s body_preview=%s",
+            url,
+            getattr(exc, "code", None),
+            getattr(exc, "reason", None),
+            (body or "")[:300],
+        )
+        return None
+    except urllib.error.URLError as exc:
+        logger.warning("mcp.ai provider_network_error url=%s reason=%s", url, getattr(exc, "reason", None))
+        return None
+    except TimeoutError:
+        logger.warning("mcp.ai provider_timeout url=%s timeout=%s", url, timeout_seconds)
+        return None
+    except json.JSONDecodeError:
+        logger.warning("mcp.ai provider_json_decode_error url=%s", url)
         return None
 
 
@@ -86,7 +115,16 @@ def _call_claude(question: str, tool_catalog: list[dict[str, Any]], timeout_seco
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     model = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022").strip()
     if not api_key:
+        logger.info("mcp.ai claude_skipped reason=missing_api_key")
         return None
+
+    logger.info(
+        "mcp.ai claude_request_start model=%s timeout=%s tool_count=%s question_preview=%s",
+        model,
+        timeout_seconds,
+        len(tool_catalog),
+        question[:120],
+    )
 
     payload = {
         "model": model,
@@ -103,15 +141,19 @@ def _call_claude(question: str, tool_catalog: list[dict[str, Any]], timeout_seco
     }
     parsed = _post_json("https://api.anthropic.com/v1/messages", payload, headers, timeout_seconds)
     if not parsed:
+        logger.info("mcp.ai claude_request_no_payload model=%s", model)
         return None
 
     content = parsed.get("content") or []
     if not content or not isinstance(content, list):
+        logger.info("mcp.ai claude_empty_content model=%s", model)
         return None
     text_chunks = [chunk.get("text", "") for chunk in content if isinstance(chunk, dict)]
     output = _extract_json_object("\n".join(text_chunks))
     if output is None:
+        logger.info("mcp.ai claude_invalid_json_response model=%s", model)
         return None
+    logger.info("mcp.ai claude_request_success model=%s", model)
     return output, model
 
 
@@ -119,7 +161,17 @@ def _call_gemini(question: str, tool_catalog: list[dict[str, Any]], timeout_seco
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     model = os.getenv("GEMINI_MODEL", "gemini-1.5-pro").strip()
     if not api_key:
+        logger.info("mcp.ai gemini_skipped reason=missing_api_key")
         return None
+
+    logger.info(
+        "mcp.ai gemini_request_start model=%s timeout=%s tool_count=%s key_present=%s question_preview=%s",
+        model,
+        timeout_seconds,
+        len(tool_catalog),
+        _key_present(api_key),
+        question[:120],
+    )
 
     endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{urllib.parse.quote(model)}:generateContent?key={urllib.parse.quote(api_key)}"
     payload = {
@@ -137,10 +189,12 @@ def _call_gemini(question: str, tool_catalog: list[dict[str, Any]], timeout_seco
     headers = {"content-type": "application/json"}
     parsed = _post_json(endpoint, payload, headers, timeout_seconds)
     if not parsed:
+        logger.info("mcp.ai gemini_request_no_payload model=%s", model)
         return None
 
     candidates = parsed.get("candidates") or []
     if not candidates:
+        logger.info("mcp.ai gemini_empty_candidates model=%s", model)
         return None
     first = candidates[0] if isinstance(candidates[0], dict) else {}
     content = first.get("content") or {}
@@ -148,13 +202,16 @@ def _call_gemini(question: str, tool_catalog: list[dict[str, Any]], timeout_seco
     text = "\n".join(part.get("text", "") for part in parts if isinstance(part, dict))
     output = _extract_json_object(text)
     if output is None:
+        logger.info("mcp.ai gemini_invalid_json_response model=%s response_preview=%s", model, text[:300])
         return None
+    logger.info("mcp.ai gemini_request_success model=%s", model)
     return output, model
 
 
 def _normalize_selection(raw: dict[str, Any], provider: str) -> Optional[NLToolSelection]:
     tool_name = str(raw.get("tool_name") or "").strip().lower()
     if not tool_name or get_report_tool_definition(tool_name) is None:
+        logger.info("mcp.ai planner_invalid_tool provider=%s tool_name=%s", provider, tool_name)
         return None
 
     confidence = str(raw.get("confidence") or "medium").strip().lower()
@@ -178,7 +235,9 @@ async def maybe_plan_tool_with_llm(question: str, tool_catalog: list[dict[str, A
 
     This function never raises by design so callers can safely fallback.
     """
-    if not _is_enabled():
+    enabled = _is_enabled()
+    if not enabled:
+        logger.info("mcp.ai planner_disabled")
         return None
 
     timeout_seconds = int(os.getenv("MCP_AI_TIMEOUT_SECONDS", "20") or 20)
@@ -188,6 +247,17 @@ async def maybe_plan_tool_with_llm(question: str, tool_catalog: list[dict[str, A
     if not provider_order:
         provider_order = ["claude", "gemini"]
 
+    logger.info(
+        "mcp.ai planner_start enabled=%s primary=%s secondary=%s order=%s timeout=%s tool_count=%s question_preview=%s",
+        enabled,
+        primary,
+        secondary,
+        provider_order,
+        timeout_seconds,
+        len(tool_catalog),
+        question[:120],
+    )
+
     for provider in provider_order:
         try:
             if provider == "claude":
@@ -195,16 +265,27 @@ async def maybe_plan_tool_with_llm(question: str, tool_catalog: list[dict[str, A
             else:
                 candidate = await asyncio.to_thread(_call_gemini, question, tool_catalog, timeout_seconds)
         except Exception:
+            logger.exception("mcp.ai planner_provider_exception provider=%s", provider)
             candidate = None
 
         if not candidate:
+            logger.info("mcp.ai planner_provider_no_candidate provider=%s", provider)
             continue
 
         raw_selection, model = candidate
         normalized = _normalize_selection(raw_selection, provider)
         if normalized is None:
+            logger.info("mcp.ai planner_provider_invalid_selection provider=%s", provider)
             continue
 
+        logger.info(
+            "mcp.ai planner_success provider=%s model=%s tool_name=%s confidence=%s",
+            provider,
+            model,
+            normalized.tool_name,
+            normalized.confidence,
+        )
         return AIPlannerResult(selection=normalized, provider=provider, model=model)
 
+    logger.info("mcp.ai planner_fallback_to_deterministic reason=no_valid_provider_result")
     return None
