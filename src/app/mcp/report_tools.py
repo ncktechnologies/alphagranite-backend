@@ -12,6 +12,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.database.user import User
+from src.app.database.work_station import WorkStation
+from src.app.interface.generated_schemas import PlanningSection
 from src.app.routers import dashboard, fabs, operators, reports, shop_cut_plan
 
 
@@ -121,8 +123,38 @@ async def _resolve_user_ids_by_name(db: AsyncSession, raw_name: str, *, limit: i
     return [int(row[0]) for row in rows if row and row[0] is not None]
 
 
+async def _resolve_workstation_ids_by_name(db: AsyncSession, raw_name: str, *, limit: int = 10) -> list[int]:
+    name = (raw_name or "").strip().lower()
+    if not name:
+        return []
+    like_value = f"%{name}%"
+    statement = (
+        select(WorkStation.id)
+        .where(func.lower(WorkStation.name).like(like_value))
+        .limit(max(1, min(limit, 50)))
+    )
+    result = await db.execute(statement)
+    rows = result.all()
+    return [int(row[0]) for row in rows if row and row[0] is not None]
+
+
+async def _resolve_planning_section_ids_by_name(db: AsyncSession, raw_name: str, *, limit: int = 10) -> list[int]:
+    name = (raw_name or "").strip().lower()
+    if not name:
+        return []
+    like_value = f"%{name}%"
+    statement = (
+        select(PlanningSection.id)
+        .where(func.lower(PlanningSection.plan_name).like(like_value))
+        .limit(max(1, min(limit, 50)))
+    )
+    result = await db.execute(statement)
+    rows = result.all()
+    return [int(row[0]) for row in rows if row and row[0] is not None]
+
+
 async def _enrich_employee_names_in_result(db: AsyncSession, payload: Any) -> Any:
-    """Attach *_name aliases for common employee-linked IDs in result payloads."""
+    """Attach *_name aliases for common ID fields in result payloads."""
     id_to_name_key = {
         "installer_id": "installer_name",
         "operator_id": "operator_name",
@@ -130,45 +162,97 @@ async def _enrich_employee_names_in_result(db: AsyncSession, payload: Any) -> An
         "user_id": "user_name",
         "assigned_to": "assigned_to_name",
         "assigned_user_id": "assigned_user_name",
+        "workstation_id": "workstation_name",
+        "planning_section_id": "planning_section_name",
     }
 
-    collected_ids: set[int] = set()
+    user_id_keys = {"installer_id", "operator_id", "employee_id", "user_id", "assigned_to", "assigned_user_id"}
+    workstation_id_keys = {"workstation_id"}
+    planning_section_id_keys = {"planning_section_id"}
+
+    collected_user_ids: set[int] = set()
+    collected_workstation_ids: set[int] = set()
+    collected_planning_section_ids: set[int] = set()
+
+    def _collect_id_for_key(key: str, item: Any) -> None:
+        if not isinstance(item, int) or item <= 0:
+            return
+        if key in user_id_keys:
+            collected_user_ids.add(item)
+        elif key in workstation_id_keys:
+            collected_workstation_ids.add(item)
+        elif key in planning_section_id_keys:
+            collected_planning_section_ids.add(item)
 
     def collect(node: Any) -> None:
         if isinstance(node, dict):
             for key, value in node.items():
-                if key in id_to_name_key and isinstance(value, int) and value > 0:
-                    collected_ids.add(value)
+                if key in id_to_name_key and isinstance(value, int):
+                    _collect_id_for_key(key, value)
                 elif key in id_to_name_key and isinstance(value, list):
                     for item in value:
-                        if isinstance(item, int) and item > 0:
-                            collected_ids.add(item)
+                        _collect_id_for_key(key, item)
                 collect(value)
         elif isinstance(node, list):
             for item in node:
                 collect(item)
 
     collect(payload)
-    if not collected_ids:
+    if not collected_user_ids and not collected_workstation_ids and not collected_planning_section_ids:
         return payload
 
-    statement = select(User.id, User.first_name, User.last_name).where(User.id.in_(sorted(collected_ids)))
-    result = await db.execute(statement)
-    rows = result.all()
-    id_to_name = {
+    user_id_to_name: dict[int, str] = {}
+    workstation_id_to_name: dict[int, str] = {}
+    planning_section_id_to_name: dict[int, str] = {}
+
+    if collected_user_ids:
+        statement = select(User.id, User.first_name, User.last_name).where(User.id.in_(sorted(collected_user_ids)))
+        result = await db.execute(statement)
+        rows = result.all()
+        user_id_to_name = {
         int(user_id): f"{(first_name or '').strip()} {(last_name or '').strip()}".strip() or f"User {user_id}"
         for user_id, first_name, last_name in rows
-    }
+        }
+
+    if collected_workstation_ids:
+        statement = select(WorkStation.id, WorkStation.name).where(WorkStation.id.in_(sorted(collected_workstation_ids)))
+        result = await db.execute(statement)
+        rows = result.all()
+        workstation_id_to_name = {
+            int(workstation_id): ((name or "").strip() or f"Workstation {workstation_id}")
+            for workstation_id, name in rows
+        }
+
+    if collected_planning_section_ids:
+        statement = select(PlanningSection.id, PlanningSection.plan_name).where(
+            PlanningSection.id.in_(sorted(collected_planning_section_ids))
+        )
+        result = await db.execute(statement)
+        rows = result.all()
+        planning_section_id_to_name = {
+            int(section_id): ((plan_name or "").strip() or f"Planning Section {section_id}")
+            for section_id, plan_name in rows
+        }
+
+    def _name_map_for_key(key: str) -> dict[int, str]:
+        if key in user_id_keys:
+            return user_id_to_name
+        if key in workstation_id_keys:
+            return workstation_id_to_name
+        if key in planning_section_id_keys:
+            return planning_section_id_to_name
+        return {}
 
     def enrich(node: Any) -> Any:
         if isinstance(node, dict):
             for key, value in list(node.items()):
                 if key in id_to_name_key:
                     name_key = id_to_name_key[key]
-                    if isinstance(value, int) and value in id_to_name and not node.get(name_key):
-                        node[name_key] = id_to_name[value]
+                    name_map = _name_map_for_key(key)
+                    if isinstance(value, int) and value in name_map and not node.get(name_key):
+                        node[name_key] = name_map[value]
                     elif isinstance(value, list) and not node.get(name_key):
-                        names = [id_to_name[item] for item in value if isinstance(item, int) and item in id_to_name]
+                        names = [name_map[item] for item in value if isinstance(item, int) and item in name_map]
                         if names:
                             node[name_key] = names
                 node[key] = enrich(value)
@@ -305,6 +389,22 @@ def _merge_date_range_params(question: str, params: dict[str, Any]) -> dict[str,
     workstation_name_loose_match = re.search(r"\bworkstation\s+([a-z0-9][a-z0-9 _\-/]{2,})", lower)
     if workstation_name_loose_match and "workstation_name" not in merged:
         merged["workstation_name"] = workstation_name_loose_match.group(1).strip()
+
+    planning_section_name_match = re.search(
+        r"\bplanning\s+section\s*(?:name)?\s*[:\-]\s*([a-z0-9][a-z0-9 _\-/]{2,})",
+        lower,
+    )
+    if planning_section_name_match and "search" not in merged:
+        merged["search"] = planning_section_name_match.group(1).strip()
+    if planning_section_name_match:
+        merged["planning_section_name"] = planning_section_name_match.group(1).strip()
+
+    planning_section_name_loose_match = re.search(
+        r"\bplanning\s+section\s+([a-z0-9][a-z0-9 _\-/]{2,})",
+        lower,
+    )
+    if planning_section_name_loose_match and "planning_section_name" not in merged:
+        merged["planning_section_name"] = planning_section_name_loose_match.group(1).strip()
 
     month_aliases = {
         name.lower(): index
@@ -460,6 +560,7 @@ def _score_tools_for_question(lower: str) -> list[tuple[int, str, str]]:
 
     workforce_terms = ["employee", "employees", "operator", "operators", "installer", "installers", "crew"]
     workstation_terms = ["workstation", "workstation id", "work center", "station"]
+    planning_terms = ["planning section", "planning sections", "plan section"]
     detail_terms = ["deep dive", "detail", "detailed", "history", "progress", "status", "current", "load", "queue"]
 
     if any(term in lower for term in workforce_terms) and any(term in lower for term in detail_terms):
@@ -470,6 +571,9 @@ def _score_tools_for_question(lower: str) -> list[tuple[int, str, str]]:
         score("ops.shop_plans", 12, "Matched workstation-focused scheduling/workload request.")
         if any(term in lower for term in ["count", "queue", "pending", "backlog", "load", "currently"]):
             score("ops.stage_fabs", 10, "Matched workstation/stage queue count language.")
+
+    if any(term in lower for term in planning_terms):
+        score("ops.shop_plans", 12, "Matched planning-section focused scheduling/workload request.")
 
     if any(term in lower for term in ["hourly rate", "rate history", "pay rate", "installer rate"]) and any(term in lower for term in workforce_terms):
         score("owner.installer_rates", 12, "Matched employee/installer rate-history request.")
@@ -1413,6 +1517,20 @@ async def _run_ops_shop_plans(
     planning_section_id = _parse_bounded_int(planning_section_id_raw, field_name="planning_section_id", default=1, minimum=1, maximum=10_000_000) if planning_section_id_raw not in (None, "") else None
     status_id = _parse_bounded_int(status_id_raw, field_name="status_id", default=1, minimum=0, maximum=10_000_000) if status_id_raw not in (None, "") else None
 
+    if workstation_id is None:
+        workstation_name = str(params.get("workstation_name") or "").strip()
+        if workstation_name:
+            matched_workstation_ids = await _resolve_workstation_ids_by_name(db, workstation_name, limit=10)
+            if matched_workstation_ids:
+                workstation_id = matched_workstation_ids[0]
+
+    if planning_section_id is None:
+        planning_section_name = str(params.get("planning_section_name") or "").strip()
+        if planning_section_name:
+            matched_section_ids = await _resolve_planning_section_ids_by_name(db, planning_section_name, limit=10)
+            if matched_section_ids:
+                planning_section_id = matched_section_ids[0]
+
     operator_id = None
     if operator_id_raw not in (None, ""):
         if isinstance(operator_id_raw, list):
@@ -1907,6 +2025,7 @@ _TOOL_DEFINITIONS: dict[str, MCPToolDefinition] = {
                 "operator_name": {"type": "string"},
                 "employee_name": {"type": "string"},
                 "workstation_name": {"type": "string"},
+                "planning_section_name": {"type": "string"},
                 "status_id": {"type": "integer", "minimum": 0},
                 "fab_type": {"type": "string"},
                 "cut_type": {"type": "string"},
