@@ -15,6 +15,13 @@ from src.app.mcp.report_tools import NLToolSelection, get_report_tool_definition
 
 logger = logging.getLogger(__name__)
 
+# Runtime circuit breaker for the optional Anthropic Agent endpoint.
+# Anthropic does not expose a public REST agent endpoint, so a misconfigured
+# ANTHROPIC_AGENT_ENDPOINT typically 404s. Once a call fails we disable the
+# agent path for the rest of the process so every request doesn't pay the
+# wasted round-trip before falling back to the standard Messages API.
+_AGENT_PATH_DISABLED = False
+
 
 @dataclass(frozen=True)
 class AIPlannerResult:
@@ -165,6 +172,12 @@ def _call_anthropic_agent_json(
     max_tokens: Optional[int] = None,
     phase: str,
 ) -> Optional[tuple[dict[str, Any], str]]:
+    global _AGENT_PATH_DISABLED
+
+    if _AGENT_PATH_DISABLED:
+        logger.info("mcp.ai anthropic_agent_skipped phase=%s reason=circuit_breaker_open", phase)
+        return None
+
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     agent_id = _anthropic_agent_id()
     if not api_key or not agent_id:
@@ -176,8 +189,19 @@ def _call_anthropic_agent_json(
         )
         return None
 
-    default_endpoint = f"https://api.anthropic.com/v1/agents/{urllib.parse.quote(agent_id)}/messages"
-    endpoint = (os.getenv("ANTHROPIC_AGENT_ENDPOINT", "").strip() or default_endpoint)
+    # The agent path is only attempted when an explicit endpoint is configured.
+    # There is no public Anthropic REST agent endpoint, so we never synthesize a
+    # default URL (it would 404). Without an explicit endpoint we fall straight
+    # through to the standard Messages API.
+    endpoint = os.getenv("ANTHROPIC_AGENT_ENDPOINT", "").strip()
+    if not endpoint:
+        logger.info(
+            "mcp.ai anthropic_agent_skipped phase=%s reason=no_explicit_endpoint agent_id=%s",
+            phase,
+            agent_id,
+        )
+        return None
+
     model_hint = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022").strip()
     max_token_budget = max_tokens or _int_env("MCP_AI_ADVISOR_MAX_TOKENS", 1200, minimum=256, maximum=8192)
 
@@ -211,8 +235,9 @@ def _call_anthropic_agent_json(
 
     parsed = _post_json(endpoint, payload, headers, timeout_seconds)
     if not parsed:
+        _AGENT_PATH_DISABLED = True
         logger.warning(
-            "mcp.ai anthropic_agent_no_payload phase=%s agent_id=%s endpoint=%s",
+            "mcp.ai anthropic_agent_no_payload phase=%s agent_id=%s endpoint=%s circuit_breaker=open",
             phase,
             agent_id,
             endpoint,

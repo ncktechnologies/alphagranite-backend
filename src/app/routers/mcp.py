@@ -13,6 +13,7 @@ from src.app.database.user import User
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.service.background import save_audit_trail
 from src.app.mcp.report_tools import (
+    enrich_params_from_question,
     get_report_tool_definition,
     invoke_report_tool,
     list_report_tools,
@@ -172,6 +173,7 @@ async def ask_mcp_bi_question(
     resolved_params = sanitize_params_for_tool(
         selection.tool_name,
         {
+            **enrich_params_from_question(payload.question, selection.tool_name),
             **dict(selection.params),
             **(payload.params or {}),
         },

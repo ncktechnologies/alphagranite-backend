@@ -203,6 +203,18 @@ def _merge_date_range_params(question: str, params: dict[str, Any]) -> dict[str,
     if threshold_match:
         merged["threshold_days"] = int(threshold_match.group(1))
 
+    # Capture day-based SLA thresholds phrased naturally, e.g. "exceed 14 days",
+    # "over 14 days", "more than 14 days", "older than 14 days", "14+ days".
+    if "threshold_days" not in merged or not threshold_match:
+        day_threshold_match = re.search(
+            r"(?:exceed(?:ing|s)?|over|more than|greater than|older than|beyond|longer than|above|past)\s+(\d+)\s*(?:\+)?\s*days",
+            lower,
+        )
+        if not day_threshold_match:
+            day_threshold_match = re.search(r"(\d+)\s*\+\s*days", lower)
+        if day_threshold_match:
+            merged["threshold_days"] = int(day_threshold_match.group(1))
+
     return merged
 
 
@@ -242,6 +254,35 @@ def _score_tools_for_question(lower: str) -> list[tuple[int, str, str]]:
         score("owner.monthly_cut_completion", 10, "Matched monthly cut completion language.")
     if any(term in lower for term in ["turnaround", "cycle time", "fab days", "predraft days", "cnc days"]):
         score("owner.turnaround_times", 10, "Matched turnaround-time analysis language.")
+    if (
+        any(
+            term in lower
+            for term in [
+                "stage-by-stage",
+                "stage by stage",
+                "time in stage",
+                "time-in-stage",
+                "days in stage",
+                "days in each stage",
+                "stage duration",
+                "stage durations",
+                "how long are fabs taking",
+                "how long are jobs taking",
+                "how long do fabs take",
+                "how long is each stage",
+                "time per stage",
+            ]
+        )
+        or (
+            any(term in lower for term in ["how long", "how many days", "duration", "taking", "time"])
+            and any(term in lower for term in ["stage", "stages", "fab", "fabs", "fabrication", "step", "steps"])
+        )
+        or (
+            re.search(r"(?:exceed(?:ing|s)?|over|more than|older than|beyond|longer than)\s+\d+\s*(?:\+)?\s*days", lower) is not None
+            and any(term in lower for term in ["stage", "stages", "fab", "fabs", "fabrication", "turnaround", "cycle", "taking", "how long"])
+        )
+    ):
+        score("owner.turnaround_times", 11, "Matched stage-duration / time-in-stage / day-threshold language.")
     if any(term in lower for term in ["service level", "sla", "breach", "bottleneck heat map", "at risk"]):
         score("owner.service_level", 10, "Matched service-level and SLA language.")
     if any(term in lower for term in ["installer rate", "hourly rate", "pay rate"]):
@@ -334,6 +375,22 @@ def select_tool_for_question(question: str) -> NLToolSelection:
     return NLToolSelection(tool_name=tool_name, confidence=confidence, rationale=rationale, params=params)
 
 
+def enrich_params_from_question(question: str, tool_name: str) -> dict[str, Any]:
+    """Deterministically derive tool params (dates, month/year, thresholds, top_n)
+    from the natural-language question.
+
+    Used as a defaults layer so LLM-planned selections still receive reliable
+    date/threshold extraction even when the model omits those params. Returned
+    params are already sanitized for the target tool.
+    """
+    normalized = (question or "").strip()
+    if not normalized or get_report_tool_definition(tool_name) is None:
+        return {}
+    lower = normalized.lower()
+    merged = _merge_date_range_params(lower, _default_params_for_tool(tool_name))
+    return sanitize_params_for_tool(tool_name, merged)
+
+
 def summarize_tool_result(tool_name: str, result: dict[str, Any]) -> list[str]:
     if tool_name == "owner.overview":
         kpis = result.get("kpis") or {}
@@ -416,10 +473,30 @@ def summarize_tool_result(tool_name: str, result: dict[str, Any]) -> list[str]:
     if tool_name == "owner.turnaround_times":
         summary = result.get("summary") or {}
         stage_averages = result.get("stage_averages") or {}
-        return [
+        insights = [
             f"Turnaround rows: {summary.get('row_count', 0)} with total average days {stage_averages.get('total', 'n/a')}.",
             f"Draft avg: {stage_averages.get('drafting', 'n/a')} days, CNC avg: {stage_averages.get('cnc', 'n/a')} days, cut avg: {stage_averages.get('cut', 'n/a')} days.",
         ]
+        threshold_analysis = result.get("threshold_analysis") or {}
+        if threshold_analysis:
+            threshold_days = threshold_analysis.get("threshold_days")
+            counts_by_stage = threshold_analysis.get("counts_by_stage") or {}
+            total_exceeding = sum(int(count or 0) for count in counts_by_stage.values())
+            insights.append(
+                f"{total_exceeding} fab-stage instances exceed the {threshold_days}-day threshold across {len(counts_by_stage)} stages."
+            )
+            worst_stages = sorted(
+                counts_by_stage.items(), key=lambda item: int(item[1] or 0), reverse=True
+            )
+            top_offenders = [f"{stage} ({count})" for stage, count in worst_stages if int(count or 0) > 0][:3]
+            if top_offenders:
+                insights.append(
+                    f"Stages with the most fabs over {threshold_days} days: {', '.join(top_offenders)}."
+                )
+            else:
+                insights.append(f"No fabs exceeded the {threshold_days}-day threshold this period.")
+        return insights
+
 
     if tool_name == "owner.service_level":
         summary = result.get("summary") or {}
