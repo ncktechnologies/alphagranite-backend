@@ -176,10 +176,8 @@ def _call_anthropic_agent_json(
         )
         return None
 
-    endpoint = os.getenv(
-        "ANTHROPIC_AGENT_ENDPOINT",
-        f"https://api.anthropic.com/v1/agents/{urllib.parse.quote(agent_id)}/messages",
-    ).strip()
+    default_endpoint = f"https://api.anthropic.com/v1/agents/{urllib.parse.quote(agent_id)}/messages"
+    endpoint = (os.getenv("ANTHROPIC_AGENT_ENDPOINT", "").strip() or default_endpoint)
     model_hint = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022").strip()
     max_token_budget = max_tokens or _int_env("MCP_AI_ADVISOR_MAX_TOKENS", 1200, minimum=256, maximum=8192)
 
