@@ -1529,6 +1529,108 @@ async def get_owner_stalled_install_jobs_report(
     )
 
 
+@router.get("/reports/owner/largest-jobs", response_model=SuccessResponse[dict])
+async def get_owner_largest_jobs_report(
+    start_date: Optional[date] = Query(None, description="Inclusive start date filter against fab creation date"),
+    end_date: Optional[date] = Query(None, description="Inclusive end date filter against fab creation date"),
+    top_n: int = Query(20, ge=1, le=500, description="Maximum ranked jobs to return"),
+    min_sqft: float = Query(0, ge=0, description="Minimum total square footage to include"),
+    order_by: str = Query("sqft", description="Ranking basis: sqft or revenue"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return jobs ranked by square footage with optional revenue sorting and sqft threshold."""
+    _ = current_user
+    normalized_order_by = (order_by or "sqft").strip().lower()
+    if normalized_order_by not in {"sqft", "revenue"}:
+        normalized_order_by = "sqft"
+
+    start_dt, end_dt = _range_bounds(start_date, end_date)
+    ranked_sqft_expr = func.greatest(
+        func.coalesce(func.max(BusinessJob.sq_ft), 0.0),
+        func.coalesce(func.sum(Fab.total_sqft), 0.0),
+    )
+    fab_sqft_expr = func.coalesce(func.sum(Fab.total_sqft), 0.0)
+    revenue_expr = func.coalesce(func.sum(Fab.revenue), 0.0)
+    fab_count_expr = func.count(Fab.id)
+    avg_fab_sqft_expr = func.coalesce(func.avg(Fab.total_sqft), 0.0)
+
+    query = (
+        select(
+            BusinessJob.id.label("job_id"),
+            BusinessJob.job_number,
+            BusinessJob.name.label("job_name"),
+            Account.name.label("account_name"),
+            func.coalesce(func.max(BusinessJob.sq_ft), 0.0).label("job_declared_sqft"),
+            fab_sqft_expr.label("fab_total_sqft"),
+            ranked_sqft_expr.label("ranked_sqft"),
+            revenue_expr.label("total_revenue"),
+            fab_count_expr.label("fab_count"),
+            avg_fab_sqft_expr.label("avg_fab_sqft"),
+        )
+        .select_from(BusinessJob)
+        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+        .join(Fab, Fab.job_id == BusinessJob.id)
+        .group_by(BusinessJob.id, BusinessJob.job_number, BusinessJob.name, Account.name)
+    )
+
+    if start_dt is not None:
+        query = query.where(Fab.created_at >= start_dt)
+    if end_dt is not None:
+        query = query.where(Fab.created_at <= end_dt)
+    if min_sqft > 0:
+        query = query.having(ranked_sqft_expr >= min_sqft)
+
+    if normalized_order_by == "revenue":
+        query = query.order_by(revenue_expr.desc(), ranked_sqft_expr.desc(), BusinessJob.job_number.asc())
+    else:
+        query = query.order_by(ranked_sqft_expr.desc(), revenue_expr.desc(), BusinessJob.job_number.asc())
+
+    rows = (await db.execute(query.limit(top_n))).all()
+
+    ranked_rows = []
+    for index, row in enumerate(rows, start=1):
+        ranked_rows.append(
+            {
+                "rank": index,
+                "job_id": row.job_id,
+                "job_number": row.job_number,
+                "job_name": row.job_name,
+                "account_name": row.account_name,
+                "total_sqft": round(_to_float(row.ranked_sqft), 2),
+                "fab_total_sqft": round(_to_float(row.fab_total_sqft), 2),
+                "job_declared_sqft": round(_to_float(row.job_declared_sqft), 2),
+                "fab_count": int(row.fab_count or 0),
+                "avg_fab_sqft": round(_to_float(row.avg_fab_sqft), 2),
+                "total_revenue": round(_to_float(row.total_revenue), 2),
+            }
+        )
+
+    total_ranked_sqft = round(sum(_to_float(item.get("total_sqft")) for item in ranked_rows), 2)
+    total_ranked_revenue = round(sum(_to_float(item.get("total_revenue")) for item in ranked_rows), 2)
+
+    return success_response(
+        {
+            "period": {
+                "start_date": start_date.isoformat() if start_date else None,
+                "end_date": end_date.isoformat() if end_date else None,
+            },
+            "filters": {
+                "top_n": top_n,
+                "min_sqft": round(_to_float(min_sqft), 2),
+                "order_by": normalized_order_by,
+            },
+            "summary": {
+                "row_count": len(ranked_rows),
+                "total_ranked_sqft": total_ranked_sqft,
+                "total_ranked_revenue": total_ranked_revenue,
+            },
+            "rows": ranked_rows,
+        },
+        "Owner largest jobs report generated",
+    )
+
+
 @router.get("/reports/owner/install-performance", response_model=SuccessResponse[dict])
 async def get_owner_install_performance_report(
     start_date: Optional[date] = Query(None, description="Inclusive start date filter"),

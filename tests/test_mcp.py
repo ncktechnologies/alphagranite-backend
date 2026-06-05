@@ -21,6 +21,7 @@ async def test_get_mcp_tools_returns_catalog(client, test_db, monkeypatch):
     assert body["success"] is True
     assert isinstance(body["data"], list)
     assert any(tool["name"] == "owner.overview" for tool in body["data"])
+    assert any(tool["name"] == "owner.largest_jobs" for tool in body["data"])
     assert any(tool["name"] == "owner.management_packet" for tool in body["data"])
 
 

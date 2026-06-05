@@ -248,6 +248,29 @@ def _score_tools_for_question(lower: str) -> list[tuple[int, str, str]]:
         score("owner.installer_rates", 9, "Matched installer-rate language.")
     if any(term in lower for term in ["ag redo", "redo rows", "redo list"]):
         score("owner.ag_redos", 9, "Matched AG redo row-level language.")
+    if (
+        any(
+            term in lower
+            for term in [
+                "most square footage",
+                "most sqft",
+                "largest jobs",
+                "largest job",
+                "biggest jobs",
+                "biggest job",
+                "largest projects",
+                "largest project",
+                "highest sqft",
+                "top jobs by sqft",
+                "jobs by square footage",
+            ]
+        )
+        or (
+            any(term in lower for term in ["square footage", "sqft", "square feet", "largest", "biggest", "most"])
+            and any(term in lower for term in ["job", "jobs", "project", "projects"])
+        )
+    ) and not any(term in lower for term in ["cost per sqft", "sqft per hour"]):
+        score("owner.largest_jobs", 10, "Matched job-size ranking language.")
     if any(term in lower for term in ["specific job", "job names", "job details", "assign them", "team members", "resolve today", "who should", "stalled installation", "stalled installations", "stalled installs", "pending installations", "assign to", "assignment"]):
         score("owner.stalled_install_jobs", 10, "Matched assignment-oriented stalled install language.")
     elif "stalled" in lower and any(term in lower for term in ["job", "jobs", "details", "assign", "assignment"]):
@@ -348,6 +371,17 @@ def summarize_tool_result(tool_name: str, result: dict[str, Any]) -> list[str]:
         if summary.get("due_today_count"):
             insights.append(f"{summary.get('due_today_count')} stalled install jobs are due today.")
         return insights
+
+    if tool_name == "owner.largest_jobs":
+        summary = result.get("summary") or {}
+        rows = result.get("rows") or []
+        if not rows:
+            return ["No job-level square-footage rows were returned for the selected filters."]
+        leader = rows[0]
+        return [
+            f"Returned {summary.get('row_count', len(rows))} ranked jobs by square footage.",
+            f"Largest job is {leader.get('job_number')} - {leader.get('job_name')} with {leader.get('total_sqft', 0)} sqft.",
+        ]
 
     if tool_name == "owner.weekly_fabrication_labor_cost":
         monthly_report = result.get("monthly_report") or {}
@@ -568,6 +602,39 @@ async def _run_owner_stalled_install_jobs(params: dict[str, Any], db: AsyncSessi
         min_age_days=min_age_days,
         top_n=top_n,
         include_assigned=include_assigned,
+        db=db,
+        current_user=current_user,
+    )
+    return _decode_success_response(response)
+
+
+async def _run_owner_largest_jobs(params: dict[str, Any], db: AsyncSession, current_user: User) -> dict[str, Any]:
+    start_date = _parse_optional_date(params.get("start_date"), "start_date")
+    end_date = _parse_optional_date(params.get("end_date"), "end_date")
+    top_n = _parse_bounded_int(
+        params.get("top_n"),
+        field_name="top_n",
+        default=20,
+        minimum=1,
+        maximum=500,
+    )
+    min_sqft = _parse_bounded_float(
+        params.get("min_sqft"),
+        field_name="min_sqft",
+        default=0,
+        minimum=0,
+        maximum=10_000_000,
+    )
+    order_by = str(params.get("order_by") or "sqft").strip().lower()
+    if order_by not in {"sqft", "revenue"}:
+        raise ValueError("order_by must be one of: sqft, revenue")
+
+    response = await reports.get_owner_largest_jobs_report(
+        start_date=start_date,
+        end_date=end_date,
+        top_n=top_n,
+        min_sqft=min_sqft,
+        order_by=order_by,
         db=db,
         current_user=current_user,
     )
@@ -1252,6 +1319,24 @@ _TOOL_DEFINITIONS: dict[str, MCPToolDefinition] = {
         sample_params={"min_age_days": 0, "top_n": 26, "include_assigned": True},
         result_summary="Job-level stalled install list with assignment context and overdue signals.",
     ),
+    "owner.largest_jobs": MCPToolDefinition(
+        name="owner.largest_jobs",
+        description="Return top jobs ranked by square footage with job and account context.",
+        resource="reports",
+        action="read",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "start_date": {"type": "string", "format": "date"},
+                "end_date": {"type": "string", "format": "date"},
+                "top_n": {"type": "integer", "minimum": 1, "maximum": 500, "default": 20},
+                "min_sqft": {"type": "number", "minimum": 0, "default": 0},
+                "order_by": {"type": "string", "enum": ["sqft", "revenue"], "default": "sqft"},
+            },
+        },
+        sample_params={"top_n": 15, "min_sqft": 0, "order_by": "sqft"},
+        result_summary="Job-level ranking sorted by sqft (or revenue) with fab counts and totals.",
+    ),
     "owner.weekly_fabrication_labor_cost": MCPToolDefinition(
         name="owner.weekly_fabrication_labor_cost",
         description="Return weekly fabrication labor cost analysis with monthly and annual summary tables.",
@@ -1597,6 +1682,7 @@ _TOOL_HANDLERS: dict[str, ToolHandler] = {
     "owner.overview": _run_owner_overview,
     "owner.shop_status": _run_owner_shop_status,
     "owner.stalled_install_jobs": _run_owner_stalled_install_jobs,
+    "owner.largest_jobs": _run_owner_largest_jobs,
     "owner.weekly_fabrication_labor_cost": _run_owner_weekly_fabrication_labor_cost,
     "owner.weekly_installer_labor_cost": _run_owner_weekly_installer_labor_cost,
     "owner.installation_template": _run_owner_installation_template,
