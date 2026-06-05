@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Awaitable, Callable, Optional
 
 from fastapi.responses import JSONResponse
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.database.user import User
@@ -96,6 +97,89 @@ def _parse_bounded_float(
     return parsed
 
 
+async def _resolve_user_ids_by_name(db: AsyncSession, raw_name: str, *, limit: int = 10) -> list[int]:
+    name = (raw_name or "").strip().lower()
+    if not name:
+        return []
+
+    like_value = f"%{name}%"
+    statement = (
+        select(User.id)
+        .where(
+            or_(
+                func.lower(User.first_name).like(like_value),
+                func.lower(User.last_name).like(like_value),
+                func.lower(User.username).like(like_value),
+                func.lower(User.email).like(like_value),
+                func.lower(func.concat(User.first_name, " ", User.last_name)).like(like_value),
+            )
+        )
+        .limit(max(1, min(limit, 50)))
+    )
+    result = await db.execute(statement)
+    rows = result.all()
+    return [int(row[0]) for row in rows if row and row[0] is not None]
+
+
+async def _enrich_employee_names_in_result(db: AsyncSession, payload: Any) -> Any:
+    """Attach *_name aliases for common employee-linked IDs in result payloads."""
+    id_to_name_key = {
+        "installer_id": "installer_name",
+        "operator_id": "operator_name",
+        "employee_id": "employee_name",
+        "user_id": "user_name",
+        "assigned_to": "assigned_to_name",
+        "assigned_user_id": "assigned_user_name",
+    }
+
+    collected_ids: set[int] = set()
+
+    def collect(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in id_to_name_key and isinstance(value, int) and value > 0:
+                    collected_ids.add(value)
+                elif key in id_to_name_key and isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, int) and item > 0:
+                            collected_ids.add(item)
+                collect(value)
+        elif isinstance(node, list):
+            for item in node:
+                collect(item)
+
+    collect(payload)
+    if not collected_ids:
+        return payload
+
+    statement = select(User.id, User.first_name, User.last_name).where(User.id.in_(sorted(collected_ids)))
+    result = await db.execute(statement)
+    rows = result.all()
+    id_to_name = {
+        int(user_id): f"{(first_name or '').strip()} {(last_name or '').strip()}".strip() or f"User {user_id}"
+        for user_id, first_name, last_name in rows
+    }
+
+    def enrich(node: Any) -> Any:
+        if isinstance(node, dict):
+            for key, value in list(node.items()):
+                if key in id_to_name_key:
+                    name_key = id_to_name_key[key]
+                    if isinstance(value, int) and value in id_to_name and not node.get(name_key):
+                        node[name_key] = id_to_name[value]
+                    elif isinstance(value, list) and not node.get(name_key):
+                        names = [id_to_name[item] for item in value if isinstance(item, int) and item in id_to_name]
+                        if names:
+                            node[name_key] = names
+                node[key] = enrich(value)
+            return node
+        if isinstance(node, list):
+            return [enrich(item) for item in node]
+        return node
+
+    return enrich(payload)
+
+
 def _default_params_for_tool(tool_name: str) -> dict[str, Any]:
     definition = get_report_tool_definition(tool_name)
     if definition is None:
@@ -151,6 +235,76 @@ def _merge_date_range_params(question: str, params: dict[str, Any]) -> dict[str,
     top_match = re.search(r"top\s+(\d+)", lower)
     if top_match:
         merged["top_n"] = int(top_match.group(1))
+
+    # Entity extraction for deep-dive and identifier-centric questions.
+    fab_id_match = re.search(r"\bfab\s*(?:id)?\s*#?\s*(\d+)\b", lower)
+    if fab_id_match:
+        merged["fab_id"] = int(fab_id_match.group(1))
+
+    job_id_match = re.search(r"\bjob\s*(?:id)?\s*#?\s*(\d+)\b", lower)
+    if job_id_match:
+        merged["job_id"] = int(job_id_match.group(1))
+
+    operator_id_match = re.search(r"\boperator\s*(?:id)?\s*#?\s*(\d+)\b", lower)
+    if operator_id_match:
+        merged["operator_id"] = int(operator_id_match.group(1))
+
+    employee_id_match = re.search(r"\bemployee\s*(?:id)?\s*#?\s*(\d+)\b", lower)
+    if employee_id_match and "operator_id" not in merged:
+        merged["operator_id"] = int(employee_id_match.group(1))
+
+    installer_id_match = re.search(r"\binstaller\s*(?:id)?\s*#?\s*(\d+)\b", lower)
+    if installer_id_match:
+        merged["installer_id"] = int(installer_id_match.group(1))
+
+    installer_name_match = re.search(r"\binstaller\s*(?:name)?\s*[:\-]?\s*([a-z][a-z .'-]{2,})", lower)
+    if installer_name_match:
+        merged["installer_name"] = installer_name_match.group(1).strip()
+
+    workstation_id_match = re.search(r"\bworkstation\s*(?:id)?\s*#?\s*(\d+)\b", lower)
+    if workstation_id_match:
+        merged["workstation_id"] = int(workstation_id_match.group(1))
+
+    # Capture common job number patterns (e.g. AG-12345, 24-1001, 1001A)
+    # and map to generic search where tools support it.
+    job_number_match = re.search(r"\bjob\s*(?:number|no\.?|#)\s*[:\-]?\s*([a-z0-9][a-z0-9\-_/]{2,})\b", lower)
+    if job_number_match:
+        merged["search"] = job_number_match.group(1)
+
+    account_match = re.search(r"\baccount\s*(?:name)?\s*[:\-]\s*([a-z0-9][a-z0-9 &\-_/]{2,})", lower)
+    if account_match:
+        merged["search"] = account_match.group(1).strip()
+
+    # Name-like filters for people/workstations when IDs are not provided.
+    operator_name_match = re.search(r"\boperator\s*(?:name)?\s*[:\-]\s*([a-z][a-z .'-]{2,})", lower)
+    if operator_name_match and "search" not in merged:
+        merged["search"] = operator_name_match.group(1).strip()
+    if operator_name_match:
+        merged["operator_name"] = operator_name_match.group(1).strip()
+
+    operator_name_loose_match = re.search(r"\boperator\s+([a-z][a-z .'-]{2,})", lower)
+    if operator_name_loose_match and "operator_name" not in merged:
+        merged["operator_name"] = operator_name_loose_match.group(1).strip()
+
+    employee_name_match = re.search(r"\bemployee\s*(?:name)?\s*[:\-]\s*([a-z][a-z .'-]{2,})", lower)
+    if employee_name_match and "search" not in merged:
+        merged["search"] = employee_name_match.group(1).strip()
+    if employee_name_match:
+        merged["employee_name"] = employee_name_match.group(1).strip()
+
+    employee_name_loose_match = re.search(r"\bemployee\s+([a-z][a-z .'-]{2,})", lower)
+    if employee_name_loose_match and "employee_name" not in merged:
+        merged["employee_name"] = employee_name_loose_match.group(1).strip()
+
+    workstation_name_match = re.search(r"\bworkstation\s*(?:name)?\s*[:\-]\s*([a-z0-9][a-z0-9 _\-/]{2,})", lower)
+    if workstation_name_match and "search" not in merged:
+        merged["search"] = workstation_name_match.group(1).strip()
+    if workstation_name_match:
+        merged["workstation_name"] = workstation_name_match.group(1).strip()
+
+    workstation_name_loose_match = re.search(r"\bworkstation\s+([a-z0-9][a-z0-9 _\-/]{2,})", lower)
+    if workstation_name_loose_match and "workstation_name" not in merged:
+        merged["workstation_name"] = workstation_name_loose_match.group(1).strip()
 
     month_aliases = {
         name.lower(): index
@@ -283,8 +437,43 @@ def _score_tools_for_question(lower: str) -> list[tuple[int, str, str]]:
 
     if any(term in lower for term in ["management packet", "full report", "full summary", "executive packet"]):
         score("owner.management_packet", 10, "Matched full-packet language in the question.")
+
+    deep_dive_terms = [
+        "deep dive", "detailed", "detail", "history", "progress", "current status", "full context", "timeline",
+    ]
+    has_fab_id = re.search(r"\bfab\s*(?:id)?\s*#?\s*\d+\b", lower) is not None
+    has_job_id = re.search(r"\bjob\s*(?:id)?\s*#?\s*\d+\b", lower) is not None
+    has_job_number = re.search(r"\bjob\s*(?:number|no\.?|#)", lower) is not None
+
+    if has_fab_id:
+        score("ops.shop_plans_by_fab", 12, "Matched specific FAB ID lookup language.")
+        score("ops.shop_plans", 11, "Matched FAB-specific planning/progress detail language.")
+    if has_job_id or has_job_number:
+        score("ops.stage_fabs", 11, "Matched specific job lookup language.")
+        score("owner.stalled_install_jobs", 10, "Matched job-level status/detail language.")
+    if any(term in lower for term in deep_dive_terms) and (has_fab_id or has_job_id or has_job_number):
+        score("ops.shop_plans_by_fab", 13, "Matched deep-dive request for a specific FAB/job entity.")
+        score("ops.shop_plans", 12, "Matched deep-dive progress/history request for a specific entity.")
+
     if any(term in lower for term in ["dashboard", "platform status", "today status", "this week status", "this month status"]):
         score("platform.dashboard", 10, "Matched platform dashboard status language.")
+
+    workforce_terms = ["employee", "employees", "operator", "operators", "installer", "installers", "crew"]
+    workstation_terms = ["workstation", "workstation id", "work center", "station"]
+    detail_terms = ["deep dive", "detail", "detailed", "history", "progress", "status", "current", "load", "queue"]
+
+    if any(term in lower for term in workforce_terms) and any(term in lower for term in detail_terms):
+        score("ops.shop_plans", 12, "Matched workforce detail/status request.")
+        score("owner.install_performance", 11, "Matched installer/employee performance request.")
+
+    if any(term in lower for term in workstation_terms):
+        score("ops.shop_plans", 12, "Matched workstation-focused scheduling/workload request.")
+        if any(term in lower for term in ["count", "queue", "pending", "backlog", "load", "currently"]):
+            score("ops.stage_fabs", 10, "Matched workstation/stage queue count language.")
+
+    if any(term in lower for term in ["hourly rate", "rate history", "pay rate", "installer rate"]) and any(term in lower for term in workforce_terms):
+        score("owner.installer_rates", 12, "Matched employee/installer rate-history request.")
+
     if any(term in lower for term in ["stage fabs", "fabs by stage", "stage queue", "workflow stage", "final programming pending", "pending final programming"]):
         score("ops.stage_fabs", 10, "Matched workflow stage queue language.")
     if (
@@ -1099,6 +1288,12 @@ async def _run_owner_installer_rates(
             minimum=1,
             maximum=10_000_000,
         )
+    if installer_id is None:
+        installer_name = str(params.get("installer_name") or "").strip()
+        if installer_name:
+            matched_ids = await _resolve_user_ids_by_name(db, installer_name, limit=1)
+            if matched_ids:
+                installer_id = matched_ids[0]
     response = await reports.get_installer_rates(
         installer_id=installer_id,
         db=db,
@@ -1228,6 +1423,17 @@ async def _run_ops_shop_plans(
         else:
             operator_id = [_parse_bounded_int(operator_id_raw, field_name="operator_id", default=1, minimum=1, maximum=10_000_000)]
 
+    if operator_id is None:
+        operator_name = str(params.get("operator_name") or params.get("employee_name") or "").strip()
+        if operator_name:
+            matched_ids = await _resolve_user_ids_by_name(db, operator_name, limit=10)
+            if matched_ids:
+                operator_id = matched_ids
+
+    search_value = params.get("search")
+    if not search_value and params.get("workstation_name"):
+        search_value = params.get("workstation_name")
+
     response = await shop_cut_plan.get_all_shop_plans(
         fab_id=fab_id,
         search_fab_id=None,
@@ -1239,7 +1445,7 @@ async def _run_ops_shop_plans(
         cut_type=params.get("cut_type"),
         month=None,
         year=None,
-        search=params.get("search"),
+        search=search_value,
         type=params.get("type"),
         view=view,
         reference_date=reference_date,
@@ -1628,6 +1834,7 @@ _TOOL_DEFINITIONS: dict[str, MCPToolDefinition] = {
             "type": "object",
             "properties": {
                 "installer_id": {"type": "integer", "minimum": 1},
+                "installer_name": {"type": "string"},
             },
         },
         sample_params={},
@@ -1697,6 +1904,9 @@ _TOOL_DEFINITIONS: dict[str, MCPToolDefinition] = {
                 "workstation_id": {"type": "integer", "minimum": 1},
                 "planning_section_id": {"type": "integer", "minimum": 1},
                 "operator_id": {"type": "integer", "minimum": 1},
+                "operator_name": {"type": "string"},
+                "employee_name": {"type": "string"},
+                "workstation_name": {"type": "string"},
                 "status_id": {"type": "integer", "minimum": 0},
                 "fab_type": {"type": "string"},
                 "cut_type": {"type": "string"},
@@ -1934,4 +2144,5 @@ async def invoke_report_tool(
     handler = _TOOL_HANDLERS.get(normalized_name)
     if handler is None:
         raise KeyError(normalized_name)
-    return await handler(params or {}, db, current_user)
+    result = await handler(params or {}, db, current_user)
+    return await _enrich_employee_names_in_result(db, result)
