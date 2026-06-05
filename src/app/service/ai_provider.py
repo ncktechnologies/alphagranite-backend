@@ -35,6 +35,16 @@ def _extract_json_object(text: str) -> Optional[dict[str, Any]]:
     if not text:
         return None
     text = text.strip()
+
+    # Handle fenced responses like ```json ... ```
+    if text.startswith("```"):
+        fence_end = text.rfind("```")
+        if fence_end > 2:
+            inner = text[3:fence_end].strip()
+            if inner.lower().startswith("json"):
+                inner = inner[4:].strip()
+            text = inner
+
     try:
         parsed = json.loads(text)
         return parsed if isinstance(parsed, dict) else None
@@ -184,6 +194,17 @@ def _call_gemini(question: str, tool_catalog: list[dict[str, Any]], timeout_seco
         "generationConfig": {
             "temperature": 0,
             "maxOutputTokens": 400,
+            "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "OBJECT",
+                "properties": {
+                    "tool_name": {"type": "STRING"},
+                    "confidence": {"type": "STRING", "enum": ["high", "medium", "low"]},
+                    "rationale": {"type": "STRING"},
+                    "params": {"type": "OBJECT"},
+                },
+                "required": ["tool_name", "confidence", "rationale", "params"],
+            },
         },
     }
     headers = {"content-type": "application/json"}
@@ -244,6 +265,7 @@ async def maybe_plan_tool_with_llm(question: str, tool_catalog: list[dict[str, A
     primary = os.getenv("MCP_AI_PRIMARY_PROVIDER", "claude").strip().lower()
     secondary = os.getenv("MCP_AI_SECONDARY_PROVIDER", "gemini").strip().lower()
     provider_order = [p for p in [primary, secondary] if p in {"claude", "gemini"}]
+    provider_order = list(dict.fromkeys(provider_order))
     if not provider_order:
         provider_order = ["claude", "gemini"]
 
