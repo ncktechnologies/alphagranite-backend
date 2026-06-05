@@ -344,6 +344,37 @@ async def ask_mcp_bi_question(
         source = "llm"
         provider = llm_plan.provider
         model = llm_plan.model
+
+        # Planner rescue: if the LLM returns no-tool, but deterministic scoring
+        # strongly indicates a concrete MCP report, prefer the report path.
+        if selection.tool_name == CONVERSATIONAL_TOOL:
+            try:
+                deterministic_selection = select_tool_for_question(payload.question)
+            except ValueError:
+                deterministic_selection = None
+
+            top_points = 0
+            if candidate_rankings:
+                raw_points = candidate_rankings[0].get("points")
+                try:
+                    top_points = int(raw_points)
+                except (TypeError, ValueError):
+                    top_points = 0
+
+            if (
+                deterministic_selection is not None
+                and deterministic_selection.tool_name != CONVERSATIONAL_TOOL
+                and deterministic_selection.confidence == "high"
+                and top_points >= 9
+            ):
+                logger.info(
+                    "mcp.ask planner_rescue_applied llm_tool=%s rescue_tool=%s top_points=%s",
+                    selection.tool_name,
+                    deterministic_selection.tool_name,
+                    top_points,
+                )
+                selection = deterministic_selection
+                source = "deterministic_rescue"
     else:
         try:
             selection = select_tool_for_question(payload.question)
