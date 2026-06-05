@@ -291,6 +291,7 @@ def _build_advisor_prompt(
     *,
     response_mode: str,
     focus: str,
+    prior_qa: Optional[list[dict[str, Any]]] = None,
 ) -> str:
     evidence_summary = _build_evidence_summary(result, insights)
     style_instruction = {
@@ -309,11 +310,14 @@ def _build_advisor_prompt(
         "evidence_summary": evidence_summary,
         "result_preview": _build_result_preview(result),
     }
+    if prior_qa:
+        payload["prior_related_qa"] = prior_qa
     payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     return (
         "You are an operations advisor for a granite fabrication business.\n"
         "Write a practical, decision-ready response based only on provided data.\n"
         "Do not invent facts. Do not mention that you are an AI.\n"
+        "If prior_related_qa is present, use it for continuity but rely on current data for all numbers.\n"
         "Return a single JSON object only.\n"
         '{"executive_summary":"string","what_this_means":"string","key_findings":["string"],"metric_breakdown":["string"],"risk_flags":["string"],"recommended_actions":["string"],"assumptions_and_gaps":["string"],"next_questions":["string"],"priority":"high|medium|low","conversation_reply":"string","evidence":["string"]}\n'
         "Rules:\n"
@@ -716,6 +720,7 @@ async def maybe_generate_advisor_response(
     *,
     response_mode: str = "standard",
     focus: str = "mixed",
+    prior_qa: Optional[list[dict[str, Any]]] = None,
 ) -> Optional[AIAdvisorResult]:
     if not _is_enabled():
         return None
@@ -739,6 +744,7 @@ async def maybe_generate_advisor_response(
         result,
         response_mode=normalized_response_mode,
         focus=normalized_focus,
+        prior_qa=prior_qa,
     )
     logger.info(
         "mcp.ai advisor_start primary=%s secondary=%s order=%s timeout=%s tool_name=%s response_mode=%s focus=%s question_preview=%s",
@@ -964,6 +970,77 @@ async def maybe_generate_conversational_response(
         provider="local",
         model="rule-based",
     )
+
+
+def _build_sql_prompt(question: str, schema_context: str) -> str:
+    return (
+        "You translate a business question into ONE read-only PostgreSQL query.\n"
+        "STRICT RULES:\n"
+        "- Output a single SELECT (or WITH ... SELECT) statement only.\n"
+        "- Never write INSERT/UPDATE/DELETE/DDL or multiple statements.\n"
+        "- Never use semicolons, SQL comments, or system catalogs (pg_*, information_schema).\n"
+        "- Always include an explicit LIMIT (<= 200).\n"
+        "- Only reference tables/columns listed in the schema below.\n"
+        "- Prefer explicit JOINs and aggregate where the question implies totals.\n"
+        "- If the question cannot be answered from the schema, set sql to an empty string.\n"
+        "Return a single JSON object only.\n"
+        '{"sql":"string","rationale":"string","confidence":"high|medium|low"}\n'
+        f"Schema (table(columns)):\n{schema_context}\n"
+        f"Question: {question}\n"
+    )
+
+
+async def maybe_generate_sql(question: str, schema_context: str) -> Optional[dict[str, Any]]:
+    """Ask the LLM to produce a single read-only SQL query.
+
+    Returns {"sql", "rationale", "confidence", "provider", "model"} or None.
+    The returned SQL is NOT trusted; the caller must validate it before running.
+    """
+    if not _is_enabled():
+        return None
+    if not (schema_context or "").strip():
+        return None
+
+    timeout_seconds = int(os.getenv("MCP_AI_TIMEOUT_SECONDS", "20") or 20)
+    primary = os.getenv("MCP_AI_PRIMARY_PROVIDER", "gemini").strip().lower()
+    secondary = os.getenv("MCP_AI_SECONDARY_PROVIDER", "gemini").strip().lower()
+    provider_order = [p for p in [primary, secondary] if p in {"claude", "gemini"}]
+    provider_order = list(dict.fromkeys(provider_order))
+    if not provider_order:
+        provider_order = ["gemini", "claude"]
+
+    prompt = _build_sql_prompt(question, schema_context)
+    logger.info("mcp.ai sql_generation_start order=%s question_preview=%s", provider_order, question[:120])
+
+    for provider in provider_order:
+        try:
+            if provider == "gemini":
+                candidate = await asyncio.to_thread(_call_json_gemini, prompt, timeout_seconds, max_tokens=1024)
+            else:
+                candidate = await asyncio.to_thread(_call_json_claude, prompt, timeout_seconds, max_tokens=1024)
+        except Exception:
+            logger.exception("mcp.ai sql_generation_provider_exception provider=%s", provider)
+            candidate = None
+
+        if not candidate:
+            continue
+
+        raw, model = candidate
+        sql = str(raw.get("sql") or "").strip()
+        if not sql:
+            logger.info("mcp.ai sql_generation_empty provider=%s", provider)
+            continue
+        logger.info("mcp.ai sql_generation_success provider=%s model=%s", provider, model)
+        return {
+            "sql": sql,
+            "rationale": str(raw.get("rationale") or "").strip(),
+            "confidence": str(raw.get("confidence") or "medium").strip().lower(),
+            "provider": provider,
+            "model": model,
+        }
+
+    logger.info("mcp.ai sql_generation_no_result")
+    return None
 
 
 def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeout_seconds: int) -> Optional[dict[str, Any]]:
