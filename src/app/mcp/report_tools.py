@@ -142,6 +142,10 @@ def select_tool_for_question(question: str) -> NLToolSelection:
 
     if any(term in lower for term in ["management packet", "full report", "full summary", "executive packet"]):
         score("owner.management_packet", 10, "Matched full-packet language in the question.")
+    if any(term in lower for term in ["specific job", "job names", "job details", "assign them", "team members", "resolve today", "who should", "stalled installation", "stalled installations", "stalled installs", "pending installations", "assign to", "assignment"]):
+        score("owner.stalled_install_jobs", 10, "Matched assignment-oriented stalled install language.")
+    elif "stalled" in lower and any(term in lower for term in ["job", "jobs", "details", "assign", "assignment"]):
+        score("owner.stalled_install_jobs", 10, "Matched stalled install job detail language.")
     if any(term in lower for term in ["redo", "rework", "revision", "revised"]):
         score("owner.redo_analysis", 9, "Matched redo and revision terms.")
     if any(term in lower for term in ["install", "installer", "labor", "sqft per hour", "productivity"]):
@@ -189,6 +193,20 @@ def summarize_tool_result(tool_name: str, result: dict[str, Any]) -> list[str]:
             f"Most loaded stage is {most_loaded.get('stage')} with {most_loaded.get('fab_count', 0)} fabs.",
             f"Highest stalled count is {most_stalled.get('stage')} with {most_stalled.get('stalled_over_14_days', 0)} fabs over 14 days.",
         ]
+
+    if tool_name == "owner.stalled_install_jobs":
+        summary = result.get("summary") or {}
+        stalled_jobs = result.get("stalled_install_jobs") or []
+        if not stalled_jobs:
+            return ["No stalled install jobs were returned for the selected filters."]
+        top_job = stalled_jobs[0]
+        insights = [
+            f"Found {summary.get('stalled_job_count', len(stalled_jobs))} stalled install jobs, including {summary.get('unassigned_count', 0)} unassigned and {summary.get('overdue_count', 0)} overdue.",
+            f"Top stalled job is {top_job.get('job_number')} - {top_job.get('job_name')} at {top_job.get('age_days', 0)} days old, assigned to {top_job.get('installer_name')}.",
+        ]
+        if summary.get("due_today_count"):
+            insights.append(f"{summary.get('due_today_count')} stalled install jobs are due today.")
+        return insights
 
     if tool_name == "owner.redo_analysis":
         summary = result.get("summary") or {}
@@ -272,6 +290,42 @@ async def _run_owner_shop_status(params: dict[str, Any], db: AsyncSession, curre
     response = await reports.get_owner_shop_status_report(
         start_date=start_date,
         end_date=end_date,
+        db=db,
+        current_user=current_user,
+    )
+    return _decode_success_response(response)
+
+
+async def _run_owner_stalled_install_jobs(params: dict[str, Any], db: AsyncSession, current_user: User) -> dict[str, Any]:
+    start_date = _parse_optional_date(params.get("start_date"), "start_date")
+    end_date = _parse_optional_date(params.get("end_date"), "end_date")
+    min_age_days = _parse_bounded_int(
+        params.get("min_age_days"),
+        field_name="min_age_days",
+        default=0,
+        minimum=0,
+        maximum=3650,
+    )
+    top_n = _parse_bounded_int(
+        params.get("top_n"),
+        field_name="top_n",
+        default=50,
+        minimum=1,
+        maximum=200,
+    )
+    include_assigned_raw = params.get("include_assigned", True)
+    if isinstance(include_assigned_raw, bool):
+        include_assigned = include_assigned_raw
+    elif isinstance(include_assigned_raw, str):
+        include_assigned = include_assigned_raw.strip().lower() not in {"false", "0", "no", "off"}
+    else:
+        include_assigned = bool(include_assigned_raw)
+    response = await reports.get_owner_stalled_install_jobs_report(
+        start_date=start_date,
+        end_date=end_date,
+        min_age_days=min_age_days,
+        top_n=top_n,
+        include_assigned=include_assigned,
         db=db,
         current_user=current_user,
     )
@@ -405,6 +459,24 @@ _TOOL_DEFINITIONS: dict[str, MCPToolDefinition] = {
         sample_params={"start_date": "2026-06-01", "end_date": "2026-06-30"},
         result_summary="Stage counts with average age, max age, and stalled counts.",
     ),
+    "owner.stalled_install_jobs": MCPToolDefinition(
+        name="owner.stalled_install_jobs",
+        description="Return stalled install jobs with job numbers, job names, assignment details, and due dates for dispatch.",
+        resource="reports",
+        action="read",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "start_date": {"type": "string", "format": "date"},
+                "end_date": {"type": "string", "format": "date"},
+                "min_age_days": {"type": "integer", "minimum": 0, "maximum": 3650, "default": 0},
+                "top_n": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
+                "include_assigned": {"type": "boolean", "default": True},
+            },
+        },
+        sample_params={"min_age_days": 0, "top_n": 26, "include_assigned": True},
+        result_summary="Job-level stalled install list with assignment context and overdue signals.",
+    ),
     "owner.redo_analysis": MCPToolDefinition(
         name="owner.redo_analysis",
         description="Return redo hotspots by stage, account, and job for owner analysis.",
@@ -474,6 +546,7 @@ _TOOL_DEFINITIONS: dict[str, MCPToolDefinition] = {
 _TOOL_HANDLERS: dict[str, ToolHandler] = {
     "owner.overview": _run_owner_overview,
     "owner.shop_status": _run_owner_shop_status,
+    "owner.stalled_install_jobs": _run_owner_stalled_install_jobs,
     "owner.redo_analysis": _run_owner_redo_analysis,
     "owner.install_performance": _run_owner_install_performance,
     "owner.weekly_trends": _run_owner_weekly_trends,

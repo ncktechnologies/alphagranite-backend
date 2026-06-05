@@ -1355,6 +1355,180 @@ async def get_owner_shop_status_report(
     )
 
 
+@router.get("/reports/owner/stalled-install-jobs", response_model=SuccessResponse[dict])
+async def get_owner_stalled_install_jobs_report(
+    start_date: Optional[date] = Query(None, description="Inclusive start date filter"),
+    end_date: Optional[date] = Query(None, description="Inclusive end date filter"),
+    min_age_days: int = Query(0, ge=0, le=3650, description="Minimum age in days before including a job"),
+    top_n: int = Query(50, ge=1, le=200, description="Maximum stalled jobs to return"),
+    include_assigned: bool = Query(True, description="Include jobs that already have an installer assigned"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return stalled install jobs with job names, assignment details, and scheduling context."""
+    start_dt, end_dt = _range_bounds(start_date, end_date)
+
+    latest_schedule_query = (
+        select(
+            InstallScheduling.fab_id.label("fab_id"),
+            func.max(InstallScheduling.id).label("install_scheduling_id"),
+        )
+        .group_by(InstallScheduling.fab_id)
+        .subquery()
+    )
+
+    age_days_expr = func.date_part("day", func.now() - func.coalesce(Fab.updated_at, Fab.created_at))
+    due_date_expr = func.coalesce(
+        InstallScheduling.scheduled_install_date,
+        Fab.installation_date,
+        Fab.shop_est_completion_date,
+        Fab.shop_date_schedule,
+    )
+
+    query = (
+        select(
+            Fab.id.label("fab_id"),
+            Fab.job_id,
+            BusinessJob.job_number,
+            BusinessJob.name.label("job_name"),
+            Account.name.label("account_name"),
+            Fab.current_stage,
+            Fab.status_id,
+            Fab.created_at,
+            Fab.updated_at,
+            Fab.installation_date,
+            Fab.shop_est_completion_date,
+            Fab.shop_date_schedule,
+            Fab.total_sqft,
+            InstallScheduling.installer_id,
+            InstallScheduling.scheduled_install_date,
+            InstallScheduling.scheduled_end_date,
+            InstallScheduling.actual_install_date,
+            InstallScheduling.total_sqft.label("scheduled_total_sqft"),
+            User.first_name,
+            User.last_name,
+        )
+        .select_from(Fab)
+        .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+        .join(latest_schedule_query, latest_schedule_query.c.fab_id == Fab.id, isouter=True)
+        .join(InstallScheduling, InstallScheduling.id == latest_schedule_query.c.install_scheduling_id, isouter=True)
+        .join(User, User.id == InstallScheduling.installer_id, isouter=True)
+        .where(Fab.current_stage.in_(["install_scheduling", "resurface_scheduling"]))
+        .where(InstallScheduling.actual_install_date.is_(None))
+        .order_by(age_days_expr.desc(), due_date_expr.asc(), Fab.id.asc())
+    )
+
+    if start_dt is not None:
+        query = query.where(Fab.created_at >= start_dt)
+    if end_dt is not None:
+        query = query.where(Fab.created_at <= end_dt)
+    if min_age_days:
+        query = query.where(age_days_expr >= min_age_days)
+    if not include_assigned:
+        query = query.where(InstallScheduling.installer_id.is_(None))
+
+    rows = (await db.execute(query)).all()
+
+    stalled_jobs = []
+    unassigned_count = 0
+    overdue_count = 0
+    due_today_count = 0
+    now_dt = datetime.now()
+
+    for (
+        fab_id,
+        job_id,
+        job_number,
+        job_name,
+        account_name,
+        current_stage,
+        status_id,
+        created_at,
+        updated_at,
+        installation_date,
+        shop_est_completion_date,
+        shop_date_schedule,
+        total_sqft,
+        installer_id,
+        scheduled_install_date,
+        scheduled_end_date,
+        actual_install_date,
+        scheduled_total_sqft,
+        installer_first_name,
+        installer_last_name,
+    ) in rows:
+        due_date = scheduled_install_date or installation_date or shop_est_completion_date or shop_date_schedule
+        age_days = max((now_dt.date() - (updated_at or created_at).date()).days, 0)
+        days_overdue = None
+        if due_date is not None:
+            days_overdue = max((now_dt.date() - due_date.date()).days, 0)
+            if due_date.date() < now_dt.date() and actual_install_date is None:
+                overdue_count += 1
+            if due_date.date() == now_dt.date():
+                due_today_count += 1
+
+        if installer_id is None:
+            unassigned_count += 1
+
+        installer_name = (
+            f"{(installer_first_name or '').strip()} {(installer_last_name or '').strip()}".strip()
+            or (f"User {installer_id}" if installer_id else "Unassigned")
+        )
+
+        stalled_jobs.append(
+            {
+                "fab_id": fab_id,
+                "job_id": job_id,
+                "job_number": job_number,
+                "job_name": job_name,
+                "account_name": account_name or "Unassigned Account",
+                "current_stage": current_stage,
+                "status_id": status_id,
+                "age_days": age_days,
+                "days_overdue": days_overdue,
+                "due_date": due_date.isoformat() if due_date else None,
+                "created_at": created_at.isoformat() if created_at else None,
+                "updated_at": updated_at.isoformat() if updated_at else None,
+                "installation_date": installation_date.isoformat() if installation_date else None,
+                "shop_est_completion_date": shop_est_completion_date.isoformat() if shop_est_completion_date else None,
+                "shop_date_schedule": shop_date_schedule.isoformat() if shop_date_schedule else None,
+                "scheduled_install_date": scheduled_install_date.isoformat() if scheduled_install_date else None,
+                "scheduled_end_date": scheduled_end_date.isoformat() if scheduled_end_date else None,
+                "actual_install_date": actual_install_date.isoformat() if actual_install_date else None,
+                "total_sqft": round(_to_float(total_sqft), 2),
+                "scheduled_total_sqft": round(_to_float(scheduled_total_sqft), 2),
+                "installer_id": installer_id,
+                "installer_name": installer_name,
+            }
+        )
+
+    total_stalled_jobs = len(stalled_jobs)
+    stalled_jobs = stalled_jobs[:top_n]
+
+    return success_response(
+        {
+            "period": {
+                "start_date": start_date.isoformat() if start_date else None,
+                "end_date": end_date.isoformat() if end_date else None,
+            },
+            "filters": {
+                "min_age_days": min_age_days,
+                "top_n": top_n,
+                "include_assigned": include_assigned,
+            },
+            "summary": {
+                "stalled_job_count": total_stalled_jobs,
+                "unassigned_count": unassigned_count,
+                "overdue_count": overdue_count,
+                "due_today_count": due_today_count,
+            },
+            "stalled_install_jobs": stalled_jobs,
+        },
+        "Owner stalled install jobs report generated",
+    )
+
+
 @router.get("/reports/owner/install-performance", response_model=SuccessResponse[dict])
 async def get_owner_install_performance_report(
     start_date: Optional[date] = Query(None, description="Inclusive start date filter"),
