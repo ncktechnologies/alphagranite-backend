@@ -100,7 +100,11 @@ def _default_params_for_tool(tool_name: str) -> dict[str, Any]:
     definition = get_report_tool_definition(tool_name)
     if definition is None:
         return {}
-    return dict(definition.sample_params)
+    # `sample_params` are documentation examples, not runtime defaults.
+    # If copied directly, stale sample dates (e.g. 2026-06-01..2026-06-30)
+    # can force old windows for "current" questions. Runtime defaults should
+    # come from explicit NL date parsing or handler-level defaults.
+    return {}
 
 
 def _merge_date_range_params(question: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -252,6 +256,13 @@ def _score_tools_for_question(lower: str) -> list[tuple[int, str, str]]:
         score("platform.dashboard", 10, "Matched platform dashboard status language.")
     if any(term in lower for term in ["stage fabs", "fabs by stage", "stage queue", "workflow stage", "final programming pending", "pending final programming"]):
         score("ops.stage_fabs", 10, "Matched workflow stage queue language.")
+    if (
+        any(term in lower for term in ["currently sitting", "sitting in", "in sct", "in fabrication", "manual count"]) 
+        and any(term in lower for term in ["job", "jobs", "fab", "fabs", "count", "how many"])
+        and any(term in lower for term in ["sct", "fabrication", "stage", "stages"])
+    ):
+        score("ops.stage_fabs", 11, "Matched current stage queue count language (SCT/fabrication).")
+        score("owner.shop_status", 10, "Matched current shop-load count by stage language.")
     if any(term in lower for term in ["all stages", "stage counts", "stage overview"]):
         score("ops.stages_overview", 9, "Matched stage-overview language.")
     if any(term in lower for term in ["shop plans", "shop schedule", "cut plans", "workstation plans", "calendar view"]):
