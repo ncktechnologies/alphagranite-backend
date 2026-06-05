@@ -38,6 +38,21 @@ def _key_present(value: str) -> bool:
     return bool((value or "").strip())
 
 
+def _int_env(name: str, default: int, minimum: int = 1, maximum: int = 65535) -> int:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return default
+    try:
+        parsed = int(raw_value)
+    except ValueError:
+        return default
+    if parsed < minimum:
+        return minimum
+    if parsed > maximum:
+        return maximum
+    return parsed
+
+
 def _extract_json_object(text: str) -> Optional[dict[str, Any]]:
     if not text:
         return None
@@ -150,12 +165,13 @@ def _call_json_claude(
 ) -> Optional[tuple[dict[str, Any], str]]:
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     resolved_model = (model or os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")).strip()
+    max_tokens = _int_env("MCP_AI_ADVISOR_MAX_TOKENS", 1200, minimum=256, maximum=8192)
     if not api_key:
         return None
 
     payload = {
         "model": resolved_model,
-        "max_tokens": 1200,
+        "max_tokens": max_tokens,
         "temperature": 0,
         "messages": [{"role": "user", "content": prompt}],
     }
@@ -186,6 +202,7 @@ def _call_json_gemini(
 ) -> Optional[tuple[dict[str, Any], str]]:
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     resolved_model = (model or os.getenv("GEMINI_MODEL", "gemini-3.5-flash")).strip()
+    max_output_tokens = _int_env("MCP_AI_ADVISOR_MAX_TOKENS", 1024, minimum=256, maximum=8192)
     if not api_key:
         return None
 
@@ -197,7 +214,7 @@ def _call_json_gemini(
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0,
-            "maxOutputTokens": 1024,
+            "maxOutputTokens": max_output_tokens,
             "responseMimeType": "application/json",
             "responseSchema": {
                 "type": "OBJECT",
@@ -270,6 +287,87 @@ def _normalize_advisor_output(raw: dict[str, Any]) -> Optional[dict[str, Any]]:
     }
 
 
+def _build_local_advisor_output(
+    question: str,
+    tool_name: str,
+    insights: list[str],
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    summary = " ".join(insights[:2]).strip()
+    if not summary:
+        summary = "The report returned structured operational data."
+
+    what_this_means = "This suggests a workflow bottleneck that should be reviewed at the busiest stage first."
+    likely_causes: list[str] = [
+        "Work is entering this stage faster than it is leaving it.",
+        "Upstream handoffs may be delayed or incomplete.",
+    ]
+    recommended_actions: list[str] = [
+        "Review aging work in the busiest stage daily.",
+        "Check upstream handoff quality for missing or incomplete jobs.",
+        "Align capacity, scheduling, and follow-up on stalled work.",
+    ]
+    priority = "high"
+
+    if tool_name == "owner.shop_status":
+        stage_status = result.get("stage_status") or []
+        if stage_status:
+            most_loaded = max(stage_status, key=lambda row: row.get("fab_count", 0))
+            most_stalled = max(stage_status, key=lambda row: row.get("stalled_over_14_days", 0))
+            stage = most_loaded.get("stage")
+            stalled_stage = most_stalled.get("stage")
+            summary = (
+                f"{stage} is the main bottleneck with {most_loaded.get('fab_count', 0)} fabs, while {stalled_stage} has the highest stalled count."
+            )
+            what_this_means = (
+                f"Work is backing up late in the flow, which usually means downstream capacity or upstream handoff discipline needs attention."
+            )
+            likely_causes = [
+                f"{stage} is absorbing more work than the team can clear quickly.",
+                "Earlier stages may be releasing work before downstream capacity is ready.",
+                "Aging work may not be getting escalated fast enough.",
+            ]
+            recommended_actions = [
+                f"Triage {stage} daily and clear the oldest items first.",
+                "Review handoff criteria from upstream stages so work arrives cleaner.",
+                "Set a weekly limit for aged work and escalations.",
+            ]
+
+    if tool_name == "owner.redo_analysis":
+        summary_data = result.get("summary") or {}
+        summary = (
+            f"Redo is running at {summary_data.get('redo_rate_percent', 0)}% across {summary_data.get('total_fabs', 0)} fabs."
+        )
+        what_this_means = "Rework is concentrated enough to affect throughput and likely points to a process or handoff issue."
+        likely_causes = [
+            "Incomplete or inconsistent upstream information.",
+            "Quality issues are getting discovered late.",
+            "A few accounts or jobs may be creating repeated churn.",
+        ]
+        recommended_actions = [
+            "Review the top redo accounts and jobs with the team.",
+            "Standardize handoff checks before work moves downstream.",
+            "Track repeat redo causes weekly until the pattern drops.",
+        ]
+
+    follow_up_question = "Do you want me to break this down by account, stage, or week?"
+    conversation_reply = (
+        f"{summary} {what_this_means} Recommended next steps: "
+        + "; ".join(recommended_actions[:3])
+    ).strip()
+
+    return {
+        "summary": summary,
+        "what_this_means": what_this_means,
+        "likely_causes": likely_causes,
+        "recommended_actions": recommended_actions,
+        "priority": priority,
+        "follow_up_question": follow_up_question,
+        "conversation_reply": conversation_reply,
+        "question": question,
+    }
+
+
 async def maybe_generate_advisor_response(
     question: str,
     tool_name: str,
@@ -318,8 +416,12 @@ async def maybe_generate_advisor_response(
         logger.info("mcp.ai advisor_success provider=%s model=%s tool_name=%s", provider, model, tool_name)
         return AIAdvisorResult(advisor=normalized, provider=provider, model=model)
 
-    logger.info("mcp.ai advisor_fallback_unavailable reason=no_valid_provider_result")
-    return None
+    logger.info("mcp.ai advisor_fallback_rule_based reason=no_valid_provider_result tool_name=%s", tool_name)
+    return AIAdvisorResult(
+        advisor=_build_local_advisor_output(question, tool_name, insights, result),
+        provider="local",
+        model="rule-based",
+    )
 
 
 def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeout_seconds: int) -> Optional[dict[str, Any]]:
