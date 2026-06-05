@@ -96,22 +96,16 @@ def _extract_json_object(text: str) -> Optional[dict[str, Any]]:
 def _build_planner_prompt(question: str, tool_catalog: list[dict[str, Any]]) -> str:
     catalog_lines = []
     for tool in tool_catalog:
-        catalog_lines.append(
-            f"- {tool.get('name')}: {tool.get('description')} | params schema: {json.dumps(tool.get('input_schema', {}))}"
-        )
+        schema = tool.get("input_schema") or {}
+        params = list((schema.get("properties") or {}).keys())
+        catalog_lines.append(f"- {tool.get('name')} | params: {', '.join(params) if params else 'none'}")
 
     return (
-        "You are a BI tool planner. Select exactly one tool from the allowlist and return strict JSON only.\n"
-        "Do not include markdown, commentary, or extra keys.\n"
-        "JSON schema:\n"
-        '{"tool_name":"string","confidence":"high|medium|low","rationale":"string","params":{}}\n\n'
-        "Rules:\n"
-        "1) tool_name must be one of allowlisted names.\n"
-        "2) params must only include fields valid for that tool schema.\n"
-        "3) Infer date windows when user asks this/last week/month, else use empty params.\n"
-        "4) Keep rationale short and factual.\n\n"
-        f"Allowlisted tools:\n{chr(10).join(catalog_lines)}\n\n"
-        f"User question: {question}\n"
+        "Return a single JSON object only. No markdown. No explanations.\n"
+        '{"tool_name":"string","confidence":"high|medium|low","rationale":"string","params":{}}\n'
+        "Rules: choose exactly one allowlisted tool; params must only use allowed keys; keep rationale under 12 words.\n"
+        f"Tools:\n{chr(10).join(catalog_lines)}\n"
+        f"Question: {question}\n"
     )
 
 
@@ -169,7 +163,7 @@ def _call_claude(question: str, tool_catalog: list[dict[str, Any]], timeout_seco
 
     payload = {
         "model": model,
-        "max_tokens": 450,
+        "max_tokens": 4096,
         "temperature": 0,
         "messages": [
             {"role": "user", "content": _build_planner_prompt(question, tool_catalog)}
@@ -228,7 +222,7 @@ def _call_gemini(question: str, tool_catalog: list[dict[str, Any]], timeout_seco
         ],
         "generationConfig": {
             "temperature": 0,
-            "maxOutputTokens": 800,
+            "maxOutputTokens": 2048,
             "responseMimeType": "application/json",
             "responseSchema": {
                 "type": "OBJECT",
