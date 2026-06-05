@@ -18,6 +18,7 @@ from src.app.mcp.report_tools import (
     list_report_tools,
     sanitize_params_for_tool,
     select_tool_for_question,
+    suggest_tools_for_question,
     summarize_tool_result,
 )
 from src.app.service.ai_provider import maybe_generate_advisor_response, maybe_plan_tool_with_llm
@@ -126,7 +127,21 @@ async def ask_mcp_bi_question(
         payload.params,
     )
 
-    tool_catalog = list_report_tools()
+    full_tool_catalog = list_report_tools()
+    candidate_rankings = suggest_tools_for_question(payload.question, limit=12)
+    candidate_names = [item.get("tool_name") for item in candidate_rankings if item.get("tool_name")]
+    candidate_set = set(candidate_names)
+
+    tool_catalog = [tool for tool in full_tool_catalog if tool.get("name") in candidate_set] if candidate_set else []
+    if not tool_catalog:
+        tool_catalog = full_tool_catalog
+
+    logger.info(
+        "mcp.ask planner_candidates count=%s names=%s",
+        len(tool_catalog),
+        [item.get("name") for item in tool_catalog],
+    )
+
     llm_plan = await maybe_plan_tool_with_llm(payload.question, tool_catalog)
 
     if llm_plan is not None:
@@ -217,6 +232,7 @@ async def ask_mcp_bi_question(
             "source": source,
             "provider": provider,
             "model": model,
+            "planner_candidates": candidate_rankings,
             "resolved_params": resolved_params,
             "insights": insights,
             "advisor": advisor_response.advisor if advisor_response is not None else None,
