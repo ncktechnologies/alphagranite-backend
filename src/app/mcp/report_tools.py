@@ -251,10 +251,14 @@ async def _enrich_employee_names_in_result(db: AsyncSession, payload: Any) -> An
                     name_map = _name_map_for_key(key)
                     if isinstance(value, int) and value in name_map and not node.get(name_key):
                         node[name_key] = name_map[value]
+                        if key == "planning_section_id":
+                            node[key] = name_map[value]
                     elif isinstance(value, list) and not node.get(name_key):
                         names = [name_map[item] for item in value if isinstance(item, int) and item in name_map]
                         if names:
                             node[name_key] = names
+                            if key == "planning_section_id":
+                                node[key] = names
                 node[key] = enrich(value)
             return node
         if isinstance(node, list):
