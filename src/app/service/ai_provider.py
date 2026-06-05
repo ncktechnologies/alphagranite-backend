@@ -168,6 +168,12 @@ def _call_anthropic_agent_json(
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     agent_id = _anthropic_agent_id()
     if not api_key or not agent_id:
+        logger.info(
+            "mcp.ai anthropic_agent_skipped phase=%s key_present=%s agent_id_present=%s",
+            phase,
+            _key_present(api_key),
+            bool(agent_id),
+        )
         return None
 
     endpoint = os.getenv(
@@ -196,21 +202,37 @@ def _call_anthropic_agent_json(
     if beta_header:
         headers["anthropic-beta"] = beta_header
 
+    logger.info(
+        "mcp.ai anthropic_agent_request_start phase=%s endpoint=%s agent_id=%s beta_header_present=%s max_tokens=%s",
+        phase,
+        endpoint,
+        agent_id,
+        bool(beta_header),
+        max_token_budget,
+    )
+
     parsed = _post_json(endpoint, payload, headers, timeout_seconds)
     if not parsed:
-        logger.info("mcp.ai anthropic_agent_no_payload phase=%s agent_id=%s", phase, agent_id)
+        logger.warning(
+            "mcp.ai anthropic_agent_no_payload phase=%s agent_id=%s endpoint=%s",
+            phase,
+            agent_id,
+            endpoint,
+        )
         return None
 
     text = _extract_text_from_anthropic_payload(parsed)
     output = _extract_json_object(text)
     if output is None:
-        logger.info(
+        logger.warning(
             "mcp.ai anthropic_agent_invalid_json phase=%s agent_id=%s text_preview=%s",
             phase,
             agent_id,
             text[:300],
         )
         return None
+
+    logger.info("mcp.ai anthropic_agent_request_success phase=%s agent_id=%s", phase, agent_id)
 
     return output, f"agent:{agent_id}"
 
@@ -332,41 +354,65 @@ def _call_json_claude(
     resolved_model = (model or os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")).strip()
     resolved_max_tokens = max_tokens or _int_env("MCP_AI_ADVISOR_MAX_TOKENS", 1200, minimum=256, maximum=8192)
     if not api_key:
+        logger.info("mcp.ai claude_advisor_skipped reason=missing_api_key")
         return None
 
-    agent_result = _call_anthropic_agent_json(
-        prompt,
-        timeout_seconds,
-        max_tokens=resolved_max_tokens,
-        phase="advisor",
-    )
-    if agent_result is not None:
-        logger.info("mcp.ai advisor_success_via_agent model=%s", agent_result[1])
-        return agent_result
+    try:
+        agent_result = _call_anthropic_agent_json(
+            prompt,
+            timeout_seconds,
+            max_tokens=resolved_max_tokens,
+            phase="advisor",
+        )
+        if agent_result is not None:
+            logger.info("mcp.ai advisor_success_via_agent model=%s", agent_result[1])
+            return agent_result
 
-    payload = {
-        "model": resolved_model,
-        "max_tokens": resolved_max_tokens,
-        "temperature": 0,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
-    parsed = _post_json("https://api.anthropic.com/v1/messages", payload, headers, timeout_seconds)
-    if not parsed:
-        return None
+        logger.info(
+            "mcp.ai claude_advisor_messages_request_start model=%s timeout=%s max_tokens=%s",
+            resolved_model,
+            timeout_seconds,
+            resolved_max_tokens,
+        )
+        payload = {
+            "model": resolved_model,
+            "max_tokens": resolved_max_tokens,
+            "temperature": 0,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        parsed = _post_json("https://api.anthropic.com/v1/messages", payload, headers, timeout_seconds)
+        if not parsed:
+            logger.warning(
+                "mcp.ai claude_advisor_messages_no_payload model=%s timeout=%s",
+                resolved_model,
+                timeout_seconds,
+            )
+            return None
 
-    content = parsed.get("content") or []
-    if not content or not isinstance(content, list):
+        content = parsed.get("content") or []
+        if not content or not isinstance(content, list):
+            logger.warning("mcp.ai claude_advisor_messages_empty_content model=%s", resolved_model)
+            return None
+        text_chunks = [chunk.get("text", "") for chunk in content if isinstance(chunk, dict)]
+        output = _extract_json_object("\n".join(text_chunks))
+        if output is None:
+            logger.warning("mcp.ai claude_advisor_messages_invalid_json model=%s", resolved_model)
+            return None
+        logger.info("mcp.ai claude_advisor_messages_success model=%s", resolved_model)
+        return output, resolved_model
+    except Exception:
+        logger.exception(
+            "mcp.ai claude_advisor_exception model=%s timeout=%s agent_id_present=%s",
+            resolved_model,
+            timeout_seconds,
+            bool(_anthropic_agent_id()),
+        )
         return None
-    text_chunks = [chunk.get("text", "") for chunk in content if isinstance(chunk, dict)]
-    output = _extract_json_object("\n".join(text_chunks))
-    if output is None:
-        return None
-    return output, resolved_model
 
 
 def _call_json_gemini(
@@ -650,8 +696,11 @@ async def maybe_generate_advisor_response(
     normalized_focus = _normalize_focus(focus)
     advisor_max_tokens = _advisor_max_tokens_for_mode(normalized_response_mode)
     primary = os.getenv("MCP_AI_PRIMARY_PROVIDER", "gemini").strip().lower()
-    provider_order = [p for p in [primary, "gemini", "claude"] if p in {"claude", "gemini"}]
+    secondary = os.getenv("MCP_AI_SECONDARY_PROVIDER", "gemini").strip().lower()
+    provider_order = [p for p in [primary, secondary] if p in {"claude", "gemini"}]
     provider_order = list(dict.fromkeys(provider_order))
+    if not provider_order:
+        provider_order = ["gemini", "claude"]
 
     prompt = _build_advisor_prompt(
         question,
@@ -663,8 +712,9 @@ async def maybe_generate_advisor_response(
         focus=normalized_focus,
     )
     logger.info(
-        "mcp.ai advisor_start primary=%s order=%s timeout=%s tool_name=%s response_mode=%s focus=%s question_preview=%s",
+        "mcp.ai advisor_start primary=%s secondary=%s order=%s timeout=%s tool_name=%s response_mode=%s focus=%s question_preview=%s",
         primary,
+        secondary,
         provider_order,
         timeout_seconds,
         tool_name,
@@ -774,54 +824,68 @@ def _call_claude(question: str, tool_catalog: list[dict[str, Any]], timeout_seco
         logger.info("mcp.ai claude_skipped reason=missing_api_key")
         return None
 
-    logger.info(
-        "mcp.ai claude_request_start model=%s timeout=%s tool_count=%s question_preview=%s",
-        model,
-        timeout_seconds,
-        len(tool_catalog),
-        question[:120],
-    )
+    try:
+        logger.info(
+            "mcp.ai claude_request_start model=%s timeout=%s tool_count=%s question_preview=%s",
+            model,
+            timeout_seconds,
+            len(tool_catalog),
+            question[:120],
+        )
 
-    planner_prompt = _build_planner_prompt(question, tool_catalog)
-    agent_result = _call_anthropic_agent_json(
-        planner_prompt,
-        timeout_seconds,
-        max_tokens=2048,
-        phase="planner",
-    )
-    if agent_result is not None:
-        logger.info("mcp.ai planner_success_via_agent model=%s", agent_result[1])
-        return agent_result
+        planner_prompt = _build_planner_prompt(question, tool_catalog)
+        agent_result = _call_anthropic_agent_json(
+            planner_prompt,
+            timeout_seconds,
+            max_tokens=2048,
+            phase="planner",
+        )
+        if agent_result is not None:
+            logger.info("mcp.ai planner_success_via_agent model=%s", agent_result[1])
+            return agent_result
 
-    payload = {
-        "model": model,
-        "max_tokens": 4096,
-        "temperature": 0,
-        "messages": [
-            {"role": "user", "content": planner_prompt}
-        ],
-    }
-    headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
-    parsed = _post_json("https://api.anthropic.com/v1/messages", payload, headers, timeout_seconds)
-    if not parsed:
-        logger.info("mcp.ai claude_request_no_payload model=%s", model)
-        return None
+        logger.info(
+            "mcp.ai claude_planner_messages_request_start model=%s timeout=%s max_tokens=4096",
+            model,
+            timeout_seconds,
+        )
+        payload = {
+            "model": model,
+            "max_tokens": 4096,
+            "temperature": 0,
+            "messages": [
+                {"role": "user", "content": planner_prompt}
+            ],
+        }
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        parsed = _post_json("https://api.anthropic.com/v1/messages", payload, headers, timeout_seconds)
+        if not parsed:
+            logger.warning("mcp.ai claude_request_no_payload model=%s", model)
+            return None
 
-    content = parsed.get("content") or []
-    if not content or not isinstance(content, list):
-        logger.info("mcp.ai claude_empty_content model=%s", model)
+        content = parsed.get("content") or []
+        if not content or not isinstance(content, list):
+            logger.warning("mcp.ai claude_empty_content model=%s", model)
+            return None
+        text_chunks = [chunk.get("text", "") for chunk in content if isinstance(chunk, dict)]
+        output = _extract_json_object("\n".join(text_chunks))
+        if output is None:
+            logger.warning("mcp.ai claude_invalid_json_response model=%s", model)
+            return None
+        logger.info("mcp.ai claude_request_success model=%s", model)
+        return output, model
+    except Exception:
+        logger.exception(
+            "mcp.ai claude_planner_exception model=%s timeout=%s agent_id_present=%s",
+            model,
+            timeout_seconds,
+            bool(_anthropic_agent_id()),
+        )
         return None
-    text_chunks = [chunk.get("text", "") for chunk in content if isinstance(chunk, dict)]
-    output = _extract_json_object("\n".join(text_chunks))
-    if output is None:
-        logger.info("mcp.ai claude_invalid_json_response model=%s", model)
-        return None
-    logger.info("mcp.ai claude_request_success model=%s", model)
-    return output, model
 
 
 def _call_gemini(question: str, tool_catalog: list[dict[str, Any]], timeout_seconds: int) -> Optional[tuple[dict[str, Any], str]]:
