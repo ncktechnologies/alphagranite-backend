@@ -164,38 +164,69 @@ def _merge_date_range_params(question: str, params: dict[str, Any]) -> dict[str,
             if index > 0
         }
     )
+    # Treat "may" carefully: it is frequently used as a verb ("may I...")
+    # and should not force month=5 unless it appears in date-like context.
+    month_aliases.pop("may", None)
     month_matches = list(
         re.finditer(
-            r"\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b",
+            r"\b(january|february|march|april|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b",
             lower,
         )
     )
-    if month_matches:
+
+    # Recognize month=May only in explicit temporal context.
+    may_in_context = (
+        re.search(r"\b(?:in|for|during)\s+may\b", lower) is not None
+        or re.search(r"\bmay\s+20\d{2}\b", lower) is not None
+        or re.search(r"\bmonth\s+of\s+may\b", lower) is not None
+    )
+    month_numbers: list[int] = []
+    for match in month_matches:
+        token = match.group(1)
+        if token == "sept":
+            token = "sep"
+        month_index = month_aliases.get(token)
+        if month_index and month_index not in month_numbers:
+            month_numbers.append(month_index)
+
+    if may_in_context and 5 not in month_numbers:
+        month_numbers.append(5)
+
+    if month_numbers:
         explicit_year_match = re.search(r"\b(20\d{2})\b", lower)
         resolved_year = int(explicit_year_match.group(1)) if explicit_year_match else today.year
+        earliest_month = min(month_numbers)
+        latest_month = max(month_numbers)
+        # Build an inclusive date range spanning the referenced month(s) so
+        # date-range tools (e.g. shop_status, overview) target the right window.
+        start = date(resolved_year, earliest_month, 1)
+        last_day = calendar.monthrange(resolved_year, latest_month)[1]
+        end = date(resolved_year, latest_month, last_day)
+        merged["start_date"] = start.isoformat()
+        merged["end_date"] = end.isoformat()
+        # Month/year tools use the latest referenced month.
+        merged["month"] = latest_month
+        merged["year"] = resolved_year
 
-        month_numbers: list[int] = []
-        for match in month_matches:
-            token = match.group(1)
-            if token == "sept":
-                token = "sep"
-            month_index = month_aliases.get(token)
-            if month_index and month_index not in month_numbers:
-                month_numbers.append(month_index)
-
-        if month_numbers:
-            earliest_month = min(month_numbers)
-            latest_month = max(month_numbers)
-            # Build an inclusive date range spanning the referenced month(s) so
-            # date-range tools (e.g. shop_status, overview) target the right window.
-            start = date(resolved_year, earliest_month, 1)
-            last_day = calendar.monthrange(resolved_year, latest_month)[1]
-            end = date(resolved_year, latest_month, last_day)
-            merged["start_date"] = start.isoformat()
-            merged["end_date"] = end.isoformat()
-            # Month/year tools use the latest referenced month.
-            merged["month"] = latest_month
-            merged["year"] = resolved_year
+    # Stage extraction for queue questions so ops.stage_fabs doesn't silently
+    # default to final_programming when the user asked for another stage.
+    stage_aliases = {
+        "sct": "sct",
+        "fabrication": "fabrication",
+        "final programming": "final_programming",
+        "final_programming": "final_programming",
+        "draft": "drafting",
+        "drafting": "drafting",
+        "template": "template",
+        "install": "install",
+        "installation": "install",
+        "cnc": "cnc",
+        "cut": "cut",
+    }
+    for alias, stage_value in stage_aliases.items():
+        if re.search(rf"\b{re.escape(alias)}\b", lower):
+            merged["stage_name"] = stage_value
+            break
 
     year_match = re.search(r"\b(20\d{2})\b", lower)
     if year_match:
@@ -256,6 +287,12 @@ def _score_tools_for_question(lower: str) -> list[tuple[int, str, str]]:
         score("platform.dashboard", 10, "Matched platform dashboard status language.")
     if any(term in lower for term in ["stage fabs", "fabs by stage", "stage queue", "workflow stage", "final programming pending", "pending final programming"]):
         score("ops.stage_fabs", 10, "Matched workflow stage queue language.")
+    if (
+        any(term in lower for term in ["sct", "fabrication", "drafting", "cnc", "template", "install"])
+        and any(term in lower for term in ["and", "by stage", "across stages", "stages"])
+        and any(term in lower for term in ["count", "how many", "currently", "sitting", "queue", "load"])
+    ):
+        score("owner.shop_status", 12, "Matched multi-stage current queue/load count language.")
     if (
         any(term in lower for term in ["currently sitting", "sitting in", "in sct", "in fabrication", "manual count"]) 
         and any(term in lower for term in ["job", "jobs", "fab", "fabs", "count", "how many"])
