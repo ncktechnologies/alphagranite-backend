@@ -15,6 +15,11 @@ from src.app.mcp.report_tools import NLToolSelection, get_report_tool_definition
 
 logger = logging.getLogger(__name__)
 
+# Sentinel tool name used when no data tool fits the question and the assistant
+# should answer conversationally (or ask a clarifying question) instead of
+# running a report. No business data is queried on this path.
+CONVERSATIONAL_TOOL = "none"
+
 # Runtime circuit breaker for the optional Anthropic Agent endpoint.
 # Anthropic does not expose a public REST agent endpoint, so a misconfigured
 # ANTHROPIC_AGENT_ENDPOINT typically 404s. Once a call fails we disable the
@@ -271,6 +276,7 @@ def _build_planner_prompt(question: str, tool_catalog: list[dict[str, Any]]) -> 
         "Return a single JSON object only. No markdown. No explanations.\n"
         '{"tool_name":"string","confidence":"high|medium|low","rationale":"string","params":{}}\n'
         "Rules: choose exactly one allowlisted tool; params must only use allowed keys; keep rationale under 12 words.\n"
+        'If no listed tool can answer the question (it is conceptual, off-topic, or needs data none of the tools provide), set tool_name to "none".\n'
         f"Tools:\n{chr(10).join(catalog_lines)}\n"
         f"Question: {question}\n"
     )
@@ -803,6 +809,163 @@ async def maybe_generate_advisor_response(
     )
 
 
+def _build_conversational_prompt(question: str, *, response_mode: str, focus: str) -> str:
+    style_instruction = {
+        "brief": "Keep the reply short and direct.",
+        "standard": "Keep the reply concise but complete.",
+        "deep": "Provide a thorough, well-structured explanation.",
+    }.get(response_mode, "Keep the reply concise but complete.")
+
+    payload = {
+        "question": question,
+        "focus": focus,
+        "response_mode": response_mode,
+    }
+    payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return (
+        "You are an operations advisor for a granite fabrication business.\n"
+        "The user's question did not map to any available data report tool, so NO business data was queried.\n"
+        "Answer helpfully at a conceptual level, or ask one focused clarifying question if you need scope (dates, account, stage).\n"
+        "CRITICAL GUARDRAILS:\n"
+        "- You have NOT queried any data. Never state or invent specific business numbers (revenue, counts, sqft, margins, dates, names).\n"
+        "- If the question needs data, name the report or metric that would answer it and ask the user to confirm scope.\n"
+        "- Do not mention that you are an AI. Be practical and direct.\n"
+        "Return a single JSON object only.\n"
+        '{\"executive_summary\":\"string\",\"what_this_means\":\"string\",\"key_findings\":[\"string\"],\"metric_breakdown\":[\"string\"],\"risk_flags\":[\"string\"],\"recommended_actions\":[\"string\"],\"assumptions_and_gaps\":[\"string\"],\"next_questions\":[\"string\"],\"priority\":\"high|medium|low\",\"conversation_reply\":\"string\",\"evidence\":[\"string\"]}\n'
+        "Rules:\n"
+        "- conversation_reply is the main message to the user (answer or clarifying question).\n"
+        "- Leave metric_breakdown empty since no data was queried.\n"
+        "- evidence must be [\"no_data_queried\"].\n"
+        "- next_questions should propose data questions you CAN answer with a report.\n"
+        f"- {style_instruction}\n"
+        f"Context:\n{payload_json}\n"
+    )
+
+
+def _build_local_conversational_output(question: str, *, response_mode: str, focus: str) -> dict[str, Any]:
+    reply = (
+        "I can help with that, but I didn't run a data report for this question because it didn't map to one of "
+        "the available reports. To pull real numbers, tell me the scope you want (for example a date range, account, "
+        "or workflow stage) and what you'd like to measure — such as shop load, turnaround times, service-level "
+        "breaches, redo rates, labor cost, or largest jobs."
+    )
+    return {
+        "executive_summary": "No data report was run for this question.",
+        "summary": "No data report was run for this question.",
+        "what_this_means": (
+            "The question didn't match a specific report, so I'm responding conversationally instead of showing "
+            "numbers that weren't queried."
+        ),
+        "key_findings": ["The question did not map to an available data report tool."],
+        "metric_breakdown": [],
+        "risk_flags": [],
+        "likely_causes": [],
+        "recommended_actions": [
+            "Share the scope (date range, account, or stage) you care about.",
+            "Pick a metric: shop load, turnaround, service level, redos, labor cost, or largest jobs.",
+        ],
+        "assumptions_and_gaps": ["No business data was queried for this response."],
+        "next_questions": [
+            "What's our current shop load by stage, and where is work stalling?",
+            "How long are fabs taking stage-by-stage this month, and which exceed 14 days?",
+        ],
+        "evidence": ["no_data_queried"],
+        "priority": "medium",
+        "follow_up_question": "What scope and metric would you like me to report on?",
+        "conversation_reply": reply,
+        "question": question,
+        "response_mode": response_mode,
+        "focus": focus,
+    }
+
+
+async def maybe_generate_conversational_response(
+    question: str,
+    *,
+    response_mode: str = "standard",
+    focus: str = "mixed",
+) -> AIAdvisorResult:
+    """Answer a question conversationally when no data tool fits.
+
+    Never fabricates business metrics. Falls back to a deterministic clarifying
+    reply when the LLM is disabled or unavailable.
+    """
+    normalized_response_mode = _normalize_response_mode(response_mode)
+    normalized_focus = _normalize_focus(focus)
+
+    if _is_enabled():
+        timeout_seconds = int(os.getenv("MCP_AI_TIMEOUT_SECONDS", "20") or 20)
+        advisor_max_tokens = _advisor_max_tokens_for_mode(normalized_response_mode)
+        primary = os.getenv("MCP_AI_PRIMARY_PROVIDER", "gemini").strip().lower()
+        secondary = os.getenv("MCP_AI_SECONDARY_PROVIDER", "gemini").strip().lower()
+        provider_order = [p for p in [primary, secondary] if p in {"claude", "gemini"}]
+        provider_order = list(dict.fromkeys(provider_order))
+        if not provider_order:
+            provider_order = ["gemini", "claude"]
+
+        prompt = _build_conversational_prompt(
+            question,
+            response_mode=normalized_response_mode,
+            focus=normalized_focus,
+        )
+        logger.info(
+            "mcp.ai conversational_start order=%s response_mode=%s focus=%s question_preview=%s",
+            provider_order,
+            normalized_response_mode,
+            normalized_focus,
+            question[:120],
+        )
+
+        for provider in provider_order:
+            try:
+                if provider == "gemini":
+                    candidate = await asyncio.to_thread(
+                        _call_json_gemini,
+                        prompt,
+                        timeout_seconds,
+                        max_tokens=advisor_max_tokens,
+                    )
+                else:
+                    candidate = await asyncio.to_thread(
+                        _call_json_claude,
+                        prompt,
+                        timeout_seconds,
+                        max_tokens=advisor_max_tokens,
+                    )
+            except Exception:
+                logger.exception("mcp.ai conversational_provider_exception provider=%s", provider)
+                candidate = None
+
+            if not candidate:
+                logger.info("mcp.ai conversational_provider_no_candidate provider=%s", provider)
+                continue
+
+            raw_advisor, model = candidate
+            normalized = _normalize_advisor_output(raw_advisor)
+            if normalized is None:
+                logger.info("mcp.ai conversational_provider_invalid_output provider=%s model=%s", provider, model)
+                continue
+
+            # Enforce the no-data guardrail regardless of model output.
+            normalized["metric_breakdown"] = []
+            normalized["evidence"] = ["no_data_queried"]
+            normalized["response_mode"] = normalized_response_mode
+            normalized["focus"] = normalized_focus
+            logger.info("mcp.ai conversational_success provider=%s model=%s", provider, model)
+            return AIAdvisorResult(advisor=normalized, provider=provider, model=model)
+
+    logger.info("mcp.ai conversational_fallback_rule_based")
+    return AIAdvisorResult(
+        advisor=_build_local_conversational_output(
+            question,
+            response_mode=normalized_response_mode,
+            focus=normalized_focus,
+        ),
+        provider="local",
+        model="rule-based",
+    )
+
+
 def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeout_seconds: int) -> Optional[dict[str, Any]]:
     req = urllib.request.Request(
         url,
@@ -1005,6 +1168,17 @@ def _call_gemini(question: str, tool_catalog: list[dict[str, Any]], timeout_seco
 
 def _normalize_selection(raw: dict[str, Any], provider: str) -> Optional[NLToolSelection]:
     tool_name = str(raw.get("tool_name") or "").strip().lower()
+
+    if tool_name in {CONVERSATIONAL_TOOL, "conversational", "no_tool", "none_of_the_above"}:
+        rationale = str(raw.get("rationale") or f"No data tool fits; answer conversationally ({provider}).").strip()
+        logger.info("mcp.ai planner_selected_conversational provider=%s", provider)
+        return NLToolSelection(
+            tool_name=CONVERSATIONAL_TOOL,
+            confidence="high",
+            rationale=rationale,
+            params={},
+        )
+
     if not tool_name or get_report_tool_definition(tool_name) is None:
         logger.info("mcp.ai planner_invalid_tool provider=%s tool_name=%s", provider, tool_name)
         return None

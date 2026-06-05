@@ -22,7 +22,12 @@ from src.app.mcp.report_tools import (
     suggest_tools_for_question,
     summarize_tool_result,
 )
-from src.app.service.ai_provider import maybe_generate_advisor_response, maybe_plan_tool_with_llm
+from src.app.service.ai_provider import (
+    CONVERSATIONAL_TOOL,
+    maybe_generate_advisor_response,
+    maybe_generate_conversational_response,
+    maybe_plan_tool_with_llm,
+)
 from src.app.utils.helpers import error_response, success_response
 from src.app.utils.permissions import PermissionChecker
 
@@ -170,6 +175,52 @@ async def ask_mcp_bi_question(
         selection.confidence,
     )
 
+    if selection.tool_name == CONVERSATIONAL_TOOL:
+        logger.info("mcp.ask conversational_path source=%s provider=%s", source, provider)
+        advisor_response = await maybe_generate_conversational_response(
+            payload.question,
+            response_mode=payload.response_mode,
+            focus=payload.focus,
+        )
+
+        await save_audit_trail(
+            db,
+            "mcp_bi_question",
+            current_user.id,
+            f"MCP BI question answered conversationally source={source} provider={provider} model={model} "
+            f"question={payload.question}",
+            0,
+        )
+
+        logger.info(
+            "mcp.ask conversational_ready advisor_provider=%s advisor_model=%s",
+            advisor_response.provider,
+            advisor_response.model,
+        )
+
+        return success_response(
+            {
+                "question": payload.question,
+                "matched_tool": None,
+                "mode": "conversational",
+                "confidence": selection.confidence,
+                "rationale": selection.rationale,
+                "source": source,
+                "provider": provider,
+                "model": model,
+                "planner_candidates": candidate_rankings,
+                "resolved_params": {},
+                "response_mode": payload.response_mode,
+                "focus": payload.focus,
+                "insights": [],
+                "advisor": advisor_response.advisor,
+                "advisor_provider": advisor_response.provider,
+                "advisor_model": advisor_response.model,
+                "result": None,
+            },
+            "MCP BI question answered successfully",
+        )
+
     resolved_params = sanitize_params_for_tool(
         selection.tool_name,
         {
@@ -233,6 +284,7 @@ async def ask_mcp_bi_question(
         {
             "question": payload.question,
             "matched_tool": selection.tool_name,
+            "mode": "report",
             "confidence": selection.confidence,
             "rationale": selection.rationale,
             "source": source,
