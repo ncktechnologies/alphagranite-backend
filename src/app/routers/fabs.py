@@ -5346,6 +5346,13 @@ async def get_fabs_cost_of_stone_queue(
             Fab.id.label("fab_id"),
             Fab.fab_type.label("fab_type"),
             BusinessJob.job_number.label("job_number"),
+            BusinessJob.name.label("job_name"),
+            Account.name.label("account_name"),
+            StoneType.name.label("stone_type_name"),
+            StoneColor.name.label("stone_color_name"),
+            Edge.name.label("edge_name"),
+            StoneThickness.thickness.label("stone_thickness_value"),
+            Fab.input_area.label("input_area"),
             Fab.input_area.label("fab_info"),
             Fab.total_sqft.label("total_sqft"),
             Fab.revenue.label("revenue"),
@@ -5354,6 +5361,11 @@ async def get_fabs_cost_of_stone_queue(
         )
         .select_from(Fab)
         .outerjoin(BusinessJob, Fab.job_id == BusinessJob.id)
+        .outerjoin(Account, BusinessJob.account_id == Account.id)
+        .outerjoin(StoneType, Fab.stone_type_id == StoneType.id)
+        .outerjoin(StoneColor, Fab.stone_color_id == StoneColor.id)
+        .outerjoin(Edge, Fab.edge_id == Edge.id)
+        .outerjoin(StoneThickness, Fab.stone_thickness_id == StoneThickness.id)
         .where(
             Fab.sct_completed.is_(True),
             or_(
@@ -5405,6 +5417,13 @@ async def get_fabs_cost_of_stone_queue(
             "fab_id": row.fab_id,
             "fab_type": row.fab_type,
             "job_number": row.job_number,
+            "job_name": row.job_name,
+            "account_name": row.account_name,
+            "stone_type_name": row.stone_type_name,
+            "stone_color_name": row.stone_color_name,
+            "edge_name": row.edge_name,
+            "stone_thickness_value": row.stone_thickness_value,
+            "input_area": row.input_area,
             "fab_info": row.fab_info,
             "total_sqft": float(row.total_sqft) if row.total_sqft is not None else None,
             "revenue": float(row.revenue) if row.revenue is not None else None,
