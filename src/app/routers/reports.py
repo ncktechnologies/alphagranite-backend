@@ -20,6 +20,7 @@ from src.app.database import get_db
 from src.app.database.account import Account
 from src.app.database.business_job import BusinessJob
 from src.app.database.department import Department
+from src.app.database.edge import Edge
 from src.app.database.fab import Fab
 from src.app.database.installer_rate_history import InstallerRateHistory
 from src.app.database.installer_job_timer_session import InstallerJobTimerSession
@@ -32,6 +33,7 @@ from src.app.interface.generated_schemas import CNCDrafting, CostOfStone, CutLis
 from src.app.interface.response_wrappers import SuccessResponse, success_response
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.service.monthly_end_of_month_status_report import send_monthly_end_of_month_status_report
+from src.app.utils.helpers import error_response
 
 router = APIRouter()
 
@@ -44,6 +46,36 @@ class InstallerRateUpsert(BaseModel):
     is_active: bool = True
 
 
+class RedoPatchRequest(BaseModel):
+    no_of_pieces: Optional[int] = Field(default=None, ge=0)
+    sqft: Optional[float] = Field(default=None, ge=0)
+    cost_per_sqft: Optional[float] = Field(default=None, ge=0)
+    total_cost: Optional[float] = Field(default=None, ge=0)
+    department: Optional[str] = None
+    person_name: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class MonthlyCutCompletionPatchRequest(BaseModel):
+    revenue: Optional[float] = Field(default=None, ge=0)
+    cost_of_stone: Optional[float] = Field(default=None, ge=0)
+    revenue_per_sq_ft: Optional[float] = Field(default=None, ge=0)
+
+
+class MonthlyInstallCompletionPatchRequest(BaseModel):
+    revenue: Optional[float] = Field(default=None, ge=0)
+    sq_ft: Optional[float] = Field(default=None, ge=0)
+    revenue_per_sq_ft: Optional[float] = Field(default=None, ge=0)
+    installer_name: Optional[str] = None
+
+
+class DailyInstallCompletionPatchRequest(BaseModel):
+    revenue: Optional[float] = Field(default=None, ge=0)
+    sq_ft: Optional[float] = Field(default=None, ge=0)
+    installer_name: Optional[str] = None
+
+
+@router.get("/redos", response_model=SuccessResponse[list[dict]])
 @router.get("/reports/redos", response_model=SuccessResponse[list[dict]])
 async def get_ag_redo_report(
     db: AsyncSession = Depends(get_db),
@@ -61,17 +93,22 @@ async def get_ag_redo_report(
                 BusinessJob.name,
                 StoneType.name,
                 StoneColor.name,
+                Edge.name,
                 StoneThickness.thickness,
+                Fab.input_area,
                 Fab.no_of_pieces,
                 Fab.total_sqft,
                 CostOfStone.cost_per_sqft,
                 Revision.revision_notes,
+                Revision.department,
+                Revision.person_name,
             )
             .select_from(Fab)
             .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
             .join(Account, Account.id == BusinessJob.account_id, isouter=True)
             .join(StoneType, StoneType.id == Fab.stone_type_id, isouter=True)
             .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
+            .join(Edge, Edge.id == Fab.edge_id, isouter=True)
             .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
             .join(CostOfStone, CostOfStone.id == Fab.cost_of_stone_id, isouter=True)
             .join(Revision, Revision.fab_id == Fab.id, isouter=True)
@@ -81,7 +118,7 @@ async def get_ag_redo_report(
     ).all()
 
     departments = (await db.execute(select(Department.name).order_by(Department.name.asc()))).all()
-    department_options = [row[0] for row in departments if row[0]]
+    department_options = ", ".join(row[0] for row in departments if row[0])
 
     data = []
     for (
@@ -93,11 +130,15 @@ async def get_ag_redo_report(
         job_name,
         stone_type,
         stone_color,
+        edge_name,
         stone_thickness,
+        input_area,
         no_of_pieces,
         sqft,
         cost_per_sqft_raw,
         revision_notes,
+        revision_department,
+        revision_person_name,
     ) in rows:
         cost_per_sqft = round(_to_float(cost_per_sqft_raw), 2) if cost_per_sqft_raw is not None else None
         sqft_value = round(_to_float(sqft), 2)
@@ -118,19 +159,169 @@ async def get_ag_redo_report(
                 "fab_type": fab_type,
                 "fab_id": fab_id,
                 "job_number": job_number,
+                "job_name": job_name,
+                "account_name": account_name,
+                "stone_type_name": stone_type,
+                "stone_color_name": stone_color,
+                "edge_name": edge_name,
+                "stone_thickness_value": stone_thickness,
+                "input_area": input_area,
                 "fab_info": fab_info,
                 "no_of_pieces": int(_to_float(no_of_pieces)),
                 "sqft": sqft_value,
                 "cost_per_sqft": cost_per_sqft,
                 "total_cost": total_cost,
-                "department": None,
-                "person_name": None,
+                "department": revision_department,
+                "person_name": revision_person_name,
                 "reason": revision_notes,
                 "department_options": department_options,
             }
         )
 
     return success_response(data, "AG REDO report data retrieved successfully")
+
+
+@router.patch("/redos/{redo_id}", response_model=SuccessResponse[dict])
+@router.patch("/reports/redos/{redo_id}", response_model=SuccessResponse[dict])
+async def patch_redo_record(
+    redo_id: int,
+    patch: RedoPatchRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update editable AG Redo row fields by FAB/redo id."""
+    if all(
+        value is None
+        for value in [
+            patch.no_of_pieces,
+            patch.sqft,
+            patch.cost_per_sqft,
+            patch.total_cost,
+            patch.department,
+            patch.person_name,
+            patch.reason,
+        ]
+    ):
+        raise error_response("At least one field is required", 400)
+
+    fab = (await db.execute(select(Fab).where(Fab.id == redo_id))).scalar_one_or_none()
+    if not fab:
+        raise error_response("Redo record not found", 404)
+    if (fab.fab_type or "").strip().lower() != "ag redo":
+        raise error_response("Record is not an AG redo FAB", 400)
+
+    now = datetime.now()
+
+    if patch.no_of_pieces is not None:
+        fab.no_of_pieces = patch.no_of_pieces
+    if patch.sqft is not None:
+        fab.total_sqft = patch.sqft
+
+    cost_record: Optional[CostOfStone] = None
+    if patch.cost_per_sqft is not None or patch.total_cost is not None:
+        if fab.cost_of_stone_id:
+            cost_record = await db.get(CostOfStone, fab.cost_of_stone_id)
+        if cost_record is None:
+            cost_record = (
+                await db.execute(select(CostOfStone).where(CostOfStone.fab_id == fab.id))
+            ).scalar_one_or_none()
+
+        if cost_record is None:
+            cost_record = CostOfStone(
+                fab_id=fab.id,
+                stone_color_id=fab.stone_color_id,
+                stone_type_id=fab.stone_type_id,
+                total_sqft=str(fab.total_sqft) if fab.total_sqft is not None else None,
+                status_id=1,
+                created_at=now,
+                updated_at=now,
+                updated_by=current_user.id,
+            )
+            db.add(cost_record)
+            await db.flush()
+
+        if patch.cost_per_sqft is not None:
+            cost_record.cost_per_sqft = f"{patch.cost_per_sqft:.2f}"
+
+        total_cost_value: Optional[float] = None
+        if patch.total_cost is not None:
+            total_cost_value = patch.total_cost
+        elif patch.cost_per_sqft is not None:
+            total_cost_value = patch.cost_per_sqft * _to_float(fab.total_sqft) * 2.1
+
+        if total_cost_value is not None:
+            total_cost_value = round(total_cost_value, 2)
+            cost_record.total_cost = f"{total_cost_value:.2f}"
+            fab.cost_of_stone = total_cost_value
+
+        cost_record.updated_at = now
+        cost_record.updated_by = current_user.id
+        if fab.cost_of_stone_id is None:
+            fab.cost_of_stone_id = cost_record.id
+
+    revision: Optional[Revision] = None
+    if patch.department is not None or patch.person_name is not None or patch.reason is not None:
+        revision = (
+            await db.execute(select(Revision).where(Revision.fab_id == fab.id))
+        ).scalar_one_or_none()
+
+        if revision is None:
+            revision = Revision(
+                fab_id=fab.id,
+                revision_type="ag_redo",
+                requested_by=current_user.id,
+                status_id=1,
+                created_at=now,
+                is_completed=False,
+            )
+            db.add(revision)
+
+        if patch.department is not None:
+            revision.department = patch.department
+        if patch.person_name is not None:
+            revision.person_name = patch.person_name
+        if patch.reason is not None:
+            revision.revision_notes = patch.reason
+
+        revision.updated_at = now
+        revision.updated_by = current_user.id
+
+    fab.updated_at = now
+    fab.updated_by = current_user.id
+
+    await db.commit()
+
+    current_cost_per_sqft = None
+    current_total_cost = None
+    if cost_record is not None:
+        current_cost_per_sqft = round(_to_float(cost_record.cost_per_sqft), 2) if cost_record.cost_per_sqft is not None else None
+        current_total_cost = round(_to_float(cost_record.total_cost), 2) if cost_record.total_cost is not None else round(_to_float(fab.cost_of_stone), 2)
+    elif fab.cost_of_stone_id:
+        existing_cost = await db.get(CostOfStone, fab.cost_of_stone_id)
+        if existing_cost:
+            current_cost_per_sqft = round(_to_float(existing_cost.cost_per_sqft), 2) if existing_cost.cost_per_sqft is not None else None
+            current_total_cost = round(_to_float(existing_cost.total_cost), 2) if existing_cost.total_cost is not None else round(_to_float(fab.cost_of_stone), 2)
+
+    if current_total_cost is None and fab.cost_of_stone is not None:
+        current_total_cost = round(_to_float(fab.cost_of_stone), 2)
+
+    persisted_revision = revision or (
+        await db.execute(select(Revision).where(Revision.fab_id == fab.id))
+    ).scalar_one_or_none()
+
+    return success_response(
+        {
+            "redo_id": fab.id,
+            "no_of_pieces": fab.no_of_pieces,
+            "sqft": round(_to_float(fab.total_sqft), 2),
+            "cost_per_sqft": current_cost_per_sqft,
+            "total_cost": current_total_cost,
+            "department": persisted_revision.department if persisted_revision else None,
+            "person_name": persisted_revision.person_name if persisted_revision else None,
+            "reason": persisted_revision.revision_notes if persisted_revision else None,
+        },
+        "Redo record updated successfully",
+    )
 
 
 def _range_bounds(start_date: Optional[date], end_date: Optional[date]) -> tuple[Optional[datetime], Optional[datetime]]:
@@ -192,6 +383,49 @@ def _to_float(value) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+async def _resolve_user_by_name(db: AsyncSession, installer_name: str) -> Optional[User]:
+    normalized = (installer_name or "").strip().lower()
+    if not normalized:
+        return None
+    like_value = f"%{normalized}%"
+    return (
+        await db.execute(
+            select(User)
+            .where(
+                or_(
+                    func.lower(User.first_name).like(like_value),
+                    func.lower(User.last_name).like(like_value),
+                    func.lower(User.username).like(like_value),
+                    func.lower(User.email).like(like_value),
+                    func.lower(
+                        func.concat(
+                            func.coalesce(User.first_name, ""),
+                            " ",
+                            func.coalesce(User.last_name, ""),
+                        )
+                    ).like(like_value),
+                )
+            )
+            .order_by(User.id.asc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def _get_latest_install_completion_for_fab(
+    db: AsyncSession,
+    fab_id: int,
+) -> Optional[InstallCompletion]:
+    return (
+        await db.execute(
+            select(InstallCompletion)
+            .where(InstallCompletion.fab_id == fab_id)
+            .order_by(InstallCompletion.completion_date.desc(), InstallCompletion.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
 
 
 def _safe_numeric_col(col):
@@ -2066,6 +2300,16 @@ async def get_owner_monthly_install_completion_report(
             Fab.fab_type,
             Fab.id,
             BusinessJob.job_number,
+            InstallCompletion.installer_id,
+            User.first_name.label("installer_first_name"),
+            User.last_name.label("installer_last_name"),
+            BusinessJob.name.label("job_name"),
+            Account.name.label("account_name"),
+            StoneType.name.label("stone_type_name"),
+            StoneColor.name.label("stone_color_name"),
+            Edge.name.label("edge_name"),
+            StoneThickness.thickness.label("stone_thickness_value"),
+            Fab.input_area,
             Fab.no_of_pieces,
             InstallCompletion.total_sqft_installed,
             Fab.revenue,
@@ -2075,6 +2319,12 @@ async def get_owner_monthly_install_completion_report(
         )
         .join(Fab, Fab.id == InstallCompletion.fab_id)
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .join(User, User.id == InstallCompletion.installer_id, isouter=True)
+        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+        .join(StoneType, StoneType.id == Fab.stone_type_id, isouter=True)
+        .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
+        .join(Edge, Edge.id == Fab.edge_id, isouter=True)
+        .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
         .join(CostOfStone, CostOfStone.id == Fab.cost_of_stone_id, isouter=True)
         .where(
             InstallCompletion.is_completed.is_(True),
@@ -2096,7 +2346,7 @@ async def get_owner_monthly_install_completion_report(
         "row_count": 0,
     })
 
-    for completion_date, fab_type, fab_id, job_number, pieces, sq_ft, revenue, fab_cost_of_stone, cos_total_cost, gp in records:
+    for completion_date, fab_type, fab_id, job_number, installer_id, installer_first_name, installer_last_name, job_name, account_name, stone_type_name, stone_color_name, edge_name, stone_thickness_value, input_area, pieces, sq_ft, revenue, fab_cost_of_stone, cos_total_cost, gp in records:
         sq_ft_value = round(_to_float(sq_ft), 2)
         revenue_value = round(_to_float(revenue), 2)
         cost_value = round(_to_float(fab_cost_of_stone if fab_cost_of_stone is not None else cos_total_cost), 2)
@@ -2104,6 +2354,9 @@ async def get_owner_monthly_install_completion_report(
         pieces_value = int(_to_float(pieces))
         revenue_per_sqft = round((revenue_value / sq_ft_value), 2) if sq_ft_value else 0.0
         day_key = completion_date.date().isoformat()
+        installer_name = f"{(installer_first_name or '').strip()} {(installer_last_name or '').strip()}".strip() or (
+            f"Installer {installer_id}" if installer_id else None
+        )
 
         daily_rollup[day_key]["pieces"] += pieces_value
         daily_rollup[day_key]["sq_ft"] += sq_ft_value
@@ -2118,6 +2371,14 @@ async def get_owner_monthly_install_completion_report(
                 "fab_type": fab_type,
                 "fab_id": fab_id,
                 "job_number": job_number,
+                "installer_name": installer_name,
+                "job_name": job_name,
+                "account_name": account_name,
+                "stone_type_name": stone_type_name,
+                "stone_color_name": stone_color_name,
+                "edge_name": edge_name,
+                "stone_thickness_value": stone_thickness_value,
+                "input_area": input_area,
                 "pieces": pieces_value,
                 "sq_ft": sq_ft_value,
                 "revenue": revenue_value,
@@ -2160,6 +2421,14 @@ async def get_owner_monthly_install_completion_report(
                 "fab_type",
                 "fab_id",
                 "job_number",
+                "installer_name",
+                "job_name",
+                "account_name",
+                "stone_type_name",
+                "stone_color_name",
+                "edge_name",
+                "stone_thickness_value",
+                "input_area",
                 "pieces",
                 "sq_ft",
                 "revenue",
@@ -2207,6 +2476,16 @@ async def get_owner_daily_install_completion_report(
             Fab.fab_type,
             Fab.id,
             BusinessJob.job_number,
+            InstallCompletion.installer_id,
+            User.first_name.label("installer_first_name"),
+            User.last_name.label("installer_last_name"),
+            BusinessJob.name.label("job_name"),
+            Account.name.label("account_name"),
+            StoneType.name.label("stone_type_name"),
+            StoneColor.name.label("stone_color_name"),
+            Edge.name.label("edge_name"),
+            StoneThickness.thickness.label("stone_thickness_value"),
+            Fab.input_area,
             Fab.no_of_pieces,
             InstallCompletion.total_sqft_installed,
             Fab.revenue,
@@ -2216,6 +2495,12 @@ async def get_owner_daily_install_completion_report(
         )
         .join(Fab, Fab.id == InstallCompletion.fab_id)
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .join(User, User.id == InstallCompletion.installer_id, isouter=True)
+        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+        .join(StoneType, StoneType.id == Fab.stone_type_id, isouter=True)
+        .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
+        .join(Edge, Edge.id == Fab.edge_id, isouter=True)
+        .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
         .join(CostOfStone, CostOfStone.id == Fab.cost_of_stone_id, isouter=True)
         .where(InstallCompletion.completion_date >= start_dt, InstallCompletion.completion_date <= end_dt)
         .order_by(InstallCompletion.completion_date.asc(), Fab.id.asc())
@@ -2233,7 +2518,7 @@ async def get_owner_daily_install_completion_report(
         "row_count": 0,
     })
 
-    for completion_date, fab_type, fab_id, job_number, pieces, sq_ft, revenue, fab_cost_of_stone, cos_total_cost, gp in records:
+    for completion_date, fab_type, fab_id, job_number, installer_id, installer_first_name, installer_last_name, job_name, account_name, stone_type_name, stone_color_name, edge_name, stone_thickness_value, input_area, pieces, sq_ft, revenue, fab_cost_of_stone, cos_total_cost, gp in records:
         sq_ft_value = round(_to_float(sq_ft), 2)
         revenue_value = round(_to_float(revenue), 2)
         cost_value = round(_to_float(fab_cost_of_stone if fab_cost_of_stone is not None else cos_total_cost), 2)
@@ -2241,6 +2526,9 @@ async def get_owner_daily_install_completion_report(
         pieces_value = int(_to_float(pieces))
         revenue_per_sqft = round((revenue_value / sq_ft_value), 2) if sq_ft_value else 0.0
         day_key = completion_date.date().isoformat()
+        installer_name = f"{(installer_first_name or '').strip()} {(installer_last_name or '').strip()}".strip() or (
+            f"Installer {installer_id}" if installer_id else None
+        )
 
         daily_rollup[day_key]["pieces"] += pieces_value
         daily_rollup[day_key]["sq_ft"] += sq_ft_value
@@ -2255,6 +2543,14 @@ async def get_owner_daily_install_completion_report(
                 "fab_type": fab_type,
                 "fab_id": fab_id,
                 "job_number": job_number,
+                "installer_name": installer_name,
+                "job_name": job_name,
+                "account_name": account_name,
+                "stone_type_name": stone_type_name,
+                "stone_color_name": stone_color_name,
+                "edge_name": edge_name,
+                "stone_thickness_value": stone_thickness_value,
+                "input_area": input_area,
                 "pieces": pieces_value,
                 "sq_ft": sq_ft_value,
                 "revenue": revenue_value,
@@ -2299,6 +2595,14 @@ async def get_owner_daily_install_completion_report(
                 "fab_type",
                 "fab_id",
                 "job_number",
+                "installer_name",
+                "job_name",
+                "account_name",
+                "stone_type_name",
+                "stone_color_name",
+                "edge_name",
+                "stone_thickness_value",
+                "input_area",
                 "pieces",
                 "sq_ft",
                 "revenue",
@@ -2339,6 +2643,13 @@ async def get_owner_monthly_cut_completion_report(
             Fab.fab_type,
             Fab.id,
             BusinessJob.job_number,
+            BusinessJob.name.label("job_name"),
+            Account.name.label("account_name"),
+            StoneType.name.label("stone_type_name"),
+            StoneColor.name.label("stone_color_name"),
+            Edge.name.label("edge_name"),
+            StoneThickness.thickness.label("stone_thickness_value"),
+            Fab.input_area,
             Fab.no_of_pieces,
             Fab.total_sqft,
             Fab.revenue,
@@ -2347,6 +2658,11 @@ async def get_owner_monthly_cut_completion_report(
             Fab.gp,
         )
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+        .join(StoneType, StoneType.id == Fab.stone_type_id, isouter=True)
+        .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
+        .join(Edge, Edge.id == Fab.edge_id, isouter=True)
+        .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
         .join(CostOfStone, CostOfStone.id == Fab.cost_of_stone_id, isouter=True)
         .join(CutList, CutList.fab_id == Fab.id, isouter=True)
         .where(cut_date_expr >= start_dt, cut_date_expr <= end_dt)
@@ -2365,7 +2681,7 @@ async def get_owner_monthly_cut_completion_report(
         "row_count": 0,
     })
 
-    for cut_date, fab_type, fab_id, job_number, pieces, sq_ft, revenue, fab_cost_of_stone, cos_total_cost, gp in records:
+    for cut_date, fab_type, fab_id, job_number, job_name, account_name, stone_type_name, stone_color_name, edge_name, stone_thickness_value, input_area, pieces, sq_ft, revenue, fab_cost_of_stone, cos_total_cost, gp in records:
         if cut_date is None:
             continue
 
@@ -2390,6 +2706,13 @@ async def get_owner_monthly_cut_completion_report(
                 "fab_type": fab_type,
                 "fab_id": fab_id,
                 "job_number": job_number,
+                "job_name": job_name,
+                "account_name": account_name,
+                "stone_type_name": stone_type_name,
+                "stone_color_name": stone_color_name,
+                "edge_name": edge_name,
+                "stone_thickness_value": stone_thickness_value,
+                "input_area": input_area,
                 "pieces": pieces_value,
                 "sq_ft": sq_ft_value,
                 "revenue": revenue_value,
@@ -2432,6 +2755,13 @@ async def get_owner_monthly_cut_completion_report(
                 "fab_type",
                 "fab_id",
                 "job_number",
+                "job_name",
+                "account_name",
+                "stone_type_name",
+                "stone_color_name",
+                "edge_name",
+                "stone_thickness_value",
+                "input_area",
                 "pieces",
                 "sq_ft",
                 "revenue",
@@ -2452,6 +2782,213 @@ async def get_owner_monthly_cut_completion_report(
             "rows": rows,
         },
         "Owner monthly cut completion report generated",
+    )
+
+
+@router.patch("/reports/owner/monthly-cut-completion/{monthly_cut_completion_id}", response_model=SuccessResponse[dict])
+async def patch_owner_monthly_cut_completion(
+    monthly_cut_completion_id: int,
+    patch: MonthlyCutCompletionPatchRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update monthly cut completion row fields by FAB id."""
+    if patch.revenue is None and patch.cost_of_stone is None and patch.revenue_per_sq_ft is None:
+        raise error_response("At least one field is required", 400)
+
+    fab = (await db.execute(select(Fab).where(Fab.id == monthly_cut_completion_id))).scalar_one_or_none()
+    if not fab:
+        raise error_response("Monthly cut completion record not found", 404)
+
+    now = datetime.now()
+
+    if patch.revenue is not None:
+        fab.revenue = round(patch.revenue, 2)
+    elif patch.revenue_per_sq_ft is not None:
+        sqft_value = _to_float(fab.total_sqft)
+        if sqft_value <= 0:
+            raise error_response("Cannot apply revenue_per_sq_ft when sq_ft is missing or zero", 400)
+        fab.revenue = round(patch.revenue_per_sq_ft * sqft_value, 2)
+
+    if patch.cost_of_stone is not None:
+        fab.cost_of_stone = round(patch.cost_of_stone, 2)
+        cost_record = None
+        if fab.cost_of_stone_id:
+            cost_record = await db.get(CostOfStone, fab.cost_of_stone_id)
+        if cost_record is None:
+            cost_record = (
+                await db.execute(select(CostOfStone).where(CostOfStone.fab_id == fab.id))
+            ).scalar_one_or_none()
+        if cost_record is None:
+            cost_record = CostOfStone(
+                fab_id=fab.id,
+                stone_color_id=fab.stone_color_id,
+                stone_type_id=fab.stone_type_id,
+                total_sqft=str(fab.total_sqft) if fab.total_sqft is not None else None,
+                total_cost=f"{patch.cost_of_stone:.2f}",
+                status_id=1,
+                created_at=now,
+                updated_at=now,
+                updated_by=current_user.id,
+            )
+            db.add(cost_record)
+            await db.flush()
+            fab.cost_of_stone_id = cost_record.id
+        else:
+            cost_record.total_cost = f"{patch.cost_of_stone:.2f}"
+            cost_record.updated_at = now
+            cost_record.updated_by = current_user.id
+
+    fab.updated_at = now
+    fab.updated_by = current_user.id
+    await db.commit()
+
+    current_sqft = round(_to_float(fab.total_sqft), 2)
+    current_revenue = round(_to_float(fab.revenue), 2)
+    current_cost = round(_to_float(fab.cost_of_stone), 2)
+
+    return success_response(
+        {
+            "monthly_cut_completion_id": monthly_cut_completion_id,
+            "fab_id": fab.id,
+            "revenue": current_revenue,
+            "cost_of_stone": current_cost,
+            "revenue_per_sq_ft": round((current_revenue / current_sqft), 2) if current_sqft else 0.0,
+        },
+        "Monthly cut completion record updated successfully",
+    )
+
+
+@router.patch("/reports/owner/monthly-install-completion/{monthly_install_completion_id}", response_model=SuccessResponse[dict])
+async def patch_owner_monthly_install_completion(
+    monthly_install_completion_id: int,
+    patch: MonthlyInstallCompletionPatchRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update monthly install completion row fields by FAB id."""
+    if (
+        patch.revenue is None
+        and patch.sq_ft is None
+        and patch.revenue_per_sq_ft is None
+        and patch.installer_name is None
+    ):
+        raise error_response("At least one field is required", 400)
+
+    fab = (await db.execute(select(Fab).where(Fab.id == monthly_install_completion_id))).scalar_one_or_none()
+    if not fab:
+        raise error_response("Monthly install completion record not found", 404)
+
+    completion = await _get_latest_install_completion_for_fab(db, fab.id)
+    if completion is None:
+        raise error_response("Install completion record not found for this FAB", 404)
+
+    now = datetime.now()
+
+    if patch.sq_ft is not None:
+        completion.total_sqft_installed = f"{patch.sq_ft:.2f}"
+
+    if patch.revenue is not None:
+        fab.revenue = round(patch.revenue, 2)
+    elif patch.revenue_per_sq_ft is not None:
+        sqft_value = patch.sq_ft if patch.sq_ft is not None else _to_float(completion.total_sqft_installed)
+        if sqft_value <= 0:
+            raise error_response("Cannot apply revenue_per_sq_ft when sq_ft is missing or zero", 400)
+        fab.revenue = round(patch.revenue_per_sq_ft * sqft_value, 2)
+
+    installer = None
+    if patch.installer_name is not None:
+        installer = await _resolve_user_by_name(db, patch.installer_name)
+        if installer is None:
+            raise error_response("Installer not found", 404)
+        completion.installer_id = installer.id
+
+    completion.updated_at = now
+    completion.updated_by = current_user.id
+    fab.updated_at = now
+    fab.updated_by = current_user.id
+
+    await db.commit()
+
+    if installer is None and completion.installer_id:
+        installer = await db.get(User, completion.installer_id)
+
+    installer_name = None
+    if installer is not None:
+        installer_name = f"{(installer.first_name or '').strip()} {(installer.last_name or '').strip()}".strip() or f"Installer {installer.id}"
+
+    current_sqft = round(_to_float(completion.total_sqft_installed), 2)
+    current_revenue = round(_to_float(fab.revenue), 2)
+
+    return success_response(
+        {
+            "monthly_install_completion_id": monthly_install_completion_id,
+            "fab_id": fab.id,
+            "revenue": current_revenue,
+            "sq_ft": current_sqft,
+            "revenue_per_sq_ft": round((current_revenue / current_sqft), 2) if current_sqft else 0.0,
+            "installer_name": installer_name,
+        },
+        "Monthly install completion record updated successfully",
+    )
+
+
+@router.patch("/reports/owner/daily-install-completion/{daily_install_completion_id}", response_model=SuccessResponse[dict])
+async def patch_owner_daily_install_completion(
+    daily_install_completion_id: int,
+    patch: DailyInstallCompletionPatchRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update daily install completion row fields by FAB id."""
+    if patch.revenue is None and patch.sq_ft is None and patch.installer_name is None:
+        raise error_response("At least one field is required", 400)
+
+    fab = (await db.execute(select(Fab).where(Fab.id == daily_install_completion_id))).scalar_one_or_none()
+    if not fab:
+        raise error_response("Daily install completion record not found", 404)
+
+    completion = await _get_latest_install_completion_for_fab(db, fab.id)
+    if completion is None:
+        raise error_response("Install completion record not found for this FAB", 404)
+
+    now = datetime.now()
+
+    if patch.revenue is not None:
+        fab.revenue = round(patch.revenue, 2)
+    if patch.sq_ft is not None:
+        completion.total_sqft_installed = f"{patch.sq_ft:.2f}"
+
+    installer = None
+    if patch.installer_name is not None:
+        installer = await _resolve_user_by_name(db, patch.installer_name)
+        if installer is None:
+            raise error_response("Installer not found", 404)
+        completion.installer_id = installer.id
+
+    completion.updated_at = now
+    completion.updated_by = current_user.id
+    fab.updated_at = now
+    fab.updated_by = current_user.id
+
+    await db.commit()
+
+    if installer is None and completion.installer_id:
+        installer = await db.get(User, completion.installer_id)
+
+    installer_name = None
+    if installer is not None:
+        installer_name = f"{(installer.first_name or '').strip()} {(installer.last_name or '').strip()}".strip() or f"Installer {installer.id}"
+
+    return success_response(
+        {
+            "daily_install_completion_id": daily_install_completion_id,
+            "fab_id": fab.id,
+            "revenue": round(_to_float(fab.revenue), 2),
+            "sq_ft": round(_to_float(completion.total_sqft_installed), 2),
+            "installer_name": installer_name,
+        },
+        "Daily install completion record updated successfully",
     )
 
 

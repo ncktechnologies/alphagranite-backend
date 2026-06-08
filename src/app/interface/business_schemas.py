@@ -1024,6 +1024,7 @@ class ShopRevisionCreate(BaseModel):
 
 class ShopRevisionUpdate(BaseModel):
     revision_note: Optional[str] = Field(default=None, min_length=1)
+    revision_feedback: Optional[str] = Field(default=None)
     assigned_to: Optional[int] = Field(default=None, gt=0)
     revision_completed: Optional[bool] = None
 
@@ -1032,6 +1033,7 @@ class ShopRevisionResponse(BaseModel):
     id: int
     fab_id: int
     revision_note: str
+    revision_feedback: Optional[str]
     requested_by: int
     assigned_to: Optional[int]
     revision_completed: bool
