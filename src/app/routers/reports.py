@@ -194,6 +194,16 @@ def _to_float(value) -> float:
         return 0.0
 
 
+def _safe_numeric_col(col):
+    """Cast a text column to Numeric, silently returning NULL for non-numeric values.
+
+    Uses PostgreSQL regexp_replace to strip non-numeric characters and NULLIF to
+    convert the empty-string case to NULL before casting, so rows that contain
+    placeholder text (e.g. 'string') never raise InvalidTextRepresentationError.
+    """
+    return cast(func.nullif(func.regexp_replace(col, '[^0-9.]', '', 'g'), ''), Numeric)
+
+
 def _rows_from_mapping(value: dict) -> list[dict]:
     return [{"metric": k, "value": v} for k, v in value.items()]
 
@@ -556,7 +566,7 @@ async def get_owner_weekly_fabrication_labor_cost_report(
 
             cut_metrics = (
                 await db.execute(
-                    select(func.sum(cast(Fab.saw_cut_lnft, Numeric)), func.sum(cast(Fab.total_sqft, Numeric))).where(
+                    select(func.sum(_safe_numeric_col(Fab.saw_cut_lnft)), func.sum(_safe_numeric_col(Fab.total_sqft))).where(
                         Fab.shop_date_schedule >= week_start_dt,
                         Fab.shop_date_schedule <= week_end_dt,
                     )
@@ -566,9 +576,9 @@ async def get_owner_weekly_fabrication_labor_cost_report(
             completion_metrics = (
                 await db.execute(
                     select(
-                        func.sum(cast(InstallCompletion.total_sqft_installed, Numeric)),
-                        func.sum(cast(Fab.revenue, Numeric)),
-                        func.sum(cast(Fab.gp, Numeric)),
+                        func.sum(_safe_numeric_col(InstallCompletion.total_sqft_installed)),
+                        func.sum(_safe_numeric_col(Fab.revenue)),
+                        func.sum(_safe_numeric_col(Fab.gp)),
                     )
                     .join(Fab, Fab.id == InstallCompletion.fab_id, isouter=True)
                     .where(
@@ -808,7 +818,7 @@ async def get_owner_weekly_installer_labor_cost_report(
 
             install_sqft_row = (
                 await db.execute(
-                    select(func.sum(cast(InstallScheduling.total_sqft, Numeric))).where(
+                    select(func.sum(_safe_numeric_col(InstallScheduling.total_sqft))).where(
                         InstallScheduling.scheduled_install_date >= week_start_dt,
                         InstallScheduling.scheduled_install_date <= week_end_dt,
                     )
@@ -818,9 +828,9 @@ async def get_owner_weekly_installer_labor_cost_report(
             completion_metrics = (
                 await db.execute(
                     select(
-                        func.sum(cast(InstallCompletion.total_sqft_installed, Numeric)),
-                        func.sum(cast(Fab.revenue, Numeric)),
-                        func.sum(cast(Fab.gp, Numeric)),
+                        func.sum(_safe_numeric_col(InstallCompletion.total_sqft_installed)),
+                        func.sum(_safe_numeric_col(Fab.revenue)),
+                        func.sum(_safe_numeric_col(Fab.gp)),
                     )
                     .join(Fab, Fab.id == InstallCompletion.fab_id, isouter=True)
                     .where(
