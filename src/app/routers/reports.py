@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, case, cast, func, literal_column, or_, select
-from sqlalchemy import Numeric
+from sqlalchemy import Numeric, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.database import get_db
@@ -201,7 +201,11 @@ def _safe_numeric_col(col):
     convert the empty-string case to NULL before casting, so rows that contain
     placeholder text (e.g. 'string') never raise InvalidTextRepresentationError.
     """
-    return cast(func.nullif(func.regexp_replace(col, '[^0-9.]', '', 'g'), ''), Numeric)
+    # Cast to TEXT first so regexp_replace works regardless of whether the column
+    # is stored as text or a numeric type (double precision, numeric, etc.).
+    # Then strip non-numeric chars, convert empty string to NULL, and cast to NUMERIC.
+    text_col = cast(col, String)
+    return cast(func.nullif(func.regexp_replace(text_col, '[^0-9.]', '', 'g'), ''), Numeric)
 
 
 def _rows_from_mapping(value: dict) -> list[dict]:
