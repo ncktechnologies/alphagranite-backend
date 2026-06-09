@@ -66,12 +66,14 @@ class MonthlyInstallCompletionPatchRequest(BaseModel):
     revenue: Optional[float] = Field(default=None, ge=0)
     sq_ft: Optional[float] = Field(default=None, ge=0)
     revenue_per_sq_ft: Optional[float] = Field(default=None, ge=0)
+    installer_id: Optional[int] = Field(default=None, gt=0)
     installer_name: Optional[str] = None
 
 
 class DailyInstallCompletionPatchRequest(BaseModel):
     revenue: Optional[float] = Field(default=None, ge=0)
     sq_ft: Optional[float] = Field(default=None, ge=0)
+    installer_id: Optional[int] = Field(default=None, gt=0)
     installer_name: Optional[str] = None
 
 
@@ -2371,6 +2373,7 @@ async def get_owner_monthly_install_completion_report(
                 "fab_type": fab_type,
                 "fab_id": fab_id,
                 "job_number": job_number,
+            "installer_id": installer_id,
                 "installer_name": installer_name,
                 "job_name": job_name,
                 "account_name": account_name,
@@ -2421,6 +2424,7 @@ async def get_owner_monthly_install_completion_report(
                 "fab_type",
                 "fab_id",
                 "job_number",
+                "installer_id",
                 "installer_name",
                 "job_name",
                 "account_name",
@@ -2543,6 +2547,7 @@ async def get_owner_daily_install_completion_report(
                 "fab_type": fab_type,
                 "fab_id": fab_id,
                 "job_number": job_number,
+            "installer_id": installer_id,
                 "installer_name": installer_name,
                 "job_name": job_name,
                 "account_name": account_name,
@@ -2595,6 +2600,7 @@ async def get_owner_daily_install_completion_report(
                 "fab_type",
                 "fab_id",
                 "job_number",
+                "installer_id",
                 "installer_name",
                 "job_name",
                 "account_name",
@@ -2871,6 +2877,7 @@ async def patch_owner_monthly_install_completion(
         patch.revenue is None
         and patch.sq_ft is None
         and patch.revenue_per_sq_ft is None
+        and patch.installer_id is None
         and patch.installer_name is None
     ):
         raise error_response("At least one field is required", 400)
@@ -2897,7 +2904,12 @@ async def patch_owner_monthly_install_completion(
         fab.revenue = round(patch.revenue_per_sq_ft * sqft_value, 2)
 
     installer = None
-    if patch.installer_name is not None:
+    if patch.installer_id is not None:
+        installer = await db.get(User, patch.installer_id)
+        if installer is None:
+            raise error_response("Installer not found", 404)
+        completion.installer_id = installer.id
+    elif patch.installer_name is not None:
         installer = await _resolve_user_by_name(db, patch.installer_name)
         if installer is None:
             raise error_response("Installer not found", 404)
@@ -2927,6 +2939,7 @@ async def patch_owner_monthly_install_completion(
             "revenue": current_revenue,
             "sq_ft": current_sqft,
             "revenue_per_sq_ft": round((current_revenue / current_sqft), 2) if current_sqft else 0.0,
+            "installer_id": completion.installer_id,
             "installer_name": installer_name,
         },
         "Monthly install completion record updated successfully",
@@ -2941,7 +2954,7 @@ async def patch_owner_daily_install_completion(
     current_user: User = Depends(get_current_user),
 ):
     """Update daily install completion row fields by FAB id."""
-    if patch.revenue is None and patch.sq_ft is None and patch.installer_name is None:
+    if patch.revenue is None and patch.sq_ft is None and patch.installer_id is None and patch.installer_name is None:
         raise error_response("At least one field is required", 400)
 
     fab = (await db.execute(select(Fab).where(Fab.id == daily_install_completion_id))).scalar_one_or_none()
@@ -2960,7 +2973,12 @@ async def patch_owner_daily_install_completion(
         completion.total_sqft_installed = f"{patch.sq_ft:.2f}"
 
     installer = None
-    if patch.installer_name is not None:
+    if patch.installer_id is not None:
+        installer = await db.get(User, patch.installer_id)
+        if installer is None:
+            raise error_response("Installer not found", 404)
+        completion.installer_id = installer.id
+    elif patch.installer_name is not None:
         installer = await _resolve_user_by_name(db, patch.installer_name)
         if installer is None:
             raise error_response("Installer not found", 404)
@@ -2986,6 +3004,7 @@ async def patch_owner_daily_install_completion(
             "fab_id": fab.id,
             "revenue": round(_to_float(fab.revenue), 2),
             "sq_ft": round(_to_float(completion.total_sqft_installed), 2),
+            "installer_id": completion.installer_id,
             "installer_name": installer_name,
         },
         "Daily install completion record updated successfully",
