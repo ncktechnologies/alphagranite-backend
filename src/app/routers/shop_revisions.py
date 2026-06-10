@@ -35,6 +35,7 @@ def _serialize_shop_revision(revision: ShopRevision) -> dict:
         "id": revision.id,
         "fab_id": revision.fab_id,
         "revision_note": revision.revision_note,
+        "revision_feedback": revision.revision_feedback,
         "requested_by": revision.requested_by,
         "assigned_to": revision.assigned_to,
         "revision_completed": revision.revision_completed,
@@ -182,6 +183,25 @@ async def get_shop_revisions(
     return success_response(pending_rows, "Shop revisions retrieved successfully")
 
 
+@router.get("/count", response_model=SuccessResponse[dict])
+async def get_shop_revisions_count(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get total number of pending shop revisions for sidebar badge display."""
+    _ = current_user
+
+    count_result = await db.execute(
+        select(func.count(ShopRevision.id)).where(ShopRevision.revision_completed.is_(False))
+    )
+    pending_count = int(count_result.scalar() or 0)
+
+    return success_response(
+        {"count": pending_count},
+        "Shop revision count retrieved successfully",
+    )
+
+
 @router.get("/fab/{fab_id}", response_model=SuccessResponse[List[dict]])
 async def get_shop_revisions_by_fab(
     fab_id: int,
@@ -269,6 +289,7 @@ async def get_fabs_with_pending_shop_revisions(
             latest_revision_by_fab[revision.fab_id] = {
                 "id": revision.id,
                 "revision_note": revision.revision_note,
+                "revision_feedback": revision.revision_feedback,
                 "requested_by": revision.requested_by,
                 "assigned_to": revision.assigned_to,
                 "revision_completed": revision.revision_completed,
@@ -315,6 +336,8 @@ async def complete_shop_revision(
     now = datetime.now()
     if revision_data and revision_data.revision_note:
         revision.revision_note = revision_data.revision_note
+    if revision_data and revision_data.revision_feedback is not None:
+        revision.revision_feedback = revision_data.revision_feedback
     if revision_data and revision_data.assigned_to is not None:
         assigned_to_user = (
             await db.execute(select(User).where(User.id == revision_data.assigned_to))

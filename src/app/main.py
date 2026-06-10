@@ -57,6 +57,7 @@ from src.app.routers import shop_cut_plan
 from src.app.routers import job_timers
 from src.app.routers import job_fab_listing
 from src.app.routers import cnc
+from src.app.routers import mcp
 from src.app.routers import reports
 from src.app.service.monthly_end_of_month_status_report import start_monthly_status_report_scheduler
 from src.app.service.monthly_end_of_month_status_report import stop_monthly_status_report_scheduler
@@ -294,6 +295,7 @@ app.include_router(job_timers.router, prefix="/api/v1", tags=["Job Timers"])
 app.include_router(job_fab_listing.router, prefix="/api/v1", tags=["Job Fab Listing"])
 app.include_router(cnc.router, prefix="/api/v1", tags=["CNC Drafting"])
 app.include_router(reports.router, prefix="/api/v1", tags=["Reports"])
+app.include_router(mcp.router, prefix="/api/v1", tags=["MCP"])
 
 
 
