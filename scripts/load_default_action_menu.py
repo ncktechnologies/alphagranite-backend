@@ -62,6 +62,7 @@ def load_default_action_menu():
             ("Edges", "edges"),
             ("Accounts", "accounts"),
             ("FAB IDs", "fabids"),
+            ("Reports", "reports"),
         ]
 
         # Insert action menu items idempotently (check by code)
