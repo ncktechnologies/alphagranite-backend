@@ -324,18 +324,18 @@ class FabUpdate(BaseModel):
     # Final Programming tracking
     confirmed_date: Optional[datetime] = Field(None, description="Final programming confirmed date")
     wj_time_minutes: Optional[int] = Field(None, gt=0, description="Waterjet time in minutes")
-    wj_linft: float = Field(..., ge=0, description="Waterjet linear feet")
-    edging_linft: float = Field(..., ge=0, description="Edging linear feet")
-    cnc_linft: float = Field(..., ge=0, description="CNC linear feet")
-    miter_linft: float = Field(..., ge=0, description="Miter linear feet")
+    wj_linft: Optional[float] = Field(None, ge=0, description="Waterjet linear feet")
+    edging_linft: Optional[float] = Field(None, ge=0, description="Edging linear feet")
+    cnc_linft: Optional[float] = Field(None, ge=0, description="CNC linear feet")
+    miter_linft: Optional[float] = Field(None, ge=0, description="Miter linear feet")
     installation_date: Optional[datetime] = Field(None, description="Installation date")
     current_stage: Optional[str] = None
     next_stage: Optional[str] = None
     status_id: Optional[int] = None
     cost_of_stone_id: Optional[int] = Field(None, description="Cost of stone record ID")
     cost_of_stone: Optional[Decimal] = Field(None, description="Cost of stone amount")
-    saw_cut_lnft: float = Field(
-        ...,
+    saw_cut_lnft: Optional[float] = Field(
+        None,
         ge=0,
         description="Saw cut linear feet",
         validation_alias=AliasChoices("saw_cut_lnft", "saw_cut_linft"),
