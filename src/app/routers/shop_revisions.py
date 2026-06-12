@@ -9,7 +9,11 @@ from sqlalchemy.orm import aliased
 from src.app.database import get_db
 from src.app.database.account import Account
 from src.app.database.business_job import BusinessJob
+from src.app.database.edge import Edge
 from src.app.database.fab import Fab
+from src.app.database.stone_color import StoneColor
+from src.app.database.stone_thickness import StoneThickness
+from src.app.database.stone_type import StoneType
 from src.app.database.user import User
 from src.app.interface.generated_schemas import ShopRevision
 from src.app.interface.business_schemas import (
@@ -261,9 +265,13 @@ async def get_fabs_with_pending_shop_revisions(
 
     fab_rows = (
         await db.execute(
-            select(Fab, BusinessJob, Account)
+            select(Fab, BusinessJob, Account, StoneType, StoneColor, StoneThickness, Edge)
             .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
             .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+            .join(StoneType, StoneType.id == Fab.stone_type_id, isouter=True)
+            .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
+            .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
+            .join(Edge, Edge.id == Fab.edge_id, isouter=True)
             .where(Fab.id.in_(fab_ids))
             .order_by(Fab.id.desc())
         )
@@ -300,7 +308,7 @@ async def get_fabs_with_pending_shop_revisions(
             }
 
     data = []
-    for fab, job, account in fab_rows:
+    for fab, job, account, stone_type, stone_color, stone_thickness, edge in fab_rows:
         data.append(
             {
                 "fab_id": fab.id,
@@ -309,6 +317,11 @@ async def get_fabs_with_pending_shop_revisions(
                 "job_name": job.name if job else None,
                 "account_name": account.name if account else None,
                 "fab_type": fab.fab_type,
+                "input_area": fab.input_area,
+                "stone_type_name": stone_type.name if stone_type else None,
+                "stone_color_name": stone_color.name if stone_color else None,
+                "stone_thickness_value": stone_thickness.thickness if stone_thickness else None,
+                "edge_name": edge.name if edge else None,
                 "current_stage": fab.current_stage,
                 "status_id": fab.status_id,
                 "pending_revision_count": counts.get(fab.id, 0),

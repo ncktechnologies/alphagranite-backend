@@ -2290,11 +2290,19 @@ async def get_owner_installation_template_report(
 async def get_owner_monthly_install_completion_report(
     year: int = Query(..., ge=2000, le=2100),
     month: int = Query(..., ge=1, le=12),
+    fab_type: Optional[str] = Query(None, description="Optional FAB type filter"),
+    fab_type_sort: str = Query("asc", pattern="^(asc|desc)$", description="Sort order for FAB type"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Monthly install completion report modeled after legacy spreadsheet format."""
     start_dt, end_dt = _month_bounds(year, month)
+    fab_type_sort_normalized = (fab_type_sort or "asc").strip().lower()
+    fab_type_order = (
+        func.lower(Fab.fab_type).desc()
+        if fab_type_sort_normalized == "desc"
+        else func.lower(Fab.fab_type).asc()
+    )
 
     query = (
         select(
@@ -2317,7 +2325,6 @@ async def get_owner_monthly_install_completion_report(
             Fab.revenue,
             Fab.cost_of_stone,
             CostOfStone.total_cost,
-            Fab.gp,
         )
         .join(Fab, Fab.id == InstallCompletion.fab_id)
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
@@ -2333,8 +2340,11 @@ async def get_owner_monthly_install_completion_report(
             InstallCompletion.completion_date >= start_dt,
             InstallCompletion.completion_date <= end_dt,
         )
-        .order_by(InstallCompletion.completion_date.asc(), Fab.id.asc())
+        .order_by(InstallCompletion.completion_date.asc(), fab_type_order, Fab.id.asc())
     )
+
+    if fab_type:
+        query = query.where(func.lower(Fab.fab_type) == fab_type.strip().lower())
 
     records = (await db.execute(query)).all()
 
@@ -2348,11 +2358,11 @@ async def get_owner_monthly_install_completion_report(
         "row_count": 0,
     })
 
-    for completion_date, fab_type, fab_id, job_number, installer_id, installer_first_name, installer_last_name, job_name, account_name, stone_type_name, stone_color_name, edge_name, stone_thickness_value, input_area, pieces, sq_ft, revenue, fab_cost_of_stone, cos_total_cost, gp in records:
+    for completion_date, row_fab_type, fab_id, job_number, installer_id, installer_first_name, installer_last_name, job_name, account_name, stone_type_name, stone_color_name, edge_name, stone_thickness_value, input_area, pieces, sq_ft, revenue, fab_cost_of_stone, cos_total_cost in records:
         sq_ft_value = round(_to_float(sq_ft), 2)
         revenue_value = round(_to_float(revenue), 2)
         cost_value = round(_to_float(fab_cost_of_stone if fab_cost_of_stone is not None else cos_total_cost), 2)
-        gp_value = round(_to_float(gp), 2)
+        gp_value = round(revenue_value - cost_value, 2)
         pieces_value = int(_to_float(pieces))
         revenue_per_sqft = round((revenue_value / sq_ft_value), 2) if sq_ft_value else 0.0
         day_key = completion_date.date().isoformat()
@@ -2370,10 +2380,10 @@ async def get_owner_monthly_install_completion_report(
         rows.append(
             {
                 "install_date": day_key,
-                "fab_type": fab_type,
+                "fab_type": row_fab_type,
                 "fab_id": fab_id,
                 "job_number": job_number,
-            "installer_id": installer_id,
+                "installer_id": installer_id,
                 "installer_name": installer_name,
                 "job_name": job_name,
                 "account_name": account_name,
@@ -2460,6 +2470,8 @@ async def get_owner_monthly_install_completion_report(
 async def get_owner_daily_install_completion_report(
     start_date: Optional[date] = Query(None, description="Inclusive start date filter"),
     end_date: Optional[date] = Query(None, description="Inclusive end date filter"),
+    fab_type: Optional[str] = Query(None, description="Optional FAB type filter"),
+    fab_type_sort: str = Query("asc", pattern="^(asc|desc)$", description="Sort order for FAB type"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -2473,6 +2485,12 @@ async def get_owner_daily_install_completion_report(
         end_date = start_date
 
     start_dt, end_dt = _range_bounds(start_date, end_date)
+    fab_type_sort_normalized = (fab_type_sort or "asc").strip().lower()
+    fab_type_order = (
+        func.lower(Fab.fab_type).desc()
+        if fab_type_sort_normalized == "desc"
+        else func.lower(Fab.fab_type).asc()
+    )
 
     query = (
         select(
@@ -2495,7 +2513,6 @@ async def get_owner_daily_install_completion_report(
             Fab.revenue,
             Fab.cost_of_stone,
             CostOfStone.total_cost,
-            Fab.gp,
         )
         .join(Fab, Fab.id == InstallCompletion.fab_id)
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
@@ -2507,8 +2524,11 @@ async def get_owner_daily_install_completion_report(
         .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
         .join(CostOfStone, CostOfStone.id == Fab.cost_of_stone_id, isouter=True)
         .where(InstallCompletion.completion_date >= start_dt, InstallCompletion.completion_date <= end_dt)
-        .order_by(InstallCompletion.completion_date.asc(), Fab.id.asc())
+        .order_by(InstallCompletion.completion_date.asc(), fab_type_order, Fab.id.asc())
     )
+
+    if fab_type:
+        query = query.where(func.lower(Fab.fab_type) == fab_type.strip().lower())
 
     records = (await db.execute(query)).all()
 
@@ -2522,11 +2542,11 @@ async def get_owner_daily_install_completion_report(
         "row_count": 0,
     })
 
-    for completion_date, fab_type, fab_id, job_number, installer_id, installer_first_name, installer_last_name, job_name, account_name, stone_type_name, stone_color_name, edge_name, stone_thickness_value, input_area, pieces, sq_ft, revenue, fab_cost_of_stone, cos_total_cost, gp in records:
+    for completion_date, row_fab_type, fab_id, job_number, installer_id, installer_first_name, installer_last_name, job_name, account_name, stone_type_name, stone_color_name, edge_name, stone_thickness_value, input_area, pieces, sq_ft, revenue, fab_cost_of_stone, cos_total_cost in records:
         sq_ft_value = round(_to_float(sq_ft), 2)
         revenue_value = round(_to_float(revenue), 2)
         cost_value = round(_to_float(fab_cost_of_stone if fab_cost_of_stone is not None else cos_total_cost), 2)
-        gp_value = round(_to_float(gp), 2)
+        gp_value = round(revenue_value - cost_value, 2)
         pieces_value = int(_to_float(pieces))
         revenue_per_sqft = round((revenue_value / sq_ft_value), 2) if sq_ft_value else 0.0
         day_key = completion_date.date().isoformat()
@@ -2544,10 +2564,10 @@ async def get_owner_daily_install_completion_report(
         rows.append(
             {
                 "install_date": day_key,
-                "fab_type": fab_type,
+                "fab_type": row_fab_type,
                 "fab_id": fab_id,
                 "job_number": job_number,
-            "installer_id": installer_id,
+                "installer_id": installer_id,
                 "installer_name": installer_name,
                 "job_name": job_name,
                 "account_name": account_name,
@@ -2636,12 +2656,20 @@ async def get_owner_daily_install_completion_report(
 async def get_owner_monthly_cut_completion_report(
     year: int = Query(..., ge=2000, le=2100),
     month: int = Query(..., ge=1, le=12),
+    fab_type: Optional[str] = Query(None, description="Optional FAB type filter"),
+    fab_type_sort: str = Query("asc", pattern="^(asc|desc)$", description="Sort order for FAB type"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Monthly cut completion report modeled after legacy spreadsheet format."""
     start_dt, end_dt = _month_bounds(year, month)
     cut_date_expr = func.coalesce(Fab.shop_date_schedule, Fab.final_programming_completed_date)
+    fab_type_sort_normalized = (fab_type_sort or "asc").strip().lower()
+    fab_type_order = (
+        func.lower(Fab.fab_type).desc()
+        if fab_type_sort_normalized == "desc"
+        else func.lower(Fab.fab_type).asc()
+    )
 
     query = (
         select(
@@ -2661,7 +2689,6 @@ async def get_owner_monthly_cut_completion_report(
             Fab.revenue,
             Fab.cost_of_stone,
             CostOfStone.total_cost,
-            Fab.gp,
         )
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
         .join(Account, Account.id == BusinessJob.account_id, isouter=True)
@@ -2672,8 +2699,11 @@ async def get_owner_monthly_cut_completion_report(
         .join(CostOfStone, CostOfStone.id == Fab.cost_of_stone_id, isouter=True)
         .join(CutList, CutList.fab_id == Fab.id, isouter=True)
         .where(cut_date_expr >= start_dt, cut_date_expr <= end_dt)
-        .order_by(cut_date_expr.asc(), Fab.id.asc())
+        .order_by(cut_date_expr.asc(), fab_type_order, Fab.id.asc())
     )
+
+    if fab_type:
+        query = query.where(func.lower(Fab.fab_type) == fab_type.strip().lower())
 
     records = (await db.execute(query)).all()
 
@@ -2687,14 +2717,14 @@ async def get_owner_monthly_cut_completion_report(
         "row_count": 0,
     })
 
-    for cut_date, fab_type, fab_id, job_number, job_name, account_name, stone_type_name, stone_color_name, edge_name, stone_thickness_value, input_area, pieces, sq_ft, revenue, fab_cost_of_stone, cos_total_cost, gp in records:
+    for cut_date, row_fab_type, fab_id, job_number, job_name, account_name, stone_type_name, stone_color_name, edge_name, stone_thickness_value, input_area, pieces, sq_ft, revenue, fab_cost_of_stone, cos_total_cost in records:
         if cut_date is None:
             continue
 
         sq_ft_value = round(_to_float(sq_ft), 2)
         revenue_value = round(_to_float(revenue), 2)
         cost_value = round(_to_float(fab_cost_of_stone if fab_cost_of_stone is not None else cos_total_cost), 2)
-        gp_value = round(_to_float(gp), 2)
+        gp_value = round(revenue_value - cost_value, 2)
         pieces_value = int(_to_float(pieces))
         revenue_per_sqft = round((revenue_value / sq_ft_value), 2) if sq_ft_value else 0.0
         day_key = cut_date.date().isoformat()
@@ -2709,7 +2739,7 @@ async def get_owner_monthly_cut_completion_report(
         rows.append(
             {
                 "cut_date": day_key,
-                "fab_type": fab_type,
+                "fab_type": row_fab_type,
                 "fab_id": fab_id,
                 "job_number": job_number,
                 "job_name": job_name,
