@@ -693,6 +693,14 @@ def _report_sections(report_key: str, data: dict, layout: str = "default") -> li
             ("installation_template_rows", data.get("rows", [])),
         ]
 
+    if report_key == "installation-template-dashboard":
+        summary_rows = _rows_from_mapping(data.get("summary", {}))
+        return [
+            ("summary", summary_rows),
+            ("installation_template_groups", data.get("groups", [])),
+            ("installation_template_rows", data.get("rows", [])),
+        ]
+
     if report_key == "monthly-install-completion":
         summary_rows = _rows_from_mapping(data.get("summary", {}))
         return [
@@ -2379,6 +2387,331 @@ async def get_owner_installation_template_report(
             "rows": rows,
         },
         "Owner installation and template report generated",
+    )
+
+
+@router.get("/reports/owner/installation-template-dashboard", response_model=SuccessResponse[dict])
+async def get_owner_installation_template_dashboard_report(
+    from_date: Optional[date] = Query(None, description="Inclusive from date filter"),
+    to_date: Optional[date] = Query(None, description="Inclusive to date filter"),
+    search: Optional[str] = Query(None, description="Search by job name, job number, or FAB ID"),
+    fab_type: Optional[str] = Query(None, description="Optional FAB type filter"),
+    sales_person_id: Optional[int] = Query(None, gt=0, description="Optional sales person filter"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Grouped installation and template dashboard report for the screenshot-based UI."""
+    _ = current_user
+    start_dt, end_dt = _range_bounds(from_date, to_date)
+    from sqlalchemy.orm import aliased
+
+    InstallerUser = aliased(User)
+    SalesPersonUser = aliased(User)
+
+    def _matches_common_filters(base_query, activity_date_field):
+        if start_dt is not None:
+            base_query = base_query.where(activity_date_field >= start_dt)
+        if end_dt is not None:
+            base_query = base_query.where(activity_date_field <= end_dt)
+        if fab_type:
+            base_query = base_query.where(func.lower(Fab.fab_type) == fab_type.strip().lower())
+        if sales_person_id is not None:
+            base_query = base_query.where(Fab.sales_person_id == sales_person_id)
+        if search:
+            search_term = f"%{search.strip()}%"
+            base_query = base_query.where(
+                or_(
+                    BusinessJob.job_number.ilike(search_term),
+                    BusinessJob.name.ilike(search_term),
+                    cast(Fab.id, String).ilike(search_term),
+                )
+            )
+        return base_query
+
+    grouped_rows_map: dict[str, dict] = {}
+    flat_rows: list[dict] = []
+
+    install_query = _matches_common_filters(
+        select(
+            InstallCompletion.installer_id,
+            InstallerUser.first_name.label("installer_first_name"),
+            InstallerUser.last_name.label("installer_last_name"),
+            BusinessJob.job_number,
+            BusinessJob.name.label("job_name"),
+            Fab.id.label("fab_id"),
+            Fab.fab_type,
+            Fab.sales_person_id,
+            SalesPersonUser.first_name.label("sales_person_first_name"),
+            SalesPersonUser.last_name.label("sales_person_last_name"),
+            InstallCompletion.is_completed,
+            InstallCompletion.completion_notes,
+            InstallCompletion.completion_date,
+            InstallCompletion.total_sqft_installed,
+            BusinessJob.sq_ft,
+            func.coalesce(func.sum(InstallerJobTimerSession.total_work_seconds), 0).label("work_seconds"),
+        )
+        .select_from(InstallCompletion)
+        .join(Fab, Fab.id == InstallCompletion.fab_id)
+        .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .join(InstallerUser, InstallerUser.id == InstallCompletion.installer_id, isouter=True)
+        .join(SalesPersonUser, SalesPersonUser.id == Fab.sales_person_id, isouter=True)
+        .join(
+            InstallerJobTimerSession,
+            and_(
+                InstallerJobTimerSession.fab_id == InstallCompletion.fab_id,
+                InstallerJobTimerSession.installer_id == InstallCompletion.installer_id,
+            ),
+            isouter=True,
+        )
+        .group_by(
+            InstallCompletion.installer_id,
+            InstallerUser.first_name,
+            InstallerUser.last_name,
+            BusinessJob.job_number,
+            BusinessJob.name,
+            Fab.id,
+            Fab.fab_type,
+            Fab.sales_person_id,
+            SalesPersonUser.first_name,
+            SalesPersonUser.last_name,
+            InstallCompletion.is_completed,
+            InstallCompletion.completion_notes,
+            InstallCompletion.completion_date,
+            InstallCompletion.total_sqft_installed,
+            BusinessJob.sq_ft,
+        )
+        .order_by(InstallCompletion.completion_date.desc(), Fab.id.desc())
+    , InstallCompletion.completion_date)
+
+    install_rows_db = (await db.execute(install_query)).all()
+
+    template_activity_date = func.coalesce(Templating.actual_end_date, Templating.actual_start_date, Templating.created_at)
+    template_query = _matches_common_filters(
+        select(
+            Templating.technician_id,
+            InstallerUser.first_name.label("installer_first_name"),
+            InstallerUser.last_name.label("installer_last_name"),
+            BusinessJob.job_number,
+            BusinessJob.name.label("job_name"),
+            Fab.id.label("fab_id"),
+            Fab.fab_type,
+            Fab.sales_person_id,
+            SalesPersonUser.first_name.label("sales_person_first_name"),
+            SalesPersonUser.last_name.label("sales_person_last_name"),
+            Templating.is_completed,
+            Templating.notes,
+            template_activity_date.label("activity_date"),
+            Templating.total_sqft,
+            BusinessJob.sq_ft,
+            Templating.duration,
+        )
+        .select_from(Templating)
+        .join(Fab, Fab.id == Templating.fab_id, isouter=True)
+        .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .join(InstallerUser, InstallerUser.id == Templating.technician_id, isouter=True)
+        .join(SalesPersonUser, SalesPersonUser.id == Fab.sales_person_id, isouter=True)
+        .order_by(template_activity_date.desc())
+    , template_activity_date)
+
+    template_rows_db = (await db.execute(template_query)).all()
+
+    def _get_group(installer_name: str, installer_id: Optional[int], default_label: str) -> dict:
+        group = grouped_rows_map.get(installer_name)
+        if group is None:
+            group = {
+                "installer": installer_name,
+                "installer_id": installer_id,
+                "activity_label": default_label,
+                "total_seconds": 0,
+                "activity_types": set(),
+                "job_count": 0,
+                "rows": [],
+            }
+            grouped_rows_map[installer_name] = group
+        return group
+
+    for row in install_rows_db:
+        (
+            installer_id,
+            installer_first_name,
+            installer_last_name,
+            job_number,
+            job_name,
+            fab_row_id,
+            row_fab_type,
+            row_sales_person_id,
+            sales_person_first_name,
+            sales_person_last_name,
+            is_completed,
+            completion_notes,
+            completed_at,
+            sqft_installed_raw,
+            job_sqft,
+            work_seconds,
+        ) = row
+
+        installer_name = f"{(installer_first_name or '').strip()} {(installer_last_name or '').strip()}".strip() or (f"User {installer_id}" if installer_id else "Unknown")
+        sales_person_name = f"{(sales_person_first_name or '').strip()} {(sales_person_last_name or '').strip()}".strip() or (f"User {row_sales_person_id}" if row_sales_person_id else None)
+        installed_sqft = round(_to_float(sqft_installed_raw), 2)
+        incomplete_sqft = round(max(_to_float(job_sqft) - installed_sqft, 0.0), 2) if _to_float(job_sqft) > 0 else 0.0
+        total_seconds = int(_to_float(work_seconds))
+        group = _get_group(installer_name, installer_id, "Installer")
+        group["total_seconds"] += total_seconds
+        group["job_count"] += 1
+        group["activity_types"].add("Installation")
+
+        flat_rows.append(
+            {
+                "installer": installer_name,
+                "installer_id": installer_id,
+                "installer_hours": round(total_seconds / 3600, 2),
+                "activity_type": "Installation",
+                "activity_date": completed_at.isoformat() if completed_at else None,
+                "fab_id": fab_row_id,
+                "fab_type": row_fab_type,
+                "job_number": job_number,
+                "job_name": job_name or "Unknown Job",
+                "activity_complete": bool(is_completed),
+                "duration": _format_duration_hhmm(total_seconds),
+                "sq_ft_installed": installed_sqft,
+                "sq_ft_incomplete": incomplete_sqft,
+                "reason_if_not_complete": None if bool(is_completed) else (_notes_to_text(completion_notes) or "Not marked complete"),
+                "sales_person_id": row_sales_person_id,
+                "sales_person_name": sales_person_name,
+            }
+        )
+        group["rows"].append(flat_rows[-1])
+
+    for row in template_rows_db:
+        (
+            technician_id,
+            installer_first_name,
+            installer_last_name,
+            job_number,
+            job_name,
+            fab_row_id,
+            row_fab_type,
+            row_sales_person_id,
+            sales_person_first_name,
+            sales_person_last_name,
+            is_completed,
+            notes,
+            activity_date_value,
+            total_sqft_raw,
+            job_sqft,
+            duration_minutes,
+        ) = row
+
+        installer_name = f"{(installer_first_name or '').strip()} {(installer_last_name or '').strip()}".strip() or (f"User {technician_id}" if technician_id else "Unknown")
+        sales_person_name = f"{(sales_person_first_name or '').strip()} {(sales_person_last_name or '').strip()}".strip() or (f"User {row_sales_person_id}" if row_sales_person_id else None)
+        total_sqft = round(_to_float(total_sqft_raw), 2)
+        total_seconds = int(_to_float(duration_minutes) * 60)
+        group = _get_group(installer_name, technician_id, "Templater")
+        group["total_seconds"] += total_seconds
+        group["job_count"] += 1
+        group["activity_types"].add("Template")
+
+        flat_rows.append(
+            {
+                "installer": installer_name,
+                "installer_id": technician_id,
+                "installer_hours": round(total_seconds / 3600, 2),
+                "activity_type": "Template",
+                "activity_date": activity_date_value.isoformat() if activity_date_value else None,
+                "fab_id": fab_row_id,
+                "fab_type": row_fab_type,
+                "job_number": job_number,
+                "job_name": job_name or "Unknown Job",
+                "activity_complete": bool(is_completed),
+                "duration": _format_duration_hhmm(total_seconds),
+                "sq_ft_installed": total_sqft if bool(is_completed) else 0.0,
+                "sq_ft_incomplete": 0.0 if bool(is_completed) else total_sqft,
+                "reason_if_not_complete": None if bool(is_completed) else (_notes_to_text(notes) or "Not marked complete"),
+                "sales_person_id": row_sales_person_id,
+                "sales_person_name": sales_person_name,
+            }
+        )
+        group["rows"].append(flat_rows[-1])
+
+    grouped_rows = []
+    for group in sorted(grouped_rows_map.values(), key=lambda item: item["installer"].lower()):
+        activity_types = group.pop("activity_types")
+        total_seconds = int(group.pop("total_seconds"))
+        group["activity_label"] = "Mixed" if len(activity_types) > 1 else next(iter(activity_types), group.get("activity_label"))
+        group["installer_hours"] = round(total_seconds / 3600, 2)
+        group["installer_hours_display"] = _format_duration_hhmm(total_seconds)
+        group["rows"] = sorted(group["rows"], key=lambda item: item.get("activity_date") or "", reverse=True)
+        grouped_rows.append(group)
+
+    flat_rows.sort(key=lambda item: item.get("activity_date") or "", reverse=True)
+
+    total_seconds = sum(int(round(_to_float(group["installer_hours"]) * 3600)) for group in grouped_rows)
+    templates_sq_ft = round(
+        sum(_to_float(row["sq_ft_installed"]) for row in flat_rows if row["activity_type"] == "Template" and row["activity_complete"]),
+        2,
+    )
+    installs_sq_ft = round(
+        sum(_to_float(row["sq_ft_installed"]) for row in flat_rows if row["activity_type"] == "Installation"),
+        2,
+    )
+    incomplete_sq_ft = round(sum(_to_float(row["sq_ft_incomplete"]) for row in flat_rows), 2)
+
+    sales_person_rows = (
+        await db.execute(
+            select(User.id, User.first_name, User.last_name)
+            .where(User.status == 1)
+            .order_by(User.first_name.asc(), User.last_name.asc())
+        )
+    ).all()
+    sales_person_options = [
+        {
+            "id": row[0],
+            "name": f"{(row[1] or '').strip()} {(row[2] or '').strip()}".strip() or f"User {row[0]}",
+        }
+        for row in sales_person_rows
+    ]
+
+    fab_type_options = sorted({row.get("fab_type") for row in flat_rows if row.get("fab_type")})
+
+    return success_response(
+        {
+            "title": "Installation and Template Report",
+            "period": {
+                "from_date": from_date.isoformat() if from_date else None,
+                "to_date": to_date.isoformat() if to_date else None,
+            },
+            "columns": [
+                "installer",
+                "installer_hours",
+                "job_name",
+                "activity_complete",
+                "duration",
+                "sq_ft_installed",
+                "sq_ft_incomplete",
+                "reason_if_not_complete",
+            ],
+            "filters": {
+                "search": search,
+                "fab_type": fab_type,
+                "sales_person_id": sales_person_id,
+            },
+            "filter_options": {
+                "sales_person_options": sales_person_options,
+                "fab_types": fab_type_options,
+            },
+            "summary": {
+                "total_hours": _format_duration_hhmm(total_seconds),
+                "total_hours_value": round(total_seconds / 3600, 2),
+                "templates_sq_ft": templates_sq_ft,
+                "installs_sq_ft": installs_sq_ft,
+                "incomplete_sq_ft": incomplete_sq_ft,
+                "row_count": len(flat_rows),
+                "group_count": len(grouped_rows),
+            },
+            "groups": grouped_rows,
+            "rows": flat_rows,
+        },
+        "Owner installation and template dashboard report generated",
     )
 
 
@@ -4491,6 +4824,11 @@ async def export_owner_report(
     layout: str = Query("default", pattern="^(default|client)$"),
     start_date: Optional[date] = Query(None),
     end_date: Optional[date] = Query(None),
+    from_date: Optional[date] = Query(None),
+    to_date: Optional[date] = Query(None),
+    search: Optional[str] = Query(None),
+    fab_type: Optional[str] = Query(None),
+    sales_person_id: Optional[int] = Query(None, gt=0),
     date_basis: str = Query("completed", pattern="^(created|scheduled|completed)$"),
     sla_days: int = Query(14, ge=1, le=365),
     weeks: int = Query(12, ge=4, le=52),
@@ -4525,6 +4863,18 @@ async def export_owner_report(
     elif key == "installation-template":
         data = _unwrap_success_data(
             await get_owner_installation_template_report(start_date=start_date, end_date=end_date, db=db, current_user=current_user)
+        )
+    elif key == "installation-template-dashboard":
+        data = _unwrap_success_data(
+            await get_owner_installation_template_dashboard_report(
+                from_date=from_date or start_date,
+                to_date=to_date or end_date,
+                search=search,
+                fab_type=fab_type,
+                sales_person_id=sales_person_id,
+                db=db,
+                current_user=current_user,
+            )
         )
     elif key == "monthly-install-completion":
         if year is None or month is None:
