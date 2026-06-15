@@ -80,10 +80,18 @@ class DailyInstallCompletionPatchRequest(BaseModel):
 @router.get("/redos", response_model=SuccessResponse[list[dict]])
 @router.get("/reports/redos", response_model=SuccessResponse[list[dict]])
 async def get_ag_redo_report(
+    from_date: Optional[date] = Query(None, description="Inclusive from date filter"),
+    to_date: Optional[date] = Query(None, description="Inclusive to date filter"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Return AG REDO FAB rows with complete report fields."""
+    _ = current_user
+    start_dt, end_dt = _range_bounds(from_date, to_date)
+
+    filters = [func.lower(Fab.fab_type) == "ag redo"]
+    _apply_datetime_filters(filters, Fab.created_at, start_dt, end_dt)
+
     rows = (
         await db.execute(
             select(
@@ -114,7 +122,7 @@ async def get_ag_redo_report(
             .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
             .join(CostOfStone, CostOfStone.id == Fab.cost_of_stone_id, isouter=True)
             .join(Revision, Revision.fab_id == Fab.id, isouter=True)
-            .where(func.lower(Fab.fab_type) == "ag redo")
+            .where(and_(*filters))
             .order_by(Fab.created_at.desc(), Fab.id.desc())
         )
     ).all()
@@ -1885,6 +1893,8 @@ async def get_owner_largest_jobs_report(
 async def get_owner_install_performance_report(
     start_date: Optional[date] = Query(None, description="Inclusive start date filter"),
     end_date: Optional[date] = Query(None, description="Inclusive end date filter"),
+    installer_id: Optional[int] = Query(None, gt=0, description="Optional installer user ID filter"),
+    installer_name: Optional[str] = Query(None, description="Optional installer name filter"),
     top_n: int = Query(25, ge=1, le=100, description="Top installer rows to return"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -1892,8 +1902,61 @@ async def get_owner_install_performance_report(
     """Installer-focused output and labor efficiency based on completion and timer data."""
     start_dt, end_dt = _range_bounds(start_date, end_date)
 
+    matched_installer_ids: Optional[list[int]] = None
+    if installer_name:
+        installer_like = f"%{installer_name.strip().lower()}%"
+        matched_user_rows = (
+            await db.execute(
+                select(User.id)
+                .where(
+                    or_(
+                        func.lower(User.first_name).like(installer_like),
+                        func.lower(User.last_name).like(installer_like),
+                        func.lower(User.username).like(installer_like),
+                        func.lower(User.email).like(installer_like),
+                        func.lower(
+                            func.concat(
+                                func.coalesce(User.first_name, ""),
+                                " ",
+                                func.coalesce(User.last_name, ""),
+                            )
+                        ).like(installer_like),
+                    )
+                )
+                .order_by(User.id.asc())
+            )
+        ).all()
+        matched_installer_ids = [row[0] for row in matched_user_rows]
+        if not matched_installer_ids:
+            return success_response(
+                {
+                    "period": {
+                        "start_date": start_date.isoformat() if start_date else None,
+                        "end_date": end_date.isoformat() if end_date else None,
+                    },
+                    "filters": {
+                        "installer_id": installer_id,
+                        "installer_name": installer_name,
+                    },
+                    "summary": {
+                        "installer_count": 0,
+                        "total_sqft_installed": 0.0,
+                        "total_work_hours": 0.0,
+                        "total_labor_cost": 0.0,
+                        "portfolio_labor_cost_per_sqft": 0.0,
+                        "portfolio_sqft_per_hour": 0.0,
+                    },
+                    "installer_breakdown": [],
+                },
+                "Owner install performance report generated",
+            )
+
     completion_filters = []
     _apply_datetime_filters(completion_filters, InstallCompletion.completion_date, start_dt, end_dt)
+    if installer_id is not None:
+        completion_filters.append(InstallCompletion.installer_id == installer_id)
+    if matched_installer_ids is not None:
+        completion_filters.append(InstallCompletion.installer_id.in_(matched_installer_ids))
 
     completion_query = select(
         InstallCompletion.installer_id,
@@ -1926,6 +1989,10 @@ async def get_owner_install_performance_report(
 
     timer_filters = []
     _apply_datetime_filters(timer_filters, InstallerJobTimerSession.session_start_at, start_dt, end_dt)
+    if installer_id is not None:
+        timer_filters.append(InstallerJobTimerSession.installer_id == installer_id)
+    if matched_installer_ids is not None:
+        timer_filters.append(InstallerJobTimerSession.installer_id.in_(matched_installer_ids))
     timer_query = select(
         InstallerJobTimerSession.installer_id,
         func.sum(InstallerJobTimerSession.total_work_seconds),
@@ -2015,6 +2082,10 @@ async def get_owner_install_performance_report(
                 "start_date": start_date.isoformat() if start_date else None,
                 "end_date": end_date.isoformat() if end_date else None,
             },
+            "filters": {
+                "installer_id": installer_id,
+                "installer_name": installer_name,
+            },
             "summary": {
                 "installer_count": len(installer_rows),
                 "total_sqft_installed": total_sqft_installed,
@@ -2032,34 +2103,55 @@ async def get_owner_install_performance_report(
 @router.get("/reports/owner/weekly-trends", response_model=SuccessResponse[dict])
 async def get_owner_weekly_trends_report(
     weeks: int = Query(12, ge=4, le=52, description="How many trailing weeks to include"),
+    from_date: Optional[date] = Query(None, description="Inclusive from date filter"),
+    to_date: Optional[date] = Query(None, description="Inclusive to date filter"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Weekly trendline for owner review: new fabs, completed installs, revenue, and GP."""
-    cutoff = datetime.now() - timedelta(days=weeks * 7)
+    _ = current_user
+    if from_date is not None or to_date is not None:
+        effective_from = from_date or to_date
+        effective_to = to_date or from_date
+        start_dt, end_dt = _range_bounds(effective_from, effective_to)
+    else:
+        start_dt = datetime.now() - timedelta(days=weeks * 7)
+        end_dt = None
+
     week_bucket = func.date_trunc(literal_column("'week'"), Fab.created_at)
 
-    fab_week_rows = (
-        await db.execute(
-            select(
-                week_bucket.label("week_start"),
-                func.count(Fab.id).label("fabs_created"),
-                func.sum(Fab.revenue).label("revenue"),
-                func.sum(Fab.gp).label("gp"),
-            )
-            .where(Fab.created_at >= cutoff)
-            .group_by(week_bucket)
-            .order_by(week_bucket)
+    fab_filters = []
+    _apply_datetime_filters(fab_filters, Fab.created_at, start_dt, end_dt)
+
+    fab_query = (
+        select(
+            week_bucket.label("week_start"),
+            func.count(Fab.id).label("fabs_created"),
+            func.sum(Fab.revenue).label("revenue"),
+            func.sum(Fab.gp).label("gp"),
         )
+        .group_by(week_bucket)
+        .order_by(week_bucket)
+    )
+    if fab_filters:
+        fab_query = fab_query.where(and_(*fab_filters))
+
+    fab_week_rows = (
+        await db.execute(fab_query)
     ).all()
 
+    install_filters = []
+    _apply_datetime_filters(install_filters, InstallCompletion.completion_date, start_dt, end_dt)
+
+    install_query = select(
+        InstallCompletion.completion_date,
+        InstallCompletion.total_sqft_installed,
+    )
+    if install_filters:
+        install_query = install_query.where(and_(*install_filters))
+
     install_rows = (
-        await db.execute(
-            select(
-                InstallCompletion.completion_date,
-                InstallCompletion.total_sqft_installed,
-            ).where(InstallCompletion.completion_date >= cutoff)
-        )
+        await db.execute(install_query)
     ).all()
 
     by_week: dict[str, dict] = {}
@@ -2102,6 +2194,10 @@ async def get_owner_weekly_trends_report(
     return success_response(
         {
             "weeks": weeks,
+            "period": {
+                "from_date": start_dt.date().isoformat() if start_dt else None,
+                "to_date": end_dt.date().isoformat() if end_dt else None,
+            },
             "weekly_trends": weekly_rows,
         },
         "Owner weekly trends report generated",
@@ -2468,23 +2564,31 @@ async def get_owner_monthly_install_completion_report(
 
 @router.get("/reports/owner/daily-install-completion", response_model=SuccessResponse[dict])
 async def get_owner_daily_install_completion_report(
+    from_date: Optional[date] = Query(None, description="Inclusive from date filter"),
+    to_date: Optional[date] = Query(None, description="Inclusive to date filter"),
     start_date: Optional[date] = Query(None, description="Inclusive start date filter"),
     end_date: Optional[date] = Query(None, description="Inclusive end date filter"),
+    fab_id: Optional[int] = Query(None, gt=0, description="Optional FAB ID filter"),
+    job_number: Optional[str] = Query(None, description="Optional job number filter"),
+    installer_name: Optional[str] = Query(None, description="Optional installer name filter"),
     fab_type: Optional[str] = Query(None, description="Optional FAB type filter"),
     fab_type_sort: str = Query("asc", pattern="^(asc|desc)$", description="Sort order for FAB type"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Daily install completion report across a date range, grouped by install date."""
-    if start_date is None and end_date is None:
-        end_date = date.today()
-        start_date = end_date - timedelta(days=30)
-    elif start_date is None and end_date is not None:
-        start_date = end_date
-    elif start_date is not None and end_date is None:
-        end_date = start_date
+    effective_start_date = from_date if from_date is not None else start_date
+    effective_end_date = to_date if to_date is not None else end_date
 
-    start_dt, end_dt = _range_bounds(start_date, end_date)
+    if effective_start_date is None and effective_end_date is None:
+        effective_end_date = date.today()
+        effective_start_date = effective_end_date - timedelta(days=30)
+    elif effective_start_date is None and effective_end_date is not None:
+        effective_start_date = effective_end_date
+    elif effective_start_date is not None and effective_end_date is None:
+        effective_end_date = effective_start_date
+
+    start_dt, end_dt = _range_bounds(effective_start_date, effective_end_date)
     fab_type_sort_normalized = (fab_type_sort or "asc").strip().lower()
     fab_type_order = (
         func.lower(Fab.fab_type).desc()
@@ -2529,6 +2633,27 @@ async def get_owner_daily_install_completion_report(
 
     if fab_type:
         query = query.where(func.lower(Fab.fab_type) == fab_type.strip().lower())
+    if fab_id is not None:
+        query = query.where(Fab.id == fab_id)
+    if job_number:
+        query = query.where(BusinessJob.job_number.ilike(f"%{job_number.strip()}%"))
+    if installer_name:
+        installer_like = f"%{installer_name.strip().lower()}%"
+        query = query.where(
+            or_(
+                func.lower(User.first_name).like(installer_like),
+                func.lower(User.last_name).like(installer_like),
+                func.lower(User.username).like(installer_like),
+                func.lower(User.email).like(installer_like),
+                func.lower(
+                    func.concat(
+                        func.coalesce(User.first_name, ""),
+                        " ",
+                        func.coalesce(User.last_name, ""),
+                    )
+                ).like(installer_like),
+            )
+        )
 
     records = (await db.execute(query)).all()
 
@@ -2612,8 +2737,16 @@ async def get_owner_daily_install_completion_report(
         {
             "title": "Daily Install Completion",
             "period": {
-                "start_date": start_date.isoformat() if start_date else None,
-                "end_date": end_date.isoformat() if end_date else None,
+                "start_date": effective_start_date.isoformat() if effective_start_date else None,
+                "end_date": effective_end_date.isoformat() if effective_end_date else None,
+            },
+            "filters": {
+                "from_date": effective_start_date.isoformat() if effective_start_date else None,
+                "to_date": effective_end_date.isoformat() if effective_end_date else None,
+                "fab_id": fab_id,
+                "job_number": job_number,
+                "installer_name": installer_name,
+                "fab_type": fab_type,
             },
             "columns": [
                 "install_date",

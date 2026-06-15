@@ -287,13 +287,13 @@ class FabCreate(BaseModel):
 
 class FabUpdate(BaseModel):
     fab_type: Optional[str] = Field(None, min_length=1, max_length=255)
-    sales_person_id: Optional[int] = Field(None, gt=0)
-    stone_type_id: Optional[int] = Field(None, gt=0)
-    stone_color_id: Optional[int] = Field(None, gt=0)
-    stone_thickness_id: Optional[int] = Field(None, gt=0)
-    edge_id: Optional[int] = Field(None, gt=0)
+    sales_person_id: Optional[int] = Field(None, ge=0)
+    stone_type_id: Optional[int] = Field(None, ge=0)
+    stone_color_id: Optional[int] = Field(None, ge=0)
+    stone_thickness_id: Optional[int] = Field(None, ge=0)
+    edge_id: Optional[int] = Field(None, ge=0)
     input_area: Optional[str] = Field(None, description="Description of input area (e.g., 'Kitchen countertop and island')")
-    total_sqft: float = Field(..., ge=0)
+    total_sqft: Optional[float] = Field(None, ge=0)
     notes: Optional[str] = Field(None, description="Note to add to FAB (will be saved to fab_notes)")
     stage: Optional[str] = Field(None, description="Stage for the note (defaults to current_stage)")
     template_needed: Optional[bool] = None
@@ -302,14 +302,14 @@ class FabUpdate(BaseModel):
     slab_smith_ag_needed: Optional[bool] = None
     sct_needed: Optional[bool] = None
     final_programming_needed: Optional[bool] = None
-    drafter_id: Optional[int] = Field(None, gt=0, description="Drafter user ID")
+    drafter_id: Optional[int] = Field(None, ge=0, description="Drafter user ID")
     # Templating/Template tracking
     template_received: Optional[bool] = Field(None, description="Mark if template is received")
     template_review_complete: Optional[bool] = Field(None, description="Mark template review as complete")
     # Drafting tracking
     draft_completed: Optional[bool] = Field(None, description="Mark draft as completed")
     cad_review_complete: Optional[bool] = Field(None, description="Mark CAD review as complete")
-    no_of_pieces: int = Field(..., ge=0, description="Number of pieces")
+    no_of_pieces: Optional[int] = Field(None, ge=0, description="Number of pieces")
     # Financial tracking
     revenue: Optional[float] = Field(None, description="Revenue amount")
     gp: Optional[float] = Field(None, description="Gross Profit amount")
@@ -323,7 +323,7 @@ class FabUpdate(BaseModel):
     fp_not_needed: Optional[bool] = Field(None, description="Mark if final programming is not needed")
     # Final Programming tracking
     confirmed_date: Optional[datetime] = Field(None, description="Final programming confirmed date")
-    wj_time_minutes: Optional[int] = Field(None, gt=0, description="Waterjet time in minutes")
+    wj_time_minutes: Optional[int] = Field(None, ge=0, description="Waterjet time in minutes")
     wj_linft: Optional[float] = Field(None, ge=0, description="Waterjet linear feet")
     edging_linft: Optional[float] = Field(None, ge=0, description="Edging linear feet")
     cnc_linft: Optional[float] = Field(None, ge=0, description="CNC linear feet")
