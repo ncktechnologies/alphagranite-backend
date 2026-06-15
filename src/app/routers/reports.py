@@ -2511,7 +2511,7 @@ async def get_owner_installation_template_dashboard_report(
         .join(InstallerUser, InstallerUser.id == Templating.technician_id, isouter=True)
         .join(SalesPersonUser, SalesPersonUser.id == Fab.sales_person_id, isouter=True)
         .order_by(template_activity_date.desc())
-    )
+    , template_activity_date)
 
     template_rows_db = (await db.execute(template_query)).all()
 
