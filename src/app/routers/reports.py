@@ -2481,7 +2481,7 @@ async def get_owner_installation_template_dashboard_report(
             BusinessJob.sq_ft,
         )
         .order_by(InstallCompletion.completion_date.desc(), Fab.id.desc())
-    )
+    , InstallCompletion.completion_date)
 
     install_rows_db = (await db.execute(install_query)).all()
 
