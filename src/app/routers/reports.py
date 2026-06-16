@@ -380,6 +380,22 @@ def _days_between(start_value: Optional[datetime], end_value: Optional[datetime]
     return max((end_value.date() - start_value.date()).days, 0)
 
 
+def _days_between_count_partial_day_as_full(
+    start_value: Optional[datetime],
+    end_value: Optional[datetime],
+) -> Optional[int]:
+    """Return elapsed days where any positive partial day counts as one full day."""
+    if start_value is None or end_value is None:
+        return None
+
+    delta = end_value - start_value
+    if delta <= timedelta(0):
+        return 0
+
+    full_days = delta.days
+    return full_days if delta == timedelta(days=full_days) else full_days + 1
+
+
 def _apply_datetime_filters(filters: list, field, start_dt: Optional[datetime], end_dt: Optional[datetime]) -> None:
     if start_dt is not None:
         filters.append(field >= start_dt)
@@ -4183,7 +4199,8 @@ async def get_owner_turnaround_times_report(
         fab_complete_date,
     ) in records:
         predraft_days = _days_between(template_date, predraft_date)
-        draft_days = _days_between(predraft_date, draft_date)
+        # Draft stage should count any positive partial day (e.g. minutes) as 1 day.
+        draft_days = _days_between_count_partial_day_as_full(predraft_date, draft_date)
         slabsmith_days = _days_between(draft_date, slabsmith_date)
         revision_days = _days_between(revision_start_date, revision_date)
         sct_days = _days_between(draft_date, sct_date)
@@ -4316,6 +4333,7 @@ async def get_owner_turnaround_times_report(
             "month": month,
             "summary": summary,
             "stage_averages": stage_averages,
+            "average_draft_days": stage_averages.get("draft"),
             "threshold_analysis": threshold_analysis,
             "rows": rows,
         },
