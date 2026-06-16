@@ -4062,8 +4062,13 @@ async def get_monthly_cut_completion_report(
 
 @router.get("/reports/owner/turnaround-times", response_model=SuccessResponse[dict])
 async def get_owner_turnaround_times_report(
-    year: int = Query(..., ge=2000, le=2100),
-    month: int = Query(..., ge=1, le=12),
+    year: Optional[int] = Query(None, ge=2000, le=2100, description="Required with month when from_date/to_date is not provided"),
+    month: Optional[int] = Query(None, ge=1, le=12, description="Required with year when from_date/to_date is not provided"),
+    from_date: Optional[date] = Query(None, description="Inclusive from date filter (YYYY-MM-DD)"),
+    to_date: Optional[date] = Query(None, description="Inclusive to date filter (YYYY-MM-DD)"),
+    fab_id: Optional[int] = Query(None, gt=0, description="Optional FAB ID filter"),
+    job_number: Optional[str] = Query(None, description="Optional job number filter"),
+    fab_type: Optional[str] = Query(None, description="Optional FAB type filter"),
     limit: int = Query(2000, ge=1, le=10000),
     threshold_days: Optional[int] = Query(
         None,
@@ -4074,7 +4079,28 @@ async def get_owner_turnaround_times_report(
     current_user: User = Depends(get_current_user),
 ):
     """Turnaround-times report with full stage dates/days and stage statistics."""
-    start_dt, end_dt = _month_bounds(year, month)
+    if from_date is not None or to_date is not None:
+        effective_from_date = from_date or to_date
+        effective_to_date = to_date or from_date
+        start_dt, end_dt = _range_bounds(effective_from_date, effective_to_date)
+        report_year = effective_from_date.year if effective_from_date is not None else None
+        report_month = effective_from_date.month if effective_from_date is not None else None
+    else:
+        if (year is None) != (month is None):
+            return success_response(
+                None,
+                "Provide both year and month, or use from_date/to_date",
+                status_code=400,
+            )
+        if year is None or month is None:
+            return success_response(
+                None,
+                "Either provide year and month, or provide from_date/to_date",
+                status_code=400,
+            )
+        start_dt, end_dt = _month_bounds(year, month)
+        report_year = year
+        report_month = month
 
     cut_end_subquery = (
         select(
@@ -4138,14 +4164,21 @@ async def get_owner_turnaround_times_report(
         .join(cut_end_subquery, cut_end_subquery.c.fab_id == Fab.id, isouter=True)
         .join(cnc_end_subquery, cnc_end_subquery.c.fab_id == Fab.id, isouter=True)
         .join(revision_start_subquery, revision_start_subquery.c.fab_id == Fab.id, isouter=True)
-        .where(
-            Fab.shop_est_completion_date.is_not(None),
-            Fab.shop_est_completion_date >= start_dt,
-            Fab.shop_est_completion_date <= end_dt,
-        )
+        .where(Fab.shop_est_completion_date.is_not(None))
         .order_by(Fab.shop_est_completion_date.desc(), Fab.id.asc())
         .limit(limit)
     )
+
+    if start_dt is not None:
+        query = query.where(Fab.shop_est_completion_date >= start_dt)
+    if end_dt is not None:
+        query = query.where(Fab.shop_est_completion_date <= end_dt)
+    if fab_id is not None:
+        query = query.where(Fab.id == fab_id)
+    if job_number:
+        query = query.where(BusinessJob.job_number.ilike(f"%{job_number.strip()}%"))
+    if fab_type:
+        query = query.where(func.lower(Fab.fab_type) == fab_type.strip().lower())
 
     records = (await db.execute(query)).all()
     rows: list[dict] = []
@@ -4329,8 +4362,17 @@ async def get_owner_turnaround_times_report(
     return success_response(
         {
             "title": "Turnaround Times Report",
-            "year": year,
-            "month": month,
+            "year": report_year,
+            "month": report_month,
+            "period": {
+                "from_date": (from_date or (start_dt.date() if start_dt else None)).isoformat() if (from_date or start_dt) else None,
+                "to_date": (to_date or (end_dt.date() if end_dt else None)).isoformat() if (to_date or end_dt) else None,
+            },
+            "filters": {
+                "fab_id": fab_id,
+                "job_number": job_number,
+                "fab_type": fab_type,
+            },
             "summary": summary,
             "stage_averages": stage_averages,
             "average_draft_days": stage_averages.get("draft"),
