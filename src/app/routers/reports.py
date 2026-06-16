@@ -32,6 +32,7 @@ from src.app.database.user import User
 from src.app.interface.generated_schemas import CNCDrafting, CostOfStone, CutList, InstallCompletion, InstallScheduling, PlanningSection, Revision, Templating
 from src.app.interface.response_wrappers import SuccessResponse, success_response
 from src.app.middleware.jwt_auth import get_current_user
+from src.app.routers.fabs import _get_shop_current_stage
 from src.app.service.monthly_end_of_month_status_report import send_monthly_end_of_month_status_report
 from src.app.utils.helpers import error_response
 
@@ -1619,6 +1620,258 @@ async def get_owner_shop_status_report(
         },
         "Owner shop status report generated",
     )
+
+
+def _normalize_shop_stage_name(plan_name: Optional[str]) -> str:
+    if not isinstance(plan_name, str):
+        return "unplanned"
+    normalized = plan_name.strip().lower()
+    return normalized if normalized else "unplanned"
+
+
+async def _get_shop_production_stage_counts(
+    db: AsyncSession,
+    start_date: Optional[date],
+    end_date: Optional[date],
+    status_id: int,
+    include_non_shop_stages: bool,
+) -> dict:
+    filters = [Fab.status_id == status_id]
+
+    if not include_non_shop_stages:
+        filters.append(Fab.current_stage.in_(["shop", "cut_list"]))
+
+    if start_date is not None:
+        filters.append(Fab.shop_date_schedule >= start_date)
+    if end_date is not None:
+        filters.append(Fab.shop_date_schedule <= end_date)
+
+    rows = (
+        await db.execute(
+            select(
+                Fab.id,
+                Fab.current_stage,
+                Fab.fab_type,
+                Fab.total_sqft,
+                Fab.no_of_pieces,
+                Fab.shop_date_schedule,
+                Fab.updated_at,
+                BusinessJob.job_number,
+                BusinessJob.name,
+                ShopCutPlan.sequence,
+                ShopCutPlan.work_percentage,
+                PlanningSection.plan_name,
+            )
+            .select_from(Fab)
+            .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+            .join(ShopCutPlan, ShopCutPlan.fab_id == Fab.id, isouter=True)
+            .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id, isouter=True)
+            .where(and_(*filters))
+            .order_by(Fab.id.asc(), ShopCutPlan.sequence.asc(), ShopCutPlan.id.asc())
+        )
+    ).all()
+
+    fabs_map: dict[int, dict] = {}
+    for (
+        fab_id,
+        current_stage,
+        fab_type,
+        total_sqft,
+        no_of_pieces,
+        shop_date_schedule,
+        updated_at,
+        job_number,
+        job_name,
+        sequence,
+        work_percentage,
+        plan_name,
+    ) in rows:
+        if fab_id not in fabs_map:
+            fabs_map[fab_id] = {
+                "fab_id": fab_id,
+                "job_number": job_number,
+                "job_name": job_name,
+                "fab_type": fab_type,
+                "current_stage": current_stage,
+                "total_sqft": round(_to_float(total_sqft), 2),
+                "no_of_pieces": int(_to_float(no_of_pieces)),
+                "shop_date_schedule": shop_date_schedule.isoformat() if shop_date_schedule else None,
+                "updated_at": updated_at.isoformat() if updated_at else None,
+                "plans": [],
+            }
+
+        if plan_name is not None:
+            fabs_map[fab_id]["plans"].append(
+                {
+                    "sequence": sequence,
+                    "work_percentage": work_percentage,
+                    "plan_name": plan_name,
+                }
+            )
+
+    stage_buckets: dict[str, dict] = {}
+    total_sqft = 0.0
+    total_pieces = 0
+    completed_fabs = 0
+    in_progress_fabs = 0
+    unplanned_fabs = 0
+
+    fab_entries = []
+    now_dt = datetime.now()
+
+    for fab_data in fabs_map.values():
+        plans = fab_data["plans"]
+        resolved_stage = _normalize_shop_stage_name(_get_shop_current_stage(plans))
+
+        if resolved_stage == "unplanned":
+            unplanned_fabs += 1
+
+        plan_percentages = [
+            _to_float(plan.get("work_percentage"))
+            for plan in plans
+            if plan.get("work_percentage") is not None
+        ]
+        avg_work_percentage = round(
+            (sum(plan_percentages) / len(plan_percentages)) if plan_percentages else 0.0,
+            2,
+        )
+        is_completed = bool(plans) and all(p >= 100 for p in plan_percentages) and len(plan_percentages) == len(plans)
+
+        if is_completed:
+            completed_fabs += 1
+        elif plans:
+            in_progress_fabs += 1
+
+        stage_bucket = stage_buckets.setdefault(
+            resolved_stage,
+            {
+                "shop_current_stage": resolved_stage,
+                "fab_count": 0,
+                "total_sqft": 0.0,
+                "total_pieces": 0,
+                "avg_work_percentage_sum": 0.0,
+                "completed_fab_count": 0,
+                "in_progress_fab_count": 0,
+            },
+        )
+
+        stage_bucket["fab_count"] += 1
+        stage_bucket["total_sqft"] += fab_data["total_sqft"]
+        stage_bucket["total_pieces"] += fab_data["no_of_pieces"]
+        stage_bucket["avg_work_percentage_sum"] += avg_work_percentage
+        if is_completed:
+            stage_bucket["completed_fab_count"] += 1
+        elif plans:
+            stage_bucket["in_progress_fab_count"] += 1
+
+        total_sqft += fab_data["total_sqft"]
+        total_pieces += fab_data["no_of_pieces"]
+
+        updated_at_raw = fab_data.get("updated_at")
+        stale_days = None
+        if updated_at_raw:
+            try:
+                updated_dt = datetime.fromisoformat(updated_at_raw)
+                stale_days = max((now_dt.date() - updated_dt.date()).days, 0)
+            except Exception:
+                stale_days = None
+
+        fab_entries.append(
+            {
+                **fab_data,
+                "shop_current_stage": resolved_stage,
+                "plan_count": len(plans),
+                "avg_work_percentage": avg_work_percentage,
+                "is_completed": is_completed,
+                "stale_days": stale_days,
+            }
+        )
+
+    stage_counts = []
+    for stage_name, bucket in stage_buckets.items():
+        fab_count = bucket["fab_count"]
+        stage_counts.append(
+            {
+                "shop_current_stage": stage_name,
+                "fab_count": fab_count,
+                "total_sqft": round(bucket["total_sqft"], 2),
+                "total_pieces": int(bucket["total_pieces"]),
+                "avg_work_percentage": round(
+                    (bucket["avg_work_percentage_sum"] / fab_count) if fab_count else 0.0,
+                    2,
+                ),
+                "completed_fab_count": int(bucket["completed_fab_count"]),
+                "in_progress_fab_count": int(bucket["in_progress_fab_count"]),
+            }
+        )
+
+    stage_counts = sorted(stage_counts, key=lambda row: (-row["fab_count"], row["shop_current_stage"]))
+    fab_entries = sorted(
+        fab_entries,
+        key=lambda row: (
+            row["shop_current_stage"],
+            (row["stale_days"] if row["stale_days"] is not None else -1),
+            row["fab_id"],
+        ),
+        reverse=False,
+    )
+
+    return {
+        "summary": {
+            "total_fabs": len(fab_entries),
+            "total_sqft": round(total_sqft, 2),
+            "total_pieces": int(total_pieces),
+            "completed_fabs": int(completed_fabs),
+            "in_progress_fabs": int(in_progress_fabs),
+            "unplanned_fabs": int(unplanned_fabs),
+        },
+        "shop_current_stage_counts": stage_counts,
+        "fabs": fab_entries,
+    }
+
+
+@router.get("/reports/shop-production-summary", response_model=SuccessResponse[dict])
+@router.get("/reports/owner/shop-production-summary", response_model=SuccessResponse[dict])
+async def get_shop_production_summary_report(
+    start_date: Optional[date] = Query(None, description="Inclusive shop date start filter (shop_date_schedule)"),
+    end_date: Optional[date] = Query(None, description="Inclusive shop date end filter (shop_date_schedule)"),
+    status_id: int = Query(1, ge=0, description="FAB status to include (default: active=1)"),
+    include_non_shop_stages: bool = Query(
+        False,
+        description="When true, include all current stages; when false include only shop/cut_list FABs",
+    ),
+    include_fab_details: bool = Query(True, description="Include per-FAB rows in report payload"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Shop Production Summary report grouped by derived shop_current_stage from plan progress."""
+    _ = current_user
+
+    report_data = await _get_shop_production_stage_counts(
+        db=db,
+        start_date=start_date,
+        end_date=end_date,
+        status_id=status_id,
+        include_non_shop_stages=include_non_shop_stages,
+    )
+
+    response_payload = {
+        "period": {
+            "start_date": start_date.isoformat() if start_date else None,
+            "end_date": end_date.isoformat() if end_date else None,
+        },
+        "filters": {
+            "status_id": status_id,
+            "include_non_shop_stages": include_non_shop_stages,
+        },
+        "summary": report_data["summary"],
+        "shop_current_stage_counts": report_data["shop_current_stage_counts"],
+    }
+
+    if include_fab_details:
+        response_payload["fabs"] = report_data["fabs"]
+
+    return success_response(response_payload, "Shop Production Summary report generated")
 
 
 @router.get("/reports/owner/stalled-install-jobs", response_model=SuccessResponse[dict])
