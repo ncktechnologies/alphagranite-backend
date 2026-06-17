@@ -24,6 +24,7 @@ from src.app.database.edge import Edge
 from src.app.database.fab import Fab
 from src.app.database.installer_rate_history import InstallerRateHistory
 from src.app.database.installer_job_timer_session import InstallerJobTimerSession
+from src.app.database.templater_job_timer_session import TemplaterJobTimerSession
 from src.app.database.shop_cut_plan import ShopCutPlan
 from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness
@@ -2776,7 +2777,7 @@ async def get_owner_installation_template_dashboard_report(
             template_activity_date.label("activity_date"),
             Templating.total_sqft,
             BusinessJob.sq_ft,
-            Templating.duration,
+            func.coalesce(func.sum(TemplaterJobTimerSession.total_work_seconds), 0).label("work_seconds"),
         )
         .select_from(Templating)
         .join(Fab, Fab.id == Templating.fab_id, isouter=True)
@@ -2784,6 +2785,32 @@ async def get_owner_installation_template_dashboard_report(
         .join(Account, Account.id == BusinessJob.account_id, isouter=True)
         .join(InstallerUser, InstallerUser.id == Templating.technician_id, isouter=True)
         .join(SalesPersonUser, SalesPersonUser.id == Fab.sales_person_id, isouter=True)
+        .join(
+            TemplaterJobTimerSession,
+            and_(
+                TemplaterJobTimerSession.fab_id == Templating.fab_id,
+                TemplaterJobTimerSession.templater_id == Templating.technician_id,
+            ),
+            isouter=True,
+        )
+        .group_by(
+            Templating.technician_id,
+            InstallerUser.first_name,
+            InstallerUser.last_name,
+            BusinessJob.job_number,
+            BusinessJob.name,
+            Account.name,
+            Fab.id,
+            Fab.fab_type,
+            Fab.sales_person_id,
+            SalesPersonUser.first_name,
+            SalesPersonUser.last_name,
+            Templating.is_completed,
+            Templating.notes,
+            template_activity_date,
+            Templating.total_sqft,
+            BusinessJob.sq_ft,
+        )
         .order_by(template_activity_date.desc())
     , template_activity_date)
 
@@ -2878,13 +2905,13 @@ async def get_owner_installation_template_dashboard_report(
             activity_date_value,
             total_sqft_raw,
             job_sqft,
-            duration_minutes,
+            work_seconds,
         ) = row
 
         installer_name = f"{(installer_first_name or '').strip()} {(installer_last_name or '').strip()}".strip() or (f"User {technician_id}" if technician_id else "Unknown")
         sales_person_name = f"{(sales_person_first_name or '').strip()} {(sales_person_last_name or '').strip()}".strip() or (f"User {row_sales_person_id}" if row_sales_person_id else None)
         total_sqft = round(_to_float(total_sqft_raw), 2)
-        total_seconds = int(_to_float(duration_minutes) * 60)
+        total_seconds = int(_to_float(work_seconds))
         group = _get_group(installer_name, technician_id, "Templater")
         group["total_seconds"] += total_seconds
         group["job_count"] += 1
