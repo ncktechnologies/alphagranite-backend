@@ -2707,6 +2707,7 @@ async def get_owner_installation_template_dashboard_report(
             InstallerUser.last_name.label("installer_last_name"),
             BusinessJob.job_number,
             BusinessJob.name.label("job_name"),
+            Account.name.label("account_name"),
             Fab.id.label("fab_id"),
             Fab.fab_type,
             Fab.sales_person_id,
@@ -2722,6 +2723,7 @@ async def get_owner_installation_template_dashboard_report(
         .select_from(InstallCompletion)
         .join(Fab, Fab.id == InstallCompletion.fab_id)
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
         .join(InstallerUser, InstallerUser.id == InstallCompletion.installer_id, isouter=True)
         .join(SalesPersonUser, SalesPersonUser.id == Fab.sales_person_id, isouter=True)
         .join(
@@ -2738,6 +2740,7 @@ async def get_owner_installation_template_dashboard_report(
             InstallerUser.last_name,
             BusinessJob.job_number,
             BusinessJob.name,
+            Account.name,
             Fab.id,
             Fab.fab_type,
             Fab.sales_person_id,
@@ -2762,6 +2765,7 @@ async def get_owner_installation_template_dashboard_report(
             InstallerUser.last_name.label("installer_last_name"),
             BusinessJob.job_number,
             BusinessJob.name.label("job_name"),
+            Account.name.label("account_name"),
             Fab.id.label("fab_id"),
             Fab.fab_type,
             Fab.sales_person_id,
@@ -2777,6 +2781,7 @@ async def get_owner_installation_template_dashboard_report(
         .select_from(Templating)
         .join(Fab, Fab.id == Templating.fab_id, isouter=True)
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
         .join(InstallerUser, InstallerUser.id == Templating.technician_id, isouter=True)
         .join(SalesPersonUser, SalesPersonUser.id == Fab.sales_person_id, isouter=True)
         .order_by(template_activity_date.desc())
@@ -2806,6 +2811,7 @@ async def get_owner_installation_template_dashboard_report(
             installer_last_name,
             job_number,
             job_name,
+            account_name,
             fab_row_id,
             row_fab_type,
             row_sales_person_id,
@@ -2840,10 +2846,13 @@ async def get_owner_installation_template_dashboard_report(
                 "fab_type": row_fab_type,
                 "job_number": job_number,
                 "job_name": job_name or "Unknown Job",
+                "account_name": account_name,
                 "activity_complete": bool(is_completed),
                 "duration": _format_duration_hhmm(total_seconds),
                 "sq_ft_installed": installed_sqft,
                 "sq_ft_incomplete": incomplete_sqft,
+                "sqft_templated": installed_sqft,
+                "sqft_not_templated": incomplete_sqft,
                 "reason_if_not_complete": None if bool(is_completed) else (_notes_to_text(completion_notes) or "Not marked complete"),
                 "sales_person_id": row_sales_person_id,
                 "sales_person_name": sales_person_name,
@@ -2858,6 +2867,7 @@ async def get_owner_installation_template_dashboard_report(
             installer_last_name,
             job_number,
             job_name,
+            account_name,
             fab_row_id,
             row_fab_type,
             row_sales_person_id,
@@ -2891,10 +2901,13 @@ async def get_owner_installation_template_dashboard_report(
                 "fab_type": row_fab_type,
                 "job_number": job_number,
                 "job_name": job_name or "Unknown Job",
+                "account_name": account_name,
                 "activity_complete": bool(is_completed),
                 "duration": _format_duration_hhmm(total_seconds),
                 "sq_ft_installed": total_sqft if bool(is_completed) else 0.0,
                 "sq_ft_incomplete": 0.0 if bool(is_completed) else total_sqft,
+                "sqft_templated": total_sqft if bool(is_completed) else 0.0,
+                "sqft_not_templated": 0.0 if bool(is_completed) else total_sqft,
                 "reason_if_not_complete": None if bool(is_completed) else (_notes_to_text(notes) or "Not marked complete"),
                 "sales_person_id": row_sales_person_id,
                 "sales_person_name": sales_person_name,
@@ -2953,10 +2966,13 @@ async def get_owner_installation_template_dashboard_report(
                 "installer",
                 "installer_hours",
                 "job_name",
+                "account_name",
                 "activity_complete",
                 "duration",
                 "sq_ft_installed",
                 "sq_ft_incomplete",
+                "sqft_templated",
+                "sqft_not_templated",
                 "reason_if_not_complete",
             ],
             "filters": {
@@ -4389,6 +4405,8 @@ async def get_owner_service_level_report(
     end_date: Optional[date] = Query(None, description="Inclusive end date filter"),
     date_basis: str = Query("completed", pattern="^(created|scheduled|completed)$"),
     sla_days: int = Query(14, ge=1, le=365, description="SLA threshold in days"),
+    sort_by: str = Query("stage", pattern="^(fab_id|job_number|stage)$", description="Sort fab_status_rows by fab_id, job_number, or stage"),
+    sort_order: str = Query("asc", pattern="^(asc|desc)$", description="Sort direction for fab_status_rows"),
     breach_limit: int = Query(500, ge=1, le=5000),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -4588,11 +4606,17 @@ async def get_owner_service_level_report(
             Fab.id,
             BusinessJob.job_number,
             BusinessJob.name,
+            Account.name.label("account_name"),
             BusinessJob.priority,
             Fab.current_stage,
             Fab.fab_type,
+            Fab.input_area,
             Fab.total_sqft,
             Fab.no_of_pieces,
+            StoneType.name.label("stone_type_name"),
+            StoneColor.name.label("stone_color_name"),
+            StoneThickness.thickness.label("stone_thickness_value"),
+            Edge.name.label("edge_name"),
             Fab.created_at,
             Fab.updated_at,
             Fab.template_completed_date,
@@ -4618,6 +4642,11 @@ async def get_owner_service_level_report(
         )
         .select_from(Fab)
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+        .join(StoneType, StoneType.id == Fab.stone_type_id, isouter=True)
+        .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
+        .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
+        .join(Edge, Edge.id == Fab.edge_id, isouter=True)
         .join(schedule_subquery, schedule_subquery.c.fab_id == Fab.id, isouter=True)
         .join(completed_subquery, completed_subquery.c.fab_id == Fab.id, isouter=True)
         .join(revision_subquery, revision_subquery.c.fab_id == Fab.id, isouter=True)
@@ -4712,11 +4741,17 @@ async def get_owner_service_level_report(
         fab_id,
         job_number,
         job_name,
+        account_name,
         job_priority,
         current_stage,
         fab_type,
+        input_area,
         total_sqft,
         no_of_pieces,
+        stone_type_name,
+        stone_color_name,
+        stone_thickness_value,
+        edge_name,
         created_at,
         updated_at,
         template_completed_at,
@@ -4818,6 +4853,13 @@ async def get_owner_service_level_report(
                 "fab_type": fab_type,
                 "fab_id": fab_id,
                 "job_number": job_number,
+                "job_name": job_name,
+                "account_name": account_name,
+                "input_area": input_area,
+                "stone_type_name": stone_type_name,
+                "stone_color_name": stone_color_name,
+                "stone_thickness_value": stone_thickness_value,
+                "edge_name": edge_name,
                 "fab_info": (f"{job_name or ''} | {round(_to_float(total_sqft), 2)} sqft | {int(_to_float(no_of_pieces))} pcs").strip(" |"),
                 "current_stage": stage_name if stage_name != "Other" else current_stage,
                 "days_since_template": days_since_template,
@@ -4836,6 +4878,13 @@ async def get_owner_service_level_report(
                 {
                     "fab_id": fab_id,
                     "job_number": job_number,
+                    "job_name": job_name,
+                    "account_name": account_name,
+                    "input_area": input_area,
+                    "stone_type_name": stone_type_name,
+                    "stone_color_name": stone_color_name,
+                    "stone_thickness_value": stone_thickness_value,
+                    "edge_name": edge_name,
                     "current_stage": stage_name if stage_name != "Other" else current_stage,
                     "age_days": days_in_stage,
                     "sla_days": target_days,
@@ -4887,13 +4936,16 @@ async def get_owner_service_level_report(
         "oldest_open_job": oldest_open_job,
     }
 
-    fab_status_rows.sort(
-        key=lambda row: (
-            2 if row["risk_color"] == "red" else 1 if row["risk_color"] == "yellow" else 0,
-            row["days_in_stage"] or 0,
-        ),
-        reverse=True,
-    )
+    sort_by_normalized = (sort_by or "stage").strip().lower()
+    sort_order_normalized = (sort_order or "asc").strip().lower()
+    reverse_sort = sort_order_normalized == "desc"
+
+    if sort_by_normalized == "fab_id":
+        fab_status_rows.sort(key=lambda row: int(_to_float(row.get("fab_id", 0))), reverse=reverse_sort)
+    elif sort_by_normalized == "job_number":
+        fab_status_rows.sort(key=lambda row: (row.get("job_number") or "").lower(), reverse=reverse_sort)
+    else:
+        fab_status_rows.sort(key=lambda row: (row.get("current_stage") or "").lower(), reverse=reverse_sort)
 
     return success_response(
         {
@@ -4903,6 +4955,10 @@ async def get_owner_service_level_report(
                 "end_date": end_date.isoformat() if end_date else None,
                 "date_basis": date_basis,
                 "sla_days": sla_days,
+            },
+            "sort": {
+                "sort_by": sort_by_normalized,
+                "sort_order": sort_order_normalized,
             },
             "widgets": widgets,
             "summary": {

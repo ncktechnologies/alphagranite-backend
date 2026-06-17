@@ -284,6 +284,16 @@ class FabCreate(BaseModel):
     cost_of_stone_id: Optional[int] = Field(None, description="Cost of stone record ID")
     cost_of_stone: Optional[Decimal] = Field(None, description="Cost of stone amount")
 
+    @field_validator("revenue", mode="before")
+    @classmethod
+    def normalize_optional_revenue(cls, value):
+        # Allow empty input from clients to behave as an omitted optional field.
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
 
 class FabUpdate(BaseModel):
     fab_type: Optional[str] = Field(None, min_length=1, max_length=255)
