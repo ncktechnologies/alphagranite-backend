@@ -2701,6 +2701,32 @@ async def get_owner_installation_template_dashboard_report(
     grouped_rows_map: dict[str, dict] = {}
     flat_rows: list[dict] = []
 
+    installer_timer_totals = (
+        select(
+            InstallerJobTimerSession.installer_id.label("installer_id"),
+            InstallerJobTimerSession.job_id.label("job_id"),
+            func.coalesce(func.sum(InstallerJobTimerSession.total_work_seconds), 0).label("work_seconds"),
+        )
+        .group_by(
+            InstallerJobTimerSession.installer_id,
+            InstallerJobTimerSession.job_id,
+        )
+        .subquery("installer_timer_totals")
+    )
+
+    templater_timer_totals = (
+        select(
+            TemplaterJobTimerSession.templater_id.label("templater_id"),
+            TemplaterJobTimerSession.job_id.label("job_id"),
+            func.coalesce(func.sum(TemplaterJobTimerSession.total_work_seconds), 0).label("work_seconds"),
+        )
+        .group_by(
+            TemplaterJobTimerSession.templater_id,
+            TemplaterJobTimerSession.job_id,
+        )
+        .subquery("templater_timer_totals")
+    )
+
     install_query = _matches_common_filters(
         select(
             InstallCompletion.installer_id,
@@ -2719,7 +2745,7 @@ async def get_owner_installation_template_dashboard_report(
             InstallCompletion.completion_date,
             InstallCompletion.total_sqft_installed,
             BusinessJob.sq_ft,
-            func.coalesce(func.sum(InstallerJobTimerSession.total_work_seconds), 0).label("work_seconds"),
+            func.coalesce(installer_timer_totals.c.work_seconds, 0).label("work_seconds"),
         )
         .select_from(InstallCompletion)
         .join(Fab, Fab.id == InstallCompletion.fab_id)
@@ -2728,36 +2754,12 @@ async def get_owner_installation_template_dashboard_report(
         .join(InstallerUser, InstallerUser.id == InstallCompletion.installer_id, isouter=True)
         .join(SalesPersonUser, SalesPersonUser.id == Fab.sales_person_id, isouter=True)
         .join(
-            InstallerJobTimerSession,
+            installer_timer_totals,
             and_(
-                InstallerJobTimerSession.installer_id == InstallCompletion.installer_id,
-                or_(
-                    InstallerJobTimerSession.fab_id == InstallCompletion.fab_id,
-                    and_(
-                        InstallerJobTimerSession.fab_id.is_(None),
-                        InstallerJobTimerSession.job_id == Fab.job_id,
-                    ),
-                ),
+                installer_timer_totals.c.installer_id == InstallCompletion.installer_id,
+                installer_timer_totals.c.job_id == BusinessJob.id,
             ),
             isouter=True,
-        )
-        .group_by(
-            InstallCompletion.installer_id,
-            InstallerUser.first_name,
-            InstallerUser.last_name,
-            BusinessJob.job_number,
-            BusinessJob.name,
-            Account.name,
-            Fab.id,
-            Fab.fab_type,
-            Fab.sales_person_id,
-            SalesPersonUser.first_name,
-            SalesPersonUser.last_name,
-            InstallCompletion.is_completed,
-            InstallCompletion.completion_notes,
-            InstallCompletion.completion_date,
-            InstallCompletion.total_sqft_installed,
-            BusinessJob.sq_ft,
         )
         .order_by(InstallCompletion.completion_date.desc(), Fab.id.desc())
     , InstallCompletion.completion_date)
@@ -2784,7 +2786,7 @@ async def get_owner_installation_template_dashboard_report(
             Templating.total_sqft,
             BusinessJob.sq_ft,
             Templating.duration,
-            func.coalesce(func.sum(TemplaterJobTimerSession.total_work_seconds), 0).label("work_seconds"),
+            func.coalesce(templater_timer_totals.c.work_seconds, 0).label("work_seconds"),
         )
         .select_from(Templating)
         .join(Fab, Fab.id == Templating.fab_id, isouter=True)
@@ -2793,37 +2795,12 @@ async def get_owner_installation_template_dashboard_report(
         .join(InstallerUser, InstallerUser.id == Templating.technician_id, isouter=True)
         .join(SalesPersonUser, SalesPersonUser.id == Fab.sales_person_id, isouter=True)
         .join(
-            TemplaterJobTimerSession,
+            templater_timer_totals,
             and_(
-                TemplaterJobTimerSession.templater_id == Templating.technician_id,
-                or_(
-                    TemplaterJobTimerSession.fab_id == Templating.fab_id,
-                    and_(
-                        TemplaterJobTimerSession.fab_id.is_(None),
-                        TemplaterJobTimerSession.job_id == Fab.job_id,
-                    ),
-                ),
+                templater_timer_totals.c.templater_id == Templating.technician_id,
+                templater_timer_totals.c.job_id == BusinessJob.id,
             ),
             isouter=True,
-        )
-        .group_by(
-            Templating.technician_id,
-            InstallerUser.first_name,
-            InstallerUser.last_name,
-            BusinessJob.job_number,
-            BusinessJob.name,
-            Account.name,
-            Fab.id,
-            Fab.fab_type,
-            Fab.sales_person_id,
-            SalesPersonUser.first_name,
-            SalesPersonUser.last_name,
-            Templating.is_completed,
-            Templating.notes,
-            template_activity_date,
-            Templating.total_sqft,
-            BusinessJob.sq_ft,
-            Templating.duration,
         )
         .order_by(template_activity_date.desc())
     , template_activity_date)
