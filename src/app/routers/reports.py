@@ -2823,6 +2823,7 @@ async def get_owner_installation_template_dashboard_report(
             template_activity_date,
             Templating.total_sqft,
             BusinessJob.sq_ft,
+            Templating.duration,
         )
         .order_by(template_activity_date.desc())
     , template_activity_date)
