@@ -2714,6 +2714,8 @@ async def get_owner_installation_template_dashboard_report(
         select(
             TemplaterJobTimerSession.job_id.label("job_id"),
             func.coalesce(func.sum(TemplaterJobTimerSession.total_work_seconds), 0).label("work_seconds"),
+            func.coalesce(func.sum(TemplaterJobTimerSession.sqft_templated), 0).label("sqft_templated"),
+            func.coalesce(func.sum(TemplaterJobTimerSession.sqft_not_templated), 0).label("sqft_not_templated"),
         )
         .group_by(TemplaterJobTimerSession.job_id)
         .subquery("templater_timer_totals")
@@ -2776,6 +2778,8 @@ async def get_owner_installation_template_dashboard_report(
             BusinessJob.sq_ft,
             Templating.duration,
             func.coalesce(templater_timer_totals.c.work_seconds, 0).label("work_seconds"),
+            func.coalesce(templater_timer_totals.c.sqft_templated, 0).label("timer_sqft_templated"),
+            func.coalesce(templater_timer_totals.c.sqft_not_templated, 0).label("timer_sqft_not_templated"),
         )
         .select_from(Templating)
         .join(Fab, Fab.id == Templating.fab_id, isouter=True)
@@ -2884,11 +2888,22 @@ async def get_owner_installation_template_dashboard_report(
             job_sqft,
             duration_minutes,
             work_seconds,
+            timer_sqft_templated_raw,
+            timer_sqft_not_templated_raw,
         ) = row
 
         installer_name = f"{(installer_first_name or '').strip()} {(installer_last_name or '').strip()}".strip() or (f"User {technician_id}" if technician_id else "Unknown")
         sales_person_name = f"{(sales_person_first_name or '').strip()} {(sales_person_last_name or '').strip()}".strip() or (f"User {row_sales_person_id}" if row_sales_person_id else None)
         total_sqft = round(_to_float(total_sqft_raw), 2)
+        templated_sqft = round(_to_float(timer_sqft_templated_raw), 2)
+        not_templated_sqft = round(_to_float(timer_sqft_not_templated_raw), 2)
+        if templated_sqft <= 0 and not_templated_sqft <= 0 and total_sqft > 0:
+            if bool(is_completed):
+                templated_sqft = total_sqft
+                not_templated_sqft = 0.0
+            else:
+                templated_sqft = 0.0
+                not_templated_sqft = total_sqft
         total_seconds = int(_to_float(work_seconds))
         if total_seconds <= 0 and duration_minutes is not None:
             total_seconds = int(_to_float(duration_minutes) * 60)
@@ -2911,10 +2926,10 @@ async def get_owner_installation_template_dashboard_report(
                 "account_name": account_name,
                 "activity_complete": bool(is_completed),
                 "duration": _format_duration_hhmm(total_seconds),
-                "sq_ft_installed": total_sqft if bool(is_completed) else 0.0,
-                "sq_ft_incomplete": 0.0 if bool(is_completed) else total_sqft,
-                "sqft_templated": total_sqft if bool(is_completed) else 0.0,
-                "sqft_not_templated": 0.0 if bool(is_completed) else total_sqft,
+                "sq_ft_installed": templated_sqft,
+                "sq_ft_incomplete": not_templated_sqft,
+                "sqft_templated": templated_sqft,
+                "sqft_not_templated": not_templated_sqft,
                 "reason_if_not_complete": None if bool(is_completed) else (_notes_to_text(notes) or "Not marked complete"),
                 "sales_person_id": row_sales_person_id,
                 "sales_person_name": sales_person_name,
