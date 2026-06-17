@@ -2730,8 +2730,14 @@ async def get_owner_installation_template_dashboard_report(
         .join(
             InstallerJobTimerSession,
             and_(
-                InstallerJobTimerSession.fab_id == InstallCompletion.fab_id,
                 InstallerJobTimerSession.installer_id == InstallCompletion.installer_id,
+                or_(
+                    InstallerJobTimerSession.fab_id == InstallCompletion.fab_id,
+                    and_(
+                        InstallerJobTimerSession.fab_id.is_(None),
+                        InstallerJobTimerSession.job_id == Fab.job_id,
+                    ),
+                ),
             ),
             isouter=True,
         )
@@ -2777,6 +2783,7 @@ async def get_owner_installation_template_dashboard_report(
             template_activity_date.label("activity_date"),
             Templating.total_sqft,
             BusinessJob.sq_ft,
+            Templating.duration,
             func.coalesce(func.sum(TemplaterJobTimerSession.total_work_seconds), 0).label("work_seconds"),
         )
         .select_from(Templating)
@@ -2788,8 +2795,14 @@ async def get_owner_installation_template_dashboard_report(
         .join(
             TemplaterJobTimerSession,
             and_(
-                TemplaterJobTimerSession.fab_id == Templating.fab_id,
                 TemplaterJobTimerSession.templater_id == Templating.technician_id,
+                or_(
+                    TemplaterJobTimerSession.fab_id == Templating.fab_id,
+                    and_(
+                        TemplaterJobTimerSession.fab_id.is_(None),
+                        TemplaterJobTimerSession.job_id == Fab.job_id,
+                    ),
+                ),
             ),
             isouter=True,
         )
@@ -2905,6 +2918,7 @@ async def get_owner_installation_template_dashboard_report(
             activity_date_value,
             total_sqft_raw,
             job_sqft,
+            duration_minutes,
             work_seconds,
         ) = row
 
@@ -2912,6 +2926,8 @@ async def get_owner_installation_template_dashboard_report(
         sales_person_name = f"{(sales_person_first_name or '').strip()} {(sales_person_last_name or '').strip()}".strip() or (f"User {row_sales_person_id}" if row_sales_person_id else None)
         total_sqft = round(_to_float(total_sqft_raw), 2)
         total_seconds = int(_to_float(work_seconds))
+        if total_seconds <= 0 and duration_minutes is not None:
+            total_seconds = int(_to_float(duration_minutes) * 60)
         group = _get_group(installer_name, technician_id, "Templater")
         group["total_seconds"] += total_seconds
         group["job_count"] += 1
