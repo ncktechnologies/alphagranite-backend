@@ -4736,14 +4736,15 @@ async def get_owner_service_level_report(
     backlog_records = backlog_rows
     user_ids: set[int] = set()
     for row in backlog_records:
-        drafter_id = row[21]
-        sales_person_id = row[22]
-        revision_assigned_to = row[26]
-        if drafter_id is not None:
+        # Keep tuple-index mapping aligned to backlog_query select order.
+        drafter_id = row[27]
+        sales_person_id = row[28]
+        revision_assigned_to = row[32]
+        if isinstance(drafter_id, int):
             user_ids.add(drafter_id)
-        if sales_person_id is not None:
+        if isinstance(sales_person_id, int):
             user_ids.add(sales_person_id)
-        if revision_assigned_to is not None:
+        if isinstance(revision_assigned_to, int):
             user_ids.add(revision_assigned_to)
 
     user_names: dict[int, str] = {}
