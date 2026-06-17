@@ -2712,14 +2712,10 @@ async def get_owner_installation_template_dashboard_report(
 
     templater_timer_totals = (
         select(
-            TemplaterJobTimerSession.templater_id.label("templater_id"),
             TemplaterJobTimerSession.job_id.label("job_id"),
             func.coalesce(func.sum(TemplaterJobTimerSession.total_work_seconds), 0).label("work_seconds"),
         )
-        .group_by(
-            TemplaterJobTimerSession.templater_id,
-            TemplaterJobTimerSession.job_id,
-        )
+        .group_by(TemplaterJobTimerSession.job_id)
         .subquery("templater_timer_totals")
     )
 
@@ -2789,10 +2785,7 @@ async def get_owner_installation_template_dashboard_report(
         .join(SalesPersonUser, SalesPersonUser.id == Fab.sales_person_id, isouter=True)
         .join(
             templater_timer_totals,
-            and_(
-                templater_timer_totals.c.templater_id == Templating.technician_id,
-                templater_timer_totals.c.job_id == BusinessJob.id,
-            ),
+            templater_timer_totals.c.job_id == BusinessJob.id,
             isouter=True,
         )
         .order_by(template_activity_date.desc())
