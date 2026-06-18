@@ -23,6 +23,10 @@ class Fab(SQLModel, table=True):
     
     # Cost of stone - dollar amount
     cost_of_stone: Optional[float] = Field(default=None)
+    redo_total_sqft: Optional[float] = Field(default=None)
+    redo_department: Optional[int] = Field(default=None, foreign_key="departments.id")
+    cost_per_sqft: Optional[float] = Field(default=None)
+    redo_requested_by: Optional[int] = Field(default=None, foreign_key="users.id")
     
     # Process steps flags
     template_needed: bool = Field(default=True)

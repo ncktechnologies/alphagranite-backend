@@ -30,7 +30,7 @@ from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness
 from src.app.database.stone_type import StoneType
 from src.app.database.user import User
-from src.app.interface.generated_schemas import CNCDrafting, CostOfStone, CutList, DraftingSession, InstallCompletion, InstallScheduling, PlanningSection, ResurfaceScheduling, Revision, Templating
+from src.app.interface.generated_schemas import CNCDrafting, CostOfStone, CutList, DraftingSession, InstallCompletion, InstallScheduling, PlanningSection, ResurfaceScheduling, Revision, ShopRevision, Templating
 from src.app.interface.response_wrappers import SuccessResponse, success_response
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.routers.fabs import _get_shop_current_stage
@@ -1467,120 +1467,423 @@ async def get_owner_overview_report(
 async def get_owner_redo_analysis_report(
     start_date: Optional[date] = Query(None, description="Inclusive start date filter"),
     end_date: Optional[date] = Query(None, description="Inclusive end date filter"),
+    month: Optional[int] = Query(None, ge=1, le=12, description="Optional month filter"),
+    year: Optional[int] = Query(None, ge=2000, le=2100, description="Optional year for month filter"),
     top_n: int = Query(10, ge=1, le=50, description="Top N groups to return"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Analyze redo/revision volume and hotspots by stage, account, and job."""
-    start_dt, end_dt = _range_bounds(start_date, end_date)
+    """Analyze AG redo performance with monthly cut completion baseline and annual summary."""
 
-    fab_filters = []
-    _apply_datetime_filters(fab_filters, Fab.created_at, start_dt, end_dt)
+    if month is not None or year is not None:
+        effective_year = year or date.today().year
+        effective_month = month or date.today().month
+        start_dt, end_dt = _month_bounds(effective_year, effective_month)
+        period_payload = {
+            "mode": "month",
+            "start_date": start_dt.date().isoformat(),
+            "end_date": end_dt.date().isoformat(),
+            "month": effective_month,
+            "year": effective_year,
+        }
+    else:
+        start_dt, end_dt = _range_bounds(start_date, end_date)
+        if start_dt is None and end_dt is None:
+            default_year = date.today().year
+            default_month = date.today().month
+            start_dt, end_dt = _month_bounds(default_year, default_month)
+            period_payload = {
+                "mode": "month",
+                "start_date": start_dt.date().isoformat(),
+                "end_date": end_dt.date().isoformat(),
+                "month": default_month,
+                "year": default_year,
+            }
+        else:
+            period_payload = {
+                "mode": "date_range",
+                "start_date": start_dt.date().isoformat() if start_dt else None,
+                "end_date": end_dt.date().isoformat() if end_dt else None,
+                "month": None,
+                "year": None,
+            }
 
-    total_fabs = (
-        await db.execute(select(func.count(Fab.id)).where(and_(*fab_filters)) if fab_filters else select(func.count(Fab.id)))
-    ).scalar() or 0
+    current_month_start, current_month_end = _month_bounds(date.today().year, date.today().month)
+    annual_year = year or (start_dt.year if start_dt else date.today().year)
 
-    revised_filters = [Fab.revised.is_(True)]
-    revised_filters.extend(fab_filters)
-    revised_count = (
-        await db.execute(select(func.count(Fab.id)).where(and_(*revised_filters)))
-    ).scalar() or 0
+    normalized_plan = func.lower(func.trim(PlanningSection.plan_name))
+    ag_redo_filter = func.lower(func.coalesce(Fab.fab_type, "")) == "ag redo"
 
-    revision_filters = []
-    _apply_datetime_filters(revision_filters, Revision.created_at, start_dt, end_dt)
-    revision_events = (
+    # Widget 1: non-AG redo FABs where CUT + WJ are 100% using shop plan actual_end_date within selected period.
+    cut_wj_completed_fabs_subquery = (
+        select(ShopCutPlan.fab_id.label("fab_id"))
+        .select_from(ShopCutPlan)
+        .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
+        .where(
+            ShopCutPlan.work_percentage >= 100,
+            ShopCutPlan.actual_end_date.isnot(None),
+            normalized_plan.in_(["cut", "wj"]),
+            ShopCutPlan.actual_end_date >= start_dt,
+            ShopCutPlan.actual_end_date <= end_dt,
+        )
+        .group_by(ShopCutPlan.fab_id)
+        .having(func.count(func.distinct(normalized_plan)) == 2)
+        .subquery("cut_wj_completed_fabs_subquery")
+    )
+
+    total_fabs_for_period = (
         await db.execute(
-            select(func.count(Revision.id)).where(and_(*revision_filters)) if revision_filters else select(func.count(Revision.id))
+            select(func.count(Fab.id))
+            .select_from(Fab)
+            .join(cut_wj_completed_fabs_subquery, cut_wj_completed_fabs_subquery.c.fab_id == Fab.id)
+            .where(~ag_redo_filter)
         )
     ).scalar() or 0
 
+    # Current month AG redo widgets.
+    current_month_ag_redo_count = (
+        await db.execute(
+            select(func.count(Fab.id)).where(
+                ag_redo_filter,
+                Fab.created_at >= current_month_start,
+                Fab.created_at <= current_month_end,
+            )
+        )
+    ).scalar() or 0
+
+    # Keep AG redo rate behavior compatible with previous endpoint semantics.
+    previous_total_fabs = (
+        await db.execute(
+            select(func.count(Fab.id)).where(Fab.created_at >= start_dt, Fab.created_at <= end_dt)
+        )
+    ).scalar() or 0
+    previous_revised_fabs = (
+        await db.execute(
+            select(func.count(Fab.id)).where(
+                Fab.revised.is_(True),
+                Fab.created_at >= start_dt,
+                Fab.created_at <= end_dt,
+            )
+        )
+    ).scalar() or 0
+    redo_rate = round((previous_revised_fabs / previous_total_fabs) * 100, 2) if previous_total_fabs else 0.0
+
+    selected_period_ag_redo_rows = (
+        await db.execute(
+            select(
+                Fab.id,
+                Fab.job_id,
+                Fab.redo_department,
+                Fab.redo_requested_by,
+                Fab.redo_total_sqft,
+                Fab.cost_per_sqft,
+                Fab.total_sqft,
+                Fab.created_at,
+            )
+            .where(
+                ag_redo_filter,
+                Fab.created_at >= start_dt,
+                Fab.created_at <= end_dt,
+            )
+            .order_by(Fab.created_at.desc(), Fab.id.desc())
+        )
+    ).all()
+
+    def _redo_sqft(row) -> float:
+        redo_sqft_value = _to_float(row.redo_total_sqft)
+        if redo_sqft_value > 0:
+            return redo_sqft_value
+        return _to_float(row.total_sqft)
+
+    def _redo_value(row) -> float:
+        return _to_float(row.cost_per_sqft) * _redo_sqft(row)
+
+    def _redo_total_cost(row) -> float:
+        return _to_float(row.cost_per_sqft) * 2.1 * _redo_sqft(row)
+
+    total_ag_redo_sqft = round(sum(_redo_sqft(row) for row in selected_period_ag_redo_rows), 2)
+    total_ag_redo_value = round(sum(_redo_value(row) for row in selected_period_ag_redo_rows), 2)
+
+    dept_ids = sorted({int(row.redo_department) for row in selected_period_ag_redo_rows if row.redo_department is not None})
+    requested_by_ids = sorted({int(row.redo_requested_by) for row in selected_period_ag_redo_rows if row.redo_requested_by is not None})
+    job_ids = sorted({int(row.job_id) for row in selected_period_ag_redo_rows if row.job_id is not None})
+
+    department_name_map: dict[int, str] = {}
+    if dept_ids:
+        dept_rows = (await db.execute(select(Department.id, Department.name).where(Department.id.in_(dept_ids)))).all()
+        department_name_map = {row[0]: row[1] for row in dept_rows}
+
+    employee_name_map: dict[int, str] = {}
+    if requested_by_ids:
+        employee_rows = (await db.execute(select(User.id, User.first_name, User.last_name).where(User.id.in_(requested_by_ids)))).all()
+        employee_name_map = {
+            row[0]: (f"{(row[1] or '').strip()} {(row[2] or '').strip()}".strip() or f"User {row[0]}")
+            for row in employee_rows
+        }
+
+    job_account_map: dict[int, dict] = {}
+    if job_ids:
+        job_rows = (
+            await db.execute(
+                select(
+                    BusinessJob.id,
+                    BusinessJob.job_number,
+                    BusinessJob.name,
+                    Account.id,
+                    Account.name,
+                )
+                .select_from(BusinessJob)
+                .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+                .where(BusinessJob.id.in_(job_ids))
+            )
+        ).all()
+        job_account_map = {
+            row[0]: {
+                "job_number": row[1],
+                "job_name": row[2],
+                "account_id": row[3],
+                "account_name": row[4],
+            }
+            for row in job_rows
+        }
+
+    redo_by_department_map: dict[int, dict] = {}
+    redo_by_employee_map: dict[int, dict] = {}
+    redo_total_cost_rows: list[dict] = []
+    top_accounts_map: dict[int, dict] = {}
+    top_jobs_map: dict[int, dict] = {}
+
+    for row in selected_period_ag_redo_rows:
+        department_id = int(row.redo_department) if row.redo_department is not None else None
+        employee_id = int(row.redo_requested_by) if row.redo_requested_by is not None else None
+        redo_sqft_value = _redo_sqft(row)
+        redo_value = _redo_value(row)
+        redo_total_cost_value = _redo_total_cost(row)
+        job_meta = job_account_map.get(int(row.job_id) if row.job_id is not None else -1, {})
+
+        if department_id is not None:
+            dept_bucket = redo_by_department_map.setdefault(
+                department_id,
+                {
+                    "department_id": department_id,
+                    "department_name": department_name_map.get(department_id, f"Department {department_id}"),
+                    "redo_count": 0,
+                    "redo_sqft": 0.0,
+                    "redo_value": 0.0,
+                    "redo_total_cost": 0.0,
+                },
+            )
+            dept_bucket["redo_count"] += 1
+            dept_bucket["redo_sqft"] += redo_sqft_value
+            dept_bucket["redo_value"] += redo_value
+            dept_bucket["redo_total_cost"] += redo_total_cost_value
+
+        if employee_id is not None:
+            employee_bucket = redo_by_employee_map.setdefault(
+                employee_id,
+                {
+                    "employee_id": employee_id,
+                    "employee_name": employee_name_map.get(employee_id, f"User {employee_id}"),
+                    "redo_count": 0,
+                    "redo_sqft": 0.0,
+                    "redo_value": 0.0,
+                    "redo_total_cost": 0.0,
+                },
+            )
+            employee_bucket["redo_count"] += 1
+            employee_bucket["redo_sqft"] += redo_sqft_value
+            employee_bucket["redo_value"] += redo_value
+            employee_bucket["redo_total_cost"] += redo_total_cost_value
+
+        account_id = job_meta.get("account_id")
+        if account_id is not None:
+            account_bucket = top_accounts_map.setdefault(
+                int(account_id),
+                {
+                    "account_id": int(account_id),
+                    "account_name": job_meta.get("account_name") or "Unassigned Account",
+                    "redo_count": 0,
+                },
+            )
+            account_bucket["redo_count"] += 1
+
+        if row.job_id is not None:
+            job_bucket = top_jobs_map.setdefault(
+                int(row.job_id),
+                {
+                    "job_id": int(row.job_id),
+                    "job_number": job_meta.get("job_number"),
+                    "job_name": job_meta.get("job_name"),
+                    "redo_count": 0,
+                },
+            )
+            job_bucket["redo_count"] += 1
+
+        redo_total_cost_rows.append(
+            {
+                "fab_id": row.id,
+                "job_id": row.job_id,
+                "job_number": job_meta.get("job_number"),
+                "job_name": job_meta.get("job_name"),
+                "account_id": job_meta.get("account_id"),
+                "account_name": job_meta.get("account_name"),
+                "cost_per_sqft": round(_to_float(row.cost_per_sqft), 2),
+                "redo_total_sqft": round(redo_sqft_value, 2),
+                "redo_total_cost": round(redo_total_cost_value, 2),
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+        )
+
+    redo_by_department = sorted(
+        [
+            {
+                **item,
+                "redo_sqft": round(item["redo_sqft"], 2),
+                "redo_value": round(item["redo_value"], 2),
+                "redo_total_cost": round(item["redo_total_cost"], 2),
+            }
+            for item in redo_by_department_map.values()
+        ],
+        key=lambda x: (-x["redo_count"], (x["department_name"] or "")),
+    )
+
+    redo_by_employee = sorted(
+        [
+            {
+                **item,
+                "redo_sqft": round(item["redo_sqft"], 2),
+                "redo_value": round(item["redo_value"], 2),
+                "redo_total_cost": round(item["redo_total_cost"], 2),
+            }
+            for item in redo_by_employee_map.values()
+        ],
+        key=lambda x: (-x["redo_count"], (x["employee_name"] or "")),
+    )
+
+    redo_total_cost_rows = sorted(redo_total_cost_rows, key=lambda x: x["redo_total_cost"], reverse=True)
+    top_accounts_with_redo = sorted(top_accounts_map.values(), key=lambda x: x["redo_count"], reverse=True)[:top_n]
+    top_jobs_with_redo = sorted(top_jobs_map.values(), key=lambda x: x["redo_count"], reverse=True)[:top_n]
+
+    # Keep stage breakdown for compatibility; scoped to AG redo rows.
     stage_redo_query = (
         select(Fab.current_stage, func.count(Fab.id).label("redo_count"))
-        .where(Fab.revised.is_(True))
+        .where(
+            ag_redo_filter,
+            Fab.created_at >= start_dt,
+            Fab.created_at <= end_dt,
+        )
         .group_by(Fab.current_stage)
         .order_by(func.count(Fab.id).desc())
     )
-    if fab_filters:
-        stage_redo_query = stage_redo_query.where(and_(*fab_filters))
-
     stage_redo = [
-        {"stage": row[0] or "unknown", "redo_count": row[1]}
+        {"stage": row[0] or "unknown", "redo_count": int(row[1] or 0)}
         for row in (await db.execute(stage_redo_query)).all()
     ]
 
-    account_hotspot_query = (
-        select(
-            Account.id,
-            Account.name,
-            func.count(Fab.id).label("redo_count"),
-            func.sum(Fab.revenue).label("redo_revenue"),
+    # Annual summary by month.
+    annual_cut_wj_rows = (
+        await db.execute(
+            select(
+                func.date_trunc("month", ShopCutPlan.actual_end_date).label("month_bucket"),
+                ShopCutPlan.fab_id,
+            )
+            .select_from(ShopCutPlan)
+            .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
+            .where(
+                ShopCutPlan.work_percentage >= 100,
+                ShopCutPlan.actual_end_date.isnot(None),
+                normalized_plan.in_(["cut", "wj"]),
+                func.extract("year", ShopCutPlan.actual_end_date) == annual_year,
+            )
+            .group_by(func.date_trunc("month", ShopCutPlan.actual_end_date), ShopCutPlan.fab_id)
+            .having(func.count(func.distinct(normalized_plan)) == 2)
         )
-        .select_from(Fab)
-        .join(BusinessJob, BusinessJob.id == Fab.job_id)
-        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
-        .where(Fab.revised.is_(True))
-        .group_by(Account.id, Account.name)
-        .order_by(func.count(Fab.id).desc())
-        .limit(top_n)
-    )
-    if fab_filters:
-        account_hotspot_query = account_hotspot_query.where(and_(*fab_filters))
+    ).all()
 
-    account_hotspots = [
-        {
-            "account_id": row[0],
-            "account_name": row[1] or "Unassigned Account",
-            "redo_count": row[2],
-            "redo_revenue": round(_to_float(row[3]), 2),
-        }
-        for row in (await db.execute(account_hotspot_query)).all()
-    ]
+    annual_fab_count_by_month: dict[int, int] = defaultdict(int)
+    for month_bucket, _fab_id in annual_cut_wj_rows:
+        month_number = month_bucket.month if month_bucket else None
+        if month_number is not None:
+            annual_fab_count_by_month[month_number] += 1
 
-    job_hotspot_query = (
-        select(
-            BusinessJob.id,
-            BusinessJob.job_number,
-            BusinessJob.name,
-            func.count(Fab.id).label("redo_count"),
+    annual_redo_rows = (
+        await db.execute(
+            select(
+                func.extract("month", Fab.created_at).label("month_no"),
+                func.count(Fab.id).label("redo_count"),
+                func.coalesce(func.sum(Fab.redo_total_sqft), 0).label("redo_sqft"),
+                func.coalesce(func.sum(Fab.cost_per_sqft * Fab.redo_total_sqft), 0).label("redo_value"),
+            )
+            .where(
+                ag_redo_filter,
+                func.extract("year", Fab.created_at) == annual_year,
+            )
+            .group_by(func.extract("month", Fab.created_at))
         )
-        .select_from(Fab)
-        .join(BusinessJob, BusinessJob.id == Fab.job_id)
-        .where(Fab.revised.is_(True))
-        .group_by(BusinessJob.id, BusinessJob.job_number, BusinessJob.name)
-        .order_by(func.count(Fab.id).desc())
-        .limit(top_n)
-    )
-    if fab_filters:
-        job_hotspot_query = job_hotspot_query.where(and_(*fab_filters))
+    ).all()
 
-    job_hotspots = [
-        {
-            "job_id": row[0],
-            "job_number": row[1],
-            "job_name": row[2],
-            "redo_count": row[3],
+    annual_redo_map = {
+        int(row.month_no): {
+            "redo_count": int(row.redo_count or 0),
+            "redo_sqft": round(_to_float(row.redo_sqft), 2),
+            "redo_value": round(_to_float(row.redo_value), 2),
         }
-        for row in (await db.execute(job_hotspot_query)).all()
-    ]
+        for row in annual_redo_rows
+    }
 
-    redo_rate = round((revised_count / total_fabs) * 100, 2) if total_fabs else 0.0
+    annual_summary = []
+    previous_redo_count = None
+    previous_redo_value = None
+    for month_no in range(1, 13):
+        month_name = calendar.month_name[month_no]
+        total_fabs_month = int(annual_fab_count_by_month.get(month_no, 0))
+        redo_stats = annual_redo_map.get(month_no, {"redo_count": 0, "redo_sqft": 0.0, "redo_value": 0.0})
+        redo_count = int(redo_stats["redo_count"])
+        redo_sqft = round(_to_float(redo_stats["redo_sqft"]), 2)
+        redo_value = round(_to_float(redo_stats["redo_value"]), 2)
+
+        change_in_redos_value = 0 if previous_redo_count is None else (redo_count - previous_redo_count)
+        increase_decrease_value = 0.0 if previous_redo_value is None else round(redo_value - previous_redo_value, 2)
+        redo_percent_value = round((redo_count / total_fabs_month) * 100, 2) if total_fabs_month else 0.0
+
+        annual_summary.append(
+            {
+                "month": month_name,
+                "month_number": month_no,
+                "total_number_of_fabs": total_fabs_month,
+                "total_number_of_ag_redo_fabs": redo_count,
+                "change_in_number_of_redos_value": change_in_redos_value,
+                "redo_percent_value": redo_percent_value,
+                "total_square_footage": redo_sqft,
+                "total_redo_value": redo_value,
+                "increase_decrease_value": increase_decrease_value,
+            }
+        )
+
+        previous_redo_count = redo_count
+        previous_redo_value = redo_value
+
+    summary = {
+        "total_fabs": total_fabs_for_period,
+        "ag_redo_fabs_current_month": current_month_ag_redo_count,
+        "ag_redo_fabs_period": len(selected_period_ag_redo_rows),
+        "redo_rate_percent": redo_rate,
+        "total_ag_redo_sq_ft": total_ag_redo_sqft,
+        "total_ag_redo_dollar_value": total_ag_redo_value,
+        "redo_total_cost": round(sum(row["redo_total_cost"] for row in redo_total_cost_rows), 2),
+    }
 
     return success_response(
         {
-            "period": {
-                "start_date": start_date.isoformat() if start_date else None,
-                "end_date": end_date.isoformat() if end_date else None,
-            },
-            "summary": {
-                "total_fabs": total_fabs,
-                "revised_fabs": revised_count,
-                "redo_rate_percent": redo_rate,
-                "revision_events": revision_events,
-            },
+            "period": period_payload,
+            "summary": summary,
             "redo_by_stage": stage_redo,
-            "top_accounts_with_redo": account_hotspots,
-            "top_jobs_with_redo": job_hotspots,
+            "redo_by_department": redo_by_department,
+            "redo_by_employee": redo_by_employee,
+            "redo_total_cost_rows": redo_total_cost_rows,
+            "top_accounts_with_redo": top_accounts_with_redo,
+            "top_jobs_with_redo": top_jobs_with_redo,
+            "redo_annual_summary": annual_summary,
         },
         "Owner redo analysis report generated",
     )
@@ -1636,6 +1939,286 @@ async def get_owner_shop_status_report(
             "stage_status": stage_status,
         },
         "Owner shop status report generated",
+    )
+
+
+@router.get("/reports/owner/revision-report", response_model=SuccessResponse[dict])
+async def get_owner_revision_report(
+    start_date: Optional[date] = Query(None, description="Inclusive start date filter"),
+    end_date: Optional[date] = Query(None, description="Inclusive end date filter"),
+    month: Optional[int] = Query(None, ge=1, le=12, description="Optional month filter when date range is not provided"),
+    year: Optional[int] = Query(None, ge=2000, le=2100, description="Optional year filter when month filter is used"),
+    top_n: int = Query(10, ge=1, le=100, description="Top N rows for account/job client-revision ranking"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Combined Sales CT and Shop revision report with active FAB filtering and client revision hotspots."""
+    _ = current_user
+
+    if start_date is not None or end_date is not None:
+        effective_start = start_date or end_date
+        effective_end = end_date or start_date
+        start_dt, end_dt = _range_bounds(effective_start, effective_end)
+        period_payload = {
+            "mode": "date_range",
+            "start_date": effective_start.isoformat() if effective_start else None,
+            "end_date": effective_end.isoformat() if effective_end else None,
+            "month": None,
+            "year": None,
+        }
+    elif month is not None or year is not None:
+        effective_year = year or date.today().year
+        effective_month = month or date.today().month
+        start_dt, end_dt = _month_bounds(effective_year, effective_month)
+        period_payload = {
+            "mode": "month",
+            "start_date": start_dt.date().isoformat(),
+            "end_date": end_dt.date().isoformat(),
+            "month": effective_month,
+            "year": effective_year,
+        }
+    else:
+        start_dt, end_dt = None, None
+        period_payload = {
+            "mode": "all_time",
+            "start_date": None,
+            "end_date": None,
+            "month": None,
+            "year": None,
+        }
+
+    templating_exists = (
+        select(Templating.id)
+        .where(Templating.fab_id == Fab.id)
+        .limit(1)
+        .exists()
+    )
+    active_fab_condition = and_(
+        Fab.status_id == 1,
+        or_(
+            Fab.template_needed.is_(False),
+            and_(Fab.template_needed.is_(True), templating_exists),
+        ),
+    )
+
+    revision_query = (
+        select(
+            Revision.id.label("revision_id"),
+            Revision.fab_id,
+            Revision.revision_type,
+            Revision.revision_notes,
+            Revision.requested_by,
+            Revision.assigned_to,
+            Revision.created_at,
+            BusinessJob.id.label("job_id"),
+            BusinessJob.job_number,
+            BusinessJob.name.label("job_name"),
+            Account.id.label("account_id"),
+            Account.name.label("account_name"),
+        )
+        .select_from(Revision)
+        .join(Fab, Fab.id == Revision.fab_id)
+        .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+        .where(active_fab_condition)
+        .order_by(Revision.created_at.desc(), Revision.id.desc())
+    )
+    if start_dt is not None:
+        revision_query = revision_query.where(Revision.created_at >= start_dt)
+    if end_dt is not None:
+        revision_query = revision_query.where(Revision.created_at <= end_dt)
+    revision_rows = (await db.execute(revision_query)).all()
+
+    shop_revision_query = (
+        select(
+            ShopRevision.id.label("shop_revision_id"),
+            ShopRevision.fab_id,
+            ShopRevision.revision_note,
+            ShopRevision.revision_feedback,
+            ShopRevision.requested_by,
+            ShopRevision.assigned_to,
+            ShopRevision.created_at,
+            ShopRevision.revision_completed,
+            ShopRevision.completed_at,
+            BusinessJob.id.label("job_id"),
+            BusinessJob.job_number,
+            BusinessJob.name.label("job_name"),
+            Account.id.label("account_id"),
+            Account.name.label("account_name"),
+        )
+        .select_from(ShopRevision)
+        .join(Fab, Fab.id == ShopRevision.fab_id)
+        .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+        .where(active_fab_condition)
+        .order_by(ShopRevision.created_at.desc(), ShopRevision.id.desc())
+    )
+    if start_dt is not None:
+        shop_revision_query = shop_revision_query.where(ShopRevision.created_at >= start_dt)
+    if end_dt is not None:
+        shop_revision_query = shop_revision_query.where(ShopRevision.created_at <= end_dt)
+    shop_revision_rows = (await db.execute(shop_revision_query)).all()
+
+    user_ids: set[int] = set()
+    for row in revision_rows:
+        if row.requested_by is not None:
+            user_ids.add(int(row.requested_by))
+        if row.assigned_to is not None:
+            user_ids.add(int(row.assigned_to))
+    for row in shop_revision_rows:
+        if row.requested_by is not None:
+            user_ids.add(int(row.requested_by))
+        if row.assigned_to is not None:
+            user_ids.add(int(row.assigned_to))
+
+    user_name_map: dict[int, str] = {}
+    if user_ids:
+        user_rows = (
+            await db.execute(
+                select(User.id, User.first_name, User.last_name).where(User.id.in_(list(user_ids)))
+            )
+        ).all()
+        user_name_map = {
+            row[0]: (f"{(row[1] or '').strip()} {(row[2] or '').strip()}".strip() or f"User {row[0]}")
+            for row in user_rows
+        }
+
+    revision_type_map = {
+        "sales": "Sales",
+        "client": "Client",
+        "cad": "CAD",
+        "template": "Template",
+    }
+
+    sales_ct_revisions = []
+    active_sales_fab_ids: set[int] = set()
+    for row in revision_rows:
+        normalized_type = (row.revision_type or "").strip().lower()
+        mapped_type = revision_type_map.get(normalized_type, (row.revision_type or "Unknown").strip() or "Unknown")
+        active_sales_fab_ids.add(int(row.fab_id))
+        sales_ct_revisions.append(
+            {
+                "revision_id": row.revision_id,
+                "fab_id": row.fab_id,
+                "revision_type": normalized_type or None,
+                "revision_type_label": mapped_type,
+                "revision_notes": row.revision_notes,
+                "requested_by": row.requested_by,
+                "requested_by_name": user_name_map.get(row.requested_by, f"User {row.requested_by}" if row.requested_by else None),
+                "assigned_to": row.assigned_to,
+                "assigned_to_name": user_name_map.get(row.assigned_to, f"User {row.assigned_to}" if row.assigned_to else None),
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "job_id": row.job_id,
+                "job_number": row.job_number,
+                "job_name": row.job_name,
+                "account_id": row.account_id,
+                "account_name": row.account_name,
+            }
+        )
+
+    shop_revisions = []
+    active_shop_fab_ids: set[int] = set()
+    for row in shop_revision_rows:
+        active_shop_fab_ids.add(int(row.fab_id))
+        shop_revisions.append(
+            {
+                "shop_revision_id": row.shop_revision_id,
+                "fab_id": row.fab_id,
+                "revision_type": "shop",
+                "revision_type_label": "Shop",
+                "revision_notes": row.revision_note,
+                "revision_feedback": row.revision_feedback,
+                "requested_by": row.requested_by,
+                "requested_by_name": user_name_map.get(row.requested_by, f"User {row.requested_by}" if row.requested_by else None),
+                "assigned_to": row.assigned_to,
+                "assigned_to_name": user_name_map.get(row.assigned_to, f"User {row.assigned_to}" if row.assigned_to else None),
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "revision_completed": bool(row.revision_completed),
+                "completed_at": row.completed_at.isoformat() if row.completed_at else None,
+                "job_id": row.job_id,
+                "job_number": row.job_number,
+                "job_name": row.job_name,
+                "account_id": row.account_id,
+                "account_name": row.account_name,
+            }
+        )
+
+    client_type_filter = func.lower(func.coalesce(Revision.revision_type, "")) == "client"
+
+    top_accounts_query = (
+        select(
+            Account.id,
+            Account.name,
+            func.count(Revision.id).label("client_revision_count"),
+        )
+        .select_from(Revision)
+        .join(Fab, Fab.id == Revision.fab_id)
+        .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+        .where(active_fab_condition, client_type_filter)
+        .group_by(Account.id, Account.name)
+        .order_by(func.count(Revision.id).desc(), Account.name.asc())
+        .limit(top_n)
+    )
+    if start_dt is not None:
+        top_accounts_query = top_accounts_query.where(Revision.created_at >= start_dt)
+    if end_dt is not None:
+        top_accounts_query = top_accounts_query.where(Revision.created_at <= end_dt)
+    top_accounts_with_client_revisions = [
+        {
+            "account_id": row[0],
+            "account_name": row[1] or "Unassigned Account",
+            "client_revision_count": int(row[2] or 0),
+        }
+        for row in (await db.execute(top_accounts_query)).all()
+    ]
+
+    top_jobs_query = (
+        select(
+            BusinessJob.id,
+            BusinessJob.job_number,
+            BusinessJob.name,
+            func.count(Revision.id).label("client_revision_count"),
+        )
+        .select_from(Revision)
+        .join(Fab, Fab.id == Revision.fab_id)
+        .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .where(active_fab_condition, client_type_filter)
+        .group_by(BusinessJob.id, BusinessJob.job_number, BusinessJob.name)
+        .order_by(func.count(Revision.id).desc(), BusinessJob.job_number.asc())
+        .limit(top_n)
+    )
+    if start_dt is not None:
+        top_jobs_query = top_jobs_query.where(Revision.created_at >= start_dt)
+    if end_dt is not None:
+        top_jobs_query = top_jobs_query.where(Revision.created_at <= end_dt)
+    top_jobs_with_client_revisions = [
+        {
+            "job_id": row[0],
+            "job_number": row[1],
+            "job_name": row[2],
+            "client_revision_count": int(row[3] or 0),
+        }
+        for row in (await db.execute(top_jobs_query)).all()
+    ]
+
+    return success_response(
+        {
+            "title": "Revision Report",
+            "period": period_payload,
+            "summary": {
+                "sales_ct_revision_count": len(sales_ct_revisions),
+                "shop_revision_count": len(shop_revisions),
+                "active_fabs_with_sales_ct_revisions": len(active_sales_fab_ids),
+                "active_fabs_with_shop_revisions": len(active_shop_fab_ids),
+            },
+            "sales_ct_revisions": sales_ct_revisions,
+            "shop_revisions": shop_revisions,
+            "top_accounts_with_client_revisions": top_accounts_with_client_revisions,
+            "top_jobs_with_client_revisions": top_jobs_with_client_revisions,
+            "employee_source": "users",
+        },
+        "Owner revision report generated",
     )
 
 

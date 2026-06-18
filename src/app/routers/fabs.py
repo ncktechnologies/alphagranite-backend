@@ -19,6 +19,7 @@ from src.app.database.fab import Fab
 from src.app.database.fab_notes import FabNotes
 from src.app.database.business_job import BusinessJob
 from src.app.database.account import Account
+from src.app.database.department import Department
 from src.app.database.user import User
 from src.app.database.edge import Edge
 from src.app.database.stone_type import StoneType
@@ -707,6 +708,16 @@ async def create_fab(
     sales_person = await db.get(User, fab_data.sales_person_id)
     if not sales_person:
         return error_response("Sales person not found", 404)
+    
+    if fab_data.redo_department is not None:
+        department = await db.get(Department, fab_data.redo_department)
+        if not department:
+            return error_response("Redo department not found", 404)
+    
+    if fab_data.redo_requested_by is not None:
+        redo_request_user = await db.get(User, fab_data.redo_requested_by)
+        if not redo_request_user:
+            return error_response("Redo requested by user not found", 404)
     
     # Stone type validation
     stone_type = await db.get(StoneType, fab_data.stone_type_id)
@@ -2117,6 +2128,16 @@ async def update_fab(
         sales_person_result = await db.execute(select(User).where(User.id == fab_data.sales_person_id))
         if not sales_person_result.scalar_one_or_none():
             raise HTTPException(status_code=404, detail="Sales person not found")
+    
+    if fab_data.redo_department is not None:
+        department_result = await db.execute(select(Department).where(Department.id == fab_data.redo_department))
+        if not department_result.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail="Redo department not found")
+    
+    if fab_data.redo_requested_by is not None:
+        redo_requested_by_result = await db.execute(select(User).where(User.id == fab_data.redo_requested_by))
+        if not redo_requested_by_result.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail="Redo requested by user not found")
     
     if fab_data.stone_type_id:
         stone_type_result = await db.execute(select(StoneType).where(StoneType.id == fab_data.stone_type_id))
