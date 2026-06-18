@@ -283,6 +283,10 @@ class FabCreate(BaseModel):
     final_programming_needed: bool = True
     cost_of_stone_id: Optional[int] = Field(None, description="Cost of stone record ID")
     cost_of_stone: Optional[Decimal] = Field(None, description="Cost of stone amount")
+    redo_total_sqft: Optional[float] = Field(None, ge=0, description="Redo total square feet")
+    redo_department: Optional[int] = Field(None, gt=0, description="Redo department ID")
+    cost_per_sqft: Optional[float] = Field(None, ge=0, description="Redo cost per square foot")
+    redo_requested_by: Optional[int] = Field(None, gt=0, description="User/employee ID requesting redo")
 
     @field_validator("revenue", mode="before")
     @classmethod
@@ -351,6 +355,10 @@ class FabUpdate(BaseModel):
         validation_alias=AliasChoices("saw_cut_lnft", "saw_cut_linft"),
     )
     shop_est_completion_date: Optional[datetime] = Field(None, description="Estimated completion date for shop")
+    redo_total_sqft: Optional[float] = Field(None, ge=0, description="Redo total square feet")
+    redo_department: Optional[int] = Field(None, gt=0, description="Redo department ID")
+    cost_per_sqft: Optional[float] = Field(None, ge=0, description="Redo cost per square foot")
+    redo_requested_by: Optional[int] = Field(None, gt=0, description="User/employee ID requesting redo")
 
 
 class FabStageUpdate(BaseModel):
@@ -444,6 +452,10 @@ class FabResponse(BaseModel):
     template_review_complete: Optional[bool] = None
     template_completed_date: Optional[datetime] = None
     shop_est_completion_date: Optional[datetime] = None
+    redo_total_sqft: Optional[float] = None
+    redo_department: Optional[int] = None
+    cost_per_sqft: Optional[float] = None
+    redo_requested_by: Optional[int] = None
 
     plans: List[FabPlanResponse] = []
     resurface_scheduling: Optional['ResurfaceSchedulingResponse'] = None
