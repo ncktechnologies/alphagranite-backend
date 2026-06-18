@@ -1475,9 +1475,73 @@ async def get_owner_overview_report(
         stage_query = stage_query.where(and_(*fab_filters))
 
     stage_rows = (await db.execute(stage_query)).all()
-    stage_breakdown = [
-        {"stage": row[0] or "unknown", "count": row[1]} for row in stage_rows
-    ]
+    stage_count_map: dict[str, dict] = {}
+    stage_key_aliases = {
+        "slabsmith": "slabsmith",
+        "slab_smith": "slabsmith",
+        "finalprogramming": "finalprogramming",
+        "final_programming": "finalprogramming",
+        "cnc": "cnc",
+    }
+    for stage_name, stage_count in stage_rows:
+        stage_label = (stage_name or "unknown").strip() or "unknown"
+        stage_key_raw = stage_label.lower().replace("-", "_").replace(" ", "_")
+        stage_key = stage_key_aliases.get(stage_key_raw, stage_key_raw)
+        stage_count_map[stage_key] = {
+            "stage": stage_label,
+            "count": int(stage_count or 0),
+        }
+
+    # Ensure widget includes these shop-plan stages even when current_stage is just "shop".
+    target_stage_display = {
+        "slabsmith": "Slabsmith",
+        "finalprogramming": "Final_programming",
+        "cnc": "CNC",
+    }
+    normalized_plan_name = func.lower(
+        func.replace(
+            func.replace(
+                func.replace(func.trim(PlanningSection.plan_name), " ", ""),
+                "_",
+                "",
+            ),
+            "-",
+            "",
+        )
+    )
+    plan_stage_filters = [normalized_plan_name.in_(list(target_stage_display.keys()))]
+    _apply_datetime_filters(plan_stage_filters, Fab.created_at, start_dt, end_dt)
+
+    plan_stage_rows = (
+        await db.execute(
+            select(
+                normalized_plan_name.label("plan_stage"),
+                func.count(func.distinct(ShopCutPlan.fab_id)).label("count"),
+            )
+            .select_from(ShopCutPlan)
+            .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
+            .join(Fab, Fab.id == ShopCutPlan.fab_id)
+            .where(and_(*plan_stage_filters))
+            .group_by(normalized_plan_name)
+        )
+    ).all()
+
+    for plan_stage, stage_count in plan_stage_rows:
+        stage_key = (plan_stage or "").strip()
+        if stage_key in target_stage_display:
+            stage_count_map[stage_key] = {
+                "stage": target_stage_display[stage_key],
+                "count": int(stage_count or 0),
+            }
+
+    for canonical_stage_key, stage_label in target_stage_display.items():
+        if canonical_stage_key not in stage_count_map:
+            stage_count_map[canonical_stage_key] = {"stage": stage_label, "count": 0}
+
+    stage_breakdown = sorted(
+        stage_count_map.values(),
+        key=lambda row: (-int(row.get("count", 0)), str(row.get("stage", "")).lower()),
+    )
 
     completion_rate = round((completed_installs / total_fabs) * 100, 2) if total_fabs else 0.0
     gp_margin = round((_to_float(total_gp) / _to_float(total_revenue)) * 100, 2) if _to_float(total_revenue) else 0.0
@@ -2097,7 +2161,6 @@ async def get_owner_shop_status_report(
                 "end_date": end_date.isoformat() if end_date else None,
             },
             "summary": summary,
-            "stage_status": stage_status,
         },
         "Owner shop status report generated",
     )
@@ -3803,6 +3866,8 @@ async def get_owner_daily_completion_report(
             "resurface_sqft": 0.0,
             "cut_sqft": 0.0,
             "fab_sqft": 0.0,
+            "revenue": 0.0,
+            "gp": 0.0,
         }
         current_day += timedelta(days=1)
 
@@ -3932,6 +3997,8 @@ async def get_owner_daily_completion_report(
             cut_day_expr.label("report_day"),
             ShopCutPlan.fab_id.label("fab_id"),
             func.max(Fab.total_sqft).label("fab_sqft"),
+            func.max(_safe_numeric_col(Fab.revenue)).label("fab_revenue"),
+            func.max(_safe_numeric_col(Fab.gp)).label("fab_gp"),
         )
         .select_from(ShopCutPlan)
         .join(Fab, Fab.id == ShopCutPlan.fab_id)
@@ -3950,14 +4017,18 @@ async def get_owner_daily_completion_report(
             select(
                 fab_cut_day_subquery.c.report_day,
                 func.coalesce(func.sum(fab_cut_day_subquery.c.fab_sqft), 0).label("sqft"),
+                func.coalesce(func.sum(fab_cut_day_subquery.c.fab_revenue), 0).label("revenue"),
+                func.coalesce(func.sum(fab_cut_day_subquery.c.fab_gp), 0).label("gp"),
             )
             .group_by(fab_cut_day_subquery.c.report_day)
         )
     ).all()
-    for report_day, sqft in shop_fab_rows:
+    for report_day, sqft, revenue, gp in shop_fab_rows:
         key = _date_key(report_day)
         if key in day_rows_map:
             day_rows_map[key]["fab_sqft"] = round(_to_float(sqft), 2)
+            day_rows_map[key]["revenue"] = round(_to_float(revenue), 2)
+            day_rows_map[key]["gp"] = round(_to_float(gp), 2)
 
     daily_rows = [day_rows_map[key] for key in sorted(day_rows_map.keys())]
 
@@ -3969,6 +4040,8 @@ async def get_owner_daily_completion_report(
         "resurface_sqft": round(sum(_to_float(row["resurface_sqft"]) for row in daily_rows), 2),
         "cut_sqft": round(sum(_to_float(row["cut_sqft"]) for row in daily_rows), 2),
         "fab_sqft": round(sum(_to_float(row["fab_sqft"]) for row in daily_rows), 2),
+        "revenue": round(sum(_to_float(row["revenue"]) for row in daily_rows), 2),
+        "gp": round(sum(_to_float(row["gp"]) for row in daily_rows), 2),
     }
 
     calculated_weekdays = sum(1 for offset in range((effective_to - effective_from).days + 1) if (effective_from + timedelta(days=offset)).weekday() < 5)
@@ -3982,6 +4055,8 @@ async def get_owner_daily_completion_report(
         "resurface_sqft": round(_safe_div(totals["resurface_sqft"], weekday_count), 2) if weekday_count else 0.0,
         "cut_sqft": round(_safe_div(totals["cut_sqft"], weekday_count), 2) if weekday_count else 0.0,
         "fab_sqft": round(_safe_div(totals["fab_sqft"], weekday_count), 2) if weekday_count else 0.0,
+        "revenue": round(_safe_div(totals["revenue"], weekday_count), 2) if weekday_count else 0.0,
+        "gp": round(_safe_div(totals["gp"], weekday_count), 2) if weekday_count else 0.0,
     }
 
     return success_response(
@@ -4006,6 +4081,8 @@ async def get_owner_daily_completion_report(
                 "resurface_sqft",
                 "cut_sqft",
                 "fab_sqft",
+                "revenue",
+                "gp",
             ],
             "rows": daily_rows,
         },
