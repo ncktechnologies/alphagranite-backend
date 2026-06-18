@@ -1902,33 +1902,150 @@ async def get_owner_shop_status_report(
     filters = []
     _apply_datetime_filters(filters, Fab.created_at, start_dt, end_dt)
 
-    age_days_expr = func.date_part("day", func.now() - func.coalesce(Fab.updated_at, Fab.created_at))
-    stage_query = (
+    def _normalize_stage_name(value: Optional[str]) -> str:
+        text = (value or "").strip().lower().replace("_", " ").replace("-", " ")
+        return " ".join(text.split())
+
+    excluded_stages = {
+        "slabsmith",
+        "predraft review",
+        "predraftreview",
+        "cutlist",
+        "cut list",
+    }
+    allowed_shop_plan_stages = {
+        "cnc": "cnc",
+        "cut": "cut",
+        "wj": "wj",
+        "miter": "miter",
+        "edging": "edging",
+        "resurfacing": "resurfacing",
+        "touch up": "touch up",
+        "touchup": "touch up",
+    }
+
+    now_dt = datetime.now()
+    stage_fab_map: dict[str, dict[int, dict]] = defaultdict(dict)
+
+    non_shop_query = (
         select(
+            Fab.id,
             Fab.current_stage,
-            func.count(Fab.id).label("fab_count"),
-            func.avg(age_days_expr).label("avg_age_days"),
-            func.max(age_days_expr).label("max_age_days"),
-            func.sum(case((age_days_expr > 14, 1), else_=0)).label("over_14_days"),
+            Fab.total_sqft,
+            Fab.saw_cut_lnft,
+            Fab.updated_at,
+            Fab.created_at,
         )
-        .group_by(Fab.current_stage)
-        .order_by(func.count(Fab.id).desc())
+        .select_from(Fab)
+        .where(Fab.current_stage != "shop")
     )
     if filters:
-        stage_query = stage_query.where(and_(*filters))
+        non_shop_query = non_shop_query.where(and_(*filters))
 
-    rows = (await db.execute(stage_query)).all()
+    non_shop_rows = (await db.execute(non_shop_query)).all()
+    for fab_id, current_stage, total_sqft, saw_cut_lnft, updated_at, created_at in non_shop_rows:
+        normalized_stage = _normalize_stage_name(current_stage)
+        if normalized_stage in excluded_stages:
+            continue
 
-    stage_status = [
-        {
-            "stage": row[0] or "unknown",
-            "fab_count": row[1],
-            "avg_age_days": round(_to_float(row[2]), 2),
-            "max_age_days": round(_to_float(row[3]), 2),
-            "stalled_over_14_days": int(row[4] or 0),
+        stage_key = normalized_stage or "unknown"
+        reference_dt = updated_at or created_at
+        age_days = max((now_dt.date() - reference_dt.date()).days, 0) if reference_dt else 0
+        stage_fab_map[stage_key][int(fab_id)] = {
+            "age_days": age_days,
+            "sqft": _to_float(total_sqft),
+            "linear_ft": _to_float(saw_cut_lnft),
         }
-        for row in rows
-    ]
+
+    shop_query = (
+        select(
+            Fab.id,
+            Fab.total_sqft,
+            Fab.saw_cut_lnft,
+            Fab.updated_at,
+            Fab.created_at,
+            ShopCutPlan.updated_at,
+            ShopCutPlan.actual_end_date,
+            ShopCutPlan.actual_start_date,
+            PlanningSection.plan_name,
+        )
+        .select_from(Fab)
+        .join(ShopCutPlan, ShopCutPlan.fab_id == Fab.id)
+        .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id, isouter=True)
+        .where(Fab.current_stage == "shop")
+    )
+    if filters:
+        shop_query = shop_query.where(and_(*filters))
+
+    shop_rows = (await db.execute(shop_query)).all()
+    for (
+        fab_id,
+        total_sqft,
+        saw_cut_lnft,
+        fab_updated_at,
+        fab_created_at,
+        plan_updated_at,
+        plan_actual_end_at,
+        plan_actual_start_at,
+        plan_name,
+    ) in shop_rows:
+        normalized_plan_name = _normalize_stage_name(plan_name)
+        if normalized_plan_name in excluded_stages:
+            continue
+        mapped_stage = allowed_shop_plan_stages.get(normalized_plan_name)
+        if mapped_stage is None:
+            continue
+
+        reference_dt = plan_updated_at or plan_actual_end_at or plan_actual_start_at or fab_updated_at or fab_created_at
+        age_days = max((now_dt.date() - reference_dt.date()).days, 0) if reference_dt else 0
+
+        existing = stage_fab_map[mapped_stage].get(int(fab_id))
+        if existing is None:
+            stage_fab_map[mapped_stage][int(fab_id)] = {
+                "age_days": age_days,
+                "sqft": _to_float(total_sqft),
+                "linear_ft": _to_float(saw_cut_lnft),
+            }
+        else:
+            existing["age_days"] = max(existing["age_days"], age_days)
+            existing["sqft"] = max(existing["sqft"], _to_float(total_sqft))
+            existing["linear_ft"] = max(existing["linear_ft"], _to_float(saw_cut_lnft))
+
+    stage_status = []
+    for stage_name, fab_entries in stage_fab_map.items():
+        fab_values = list(fab_entries.values())
+        fab_count = len(fab_values)
+        if fab_count == 0:
+            continue
+
+        age_days_values = [int(item["age_days"]) for item in fab_values]
+        stalled_count = sum(1 for age_days in age_days_values if age_days > 14)
+        total_sqft_value = round(sum(_to_float(item["sqft"]) for item in fab_values), 2)
+        total_linear_ft_value = round(sum(_to_float(item["linear_ft"]) for item in fab_values), 2)
+
+        stage_status.append(
+            {
+                "stage": stage_name,
+                "fab_count": fab_count,
+                "avg_age_days": round(sum(age_days_values) / fab_count, 2),
+                "max_age_days": float(max(age_days_values)),
+                "stalled_over_14_days": int(stalled_count),
+                "total_sqft": total_sqft_value,
+                "total_linear_ft": total_linear_ft_value,
+            }
+        )
+
+    stage_status.sort(key=lambda row: (row["fab_count"], row["total_sqft"], row["total_linear_ft"]), reverse=True)
+
+    unique_fab_ids = {fab_id for per_stage in stage_fab_map.values() for fab_id in per_stage.keys()}
+
+    summary = {
+        "stage_count": len(stage_status),
+        "total_fabs": len(unique_fab_ids),
+        "total_stalled_over_14_days": int(sum(int(row["stalled_over_14_days"]) for row in stage_status)),
+        "total_sqft": round(sum(_to_float(row["total_sqft"]) for row in stage_status), 2),
+        "total_linear_ft": round(sum(_to_float(row["total_linear_ft"]) for row in stage_status), 2),
+    }
 
     return success_response(
         {
@@ -1936,6 +2053,7 @@ async def get_owner_shop_status_report(
                 "start_date": start_date.isoformat() if start_date else None,
                 "end_date": end_date.isoformat() if end_date else None,
             },
+            "summary": summary,
             "stage_status": stage_status,
         },
         "Owner shop status report generated",
@@ -3856,13 +3974,23 @@ async def get_owner_daily_completion_report(
 async def get_owner_monthly_install_completion_report(
     year: int = Query(..., ge=2000, le=2100),
     month: int = Query(..., ge=1, le=12),
+    from_date: Optional[date] = Query(None, description="Optional from date filter (YYYY-MM-DD)"),
+    to_date: Optional[date] = Query(None, description="Optional to date filter (YYYY-MM-DD)"),
+    fab_id: Optional[int] = Query(None, gt=0, description="Optional FAB ID filter"),
+    job_number: Optional[str] = Query(None, description="Optional job number filter"),
+    installer_name: Optional[str] = Query(None, description="Optional installer name filter"),
     fab_type: Optional[str] = Query(None, description="Optional FAB type filter"),
     fab_type_sort: str = Query("asc", pattern="^(asc|desc)$", description="Sort order for FAB type"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Monthly install completion report modeled after legacy spreadsheet format."""
-    start_dt, end_dt = _month_bounds(year, month)
+    month_start_dt, month_end_dt = _month_bounds(year, month)
+    effective_start_date = from_date if from_date is not None else month_start_dt.date()
+    effective_end_date = to_date if to_date is not None else month_end_dt.date()
+    if effective_start_date > effective_end_date:
+        effective_start_date, effective_end_date = effective_end_date, effective_start_date
+    start_dt, end_dt = _range_bounds(effective_start_date, effective_end_date)
     fab_type_sort_normalized = (fab_type_sort or "asc").strip().lower()
     fab_type_order = (
         func.lower(Fab.fab_type).desc()
@@ -3911,6 +4039,27 @@ async def get_owner_monthly_install_completion_report(
 
     if fab_type:
         query = query.where(func.lower(Fab.fab_type) == fab_type.strip().lower())
+    if fab_id is not None:
+        query = query.where(Fab.id == fab_id)
+    if job_number:
+        query = query.where(BusinessJob.job_number.ilike(f"%{job_number.strip()}%"))
+    if installer_name:
+        installer_like = f"%{installer_name.strip().lower()}%"
+        query = query.where(
+            or_(
+                func.lower(User.first_name).like(installer_like),
+                func.lower(User.last_name).like(installer_like),
+                func.lower(User.username).like(installer_like),
+                func.lower(User.email).like(installer_like),
+                func.lower(
+                    func.concat(
+                        func.coalesce(User.first_name, ""),
+                        " ",
+                        func.coalesce(User.last_name, ""),
+                    )
+                ).like(installer_like),
+            )
+        )
 
     records = (await db.execute(query)).all()
 
@@ -3995,6 +4144,18 @@ async def get_owner_monthly_install_completion_report(
             "title": "Monthly Install Completion",
             "year": year,
             "month": month,
+            "period": {
+                "start_date": effective_start_date.isoformat() if effective_start_date else None,
+                "end_date": effective_end_date.isoformat() if effective_end_date else None,
+            },
+            "filters": {
+                "from_date": effective_start_date.isoformat() if effective_start_date else None,
+                "to_date": effective_end_date.isoformat() if effective_end_date else None,
+                "fab_id": fab_id,
+                "job_number": job_number,
+                "installer_name": installer_name,
+                "fab_type": fab_type,
+            },
             "columns": [
                 "install_date",
                 "fab_type",
@@ -4023,6 +4184,8 @@ async def get_owner_monthly_install_completion_report(
                 "revenue_per_sq_ft": round((total_revenue / total_sqft), 2) if total_sqft else 0.0,
                 "cost_of_stone": total_cost,
                 "gp": total_gp,
+                "total_cost_of_stone": total_cost,
+                "total_gp": total_gp,
                 "row_count": len(rows),
             },
             "daily_totals": daily_totals,
@@ -4246,6 +4409,8 @@ async def get_owner_daily_install_completion_report(
                 "revenue_per_sq_ft": round((total_revenue / total_sqft), 2) if total_sqft else 0.0,
                 "cost_of_stone": total_cost,
                 "gp": total_gp,
+                "total_cost_of_stone": total_cost,
+                "total_gp": total_gp,
                 "row_count": len(rows),
             },
             "daily_totals": daily_totals,
@@ -4259,13 +4424,23 @@ async def get_owner_daily_install_completion_report(
 async def get_owner_monthly_cut_completion_report(
     year: int = Query(..., ge=2000, le=2100),
     month: int = Query(..., ge=1, le=12),
+    from_date: Optional[date] = Query(None, description="Optional from date filter (YYYY-MM-DD)"),
+    to_date: Optional[date] = Query(None, description="Optional to date filter (YYYY-MM-DD)"),
+    fab_id: Optional[int] = Query(None, gt=0, description="Optional FAB ID filter"),
+    job_number: Optional[str] = Query(None, description="Optional job number filter"),
+    installer_name: Optional[str] = Query(None, description="Optional installer name filter"),
     fab_type: Optional[str] = Query(None, description="Optional FAB type filter"),
     fab_type_sort: str = Query("asc", pattern="^(asc|desc)$", description="Sort order for FAB type"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Monthly cut completion report modeled after legacy spreadsheet format."""
-    start_dt, end_dt = _month_bounds(year, month)
+    month_start_dt, month_end_dt = _month_bounds(year, month)
+    effective_start_date = from_date if from_date is not None else month_start_dt.date()
+    effective_end_date = to_date if to_date is not None else month_end_dt.date()
+    if effective_start_date > effective_end_date:
+        effective_start_date, effective_end_date = effective_end_date, effective_start_date
+    start_dt, end_dt = _range_bounds(effective_start_date, effective_end_date)
     cut_date_expr = func.coalesce(Fab.shop_date_schedule, Fab.final_programming_completed_date)
     fab_type_sort_normalized = (fab_type_sort or "asc").strip().lower()
     fab_type_order = (
@@ -4307,6 +4482,35 @@ async def get_owner_monthly_cut_completion_report(
 
     if fab_type:
         query = query.where(func.lower(Fab.fab_type) == fab_type.strip().lower())
+    if fab_id is not None:
+        query = query.where(Fab.id == fab_id)
+    if job_number:
+        query = query.where(BusinessJob.job_number.ilike(f"%{job_number.strip()}%"))
+    if installer_name:
+        installer_like = f"%{installer_name.strip().lower()}%"
+        installer_exists = (
+            select(ShopCutPlan.id)
+            .join(User, User.id == ShopCutPlan.user_id)
+            .where(
+                ShopCutPlan.fab_id == Fab.id,
+                or_(
+                    func.lower(User.first_name).like(installer_like),
+                    func.lower(User.last_name).like(installer_like),
+                    func.lower(User.username).like(installer_like),
+                    func.lower(User.email).like(installer_like),
+                    func.lower(
+                        func.concat(
+                            func.coalesce(User.first_name, ""),
+                            " ",
+                            func.coalesce(User.last_name, ""),
+                        )
+                    ).like(installer_like),
+                ),
+            )
+            .limit(1)
+            .exists()
+        )
+        query = query.where(installer_exists)
 
     records = (await db.execute(query)).all()
 
@@ -4389,6 +4593,18 @@ async def get_owner_monthly_cut_completion_report(
             "title": "Monthly Cut Completion",
             "year": year,
             "month": month,
+            "period": {
+                "start_date": effective_start_date.isoformat() if effective_start_date else None,
+                "end_date": effective_end_date.isoformat() if effective_end_date else None,
+            },
+            "filters": {
+                "from_date": effective_start_date.isoformat() if effective_start_date else None,
+                "to_date": effective_end_date.isoformat() if effective_end_date else None,
+                "fab_id": fab_id,
+                "job_number": job_number,
+                "installer_name": installer_name,
+                "fab_type": fab_type,
+            },
             "columns": [
                 "cut_date",
                 "fab_type",
@@ -4415,6 +4631,8 @@ async def get_owner_monthly_cut_completion_report(
                 "revenue_per_sq_ft": round((total_revenue / total_sqft), 2) if total_sqft else 0.0,
                 "cost_of_stone": total_cost,
                 "gp": total_gp,
+                "total_cost_of_stone": total_cost,
+                "total_gp": total_gp,
                 "row_count": len(rows),
             },
             "daily_totals": daily_totals,
