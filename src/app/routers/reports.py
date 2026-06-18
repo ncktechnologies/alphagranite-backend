@@ -110,10 +110,11 @@ async def get_ag_redo_report(
                 Fab.input_area,
                 Fab.no_of_pieces,
                 Fab.total_sqft,
-                CostOfStone.cost_per_sqft,
+                Fab.cost_per_sqft,
+                Fab.redo_total_sqft,
+                Fab.redo_department,
+                Fab.redo_requested_by,
                 Revision.revision_notes,
-                Revision.department,
-                Revision.person_name,
             )
             .select_from(Fab)
             .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
@@ -122,12 +123,35 @@ async def get_ag_redo_report(
             .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
             .join(Edge, Edge.id == Fab.edge_id, isouter=True)
             .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
-            .join(CostOfStone, CostOfStone.id == Fab.cost_of_stone_id, isouter=True)
             .join(Revision, Revision.fab_id == Fab.id, isouter=True)
             .where(and_(*filters))
             .order_by(Fab.created_at.desc(), Fab.id.desc())
         )
     ).all()
+
+    department_ids = sorted({int(row[15]) for row in rows if row[15] is not None})
+    requested_by_ids = sorted({int(row[16]) for row in rows if row[16] is not None})
+
+    department_name_map: dict[int, str] = {}
+    if department_ids:
+        department_rows = (
+            await db.execute(
+                select(Department.id, Department.name).where(Department.id.in_(department_ids))
+            )
+        ).all()
+        department_name_map = {int(row[0]): row[1] for row in department_rows}
+
+    requested_by_name_map: dict[int, str] = {}
+    if requested_by_ids:
+        requested_by_rows = (
+            await db.execute(
+                select(User.id, User.first_name, User.last_name).where(User.id.in_(requested_by_ids))
+            )
+        ).all()
+        requested_by_name_map = {
+            int(row[0]): (f"{(row[1] or '').strip()} {(row[2] or '').strip()}".strip() or f"User {row[0]}")
+            for row in requested_by_rows
+        }
 
     departments = (await db.execute(select(Department.name).order_by(Department.name.asc()))).all()
     department_options = ", ".join(row[0] for row in departments if row[0])
@@ -148,13 +172,15 @@ async def get_ag_redo_report(
         no_of_pieces,
         sqft,
         cost_per_sqft_raw,
+        redo_total_sqft_raw,
+        redo_department,
+        redo_requested_by,
         revision_notes,
-        revision_department,
-        revision_person_name,
     ) in rows:
         cost_per_sqft = round(_to_float(cost_per_sqft_raw), 2) if cost_per_sqft_raw is not None else None
         sqft_value = round(_to_float(sqft), 2)
-        total_cost = round(cost_per_sqft * sqft_value * 2.1, 2) if cost_per_sqft is not None else None
+        redo_sqft_value = round(_to_float(redo_total_sqft_raw), 2)
+        total_cost = round(_to_float(cost_per_sqft_raw) * _to_float(redo_total_sqft_raw), 2)
 
         info_parts = [
             account_name,
@@ -182,9 +208,12 @@ async def get_ag_redo_report(
                 "no_of_pieces": int(_to_float(no_of_pieces)),
                 "sqft": sqft_value,
                 "cost_per_sqft": cost_per_sqft,
+                "redo_total_sqft": redo_sqft_value,
                 "total_cost": total_cost,
-                "department": revision_department,
-                "person_name": revision_person_name,
+                "redo_department": redo_department,
+                "redo_requested_by": redo_requested_by,
+                "department": department_name_map.get(int(redo_department), None) if redo_department is not None else None,
+                "person_name": requested_by_name_map.get(int(redo_requested_by), None) if redo_requested_by is not None else None,
                 "reason": revision_notes,
                 "department_options": department_options,
             }
