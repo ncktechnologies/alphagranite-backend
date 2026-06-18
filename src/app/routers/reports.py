@@ -30,7 +30,7 @@ from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness
 from src.app.database.stone_type import StoneType
 from src.app.database.user import User
-from src.app.interface.generated_schemas import CNCDrafting, CostOfStone, CutList, InstallCompletion, InstallScheduling, PlanningSection, Revision, Templating
+from src.app.interface.generated_schemas import CNCDrafting, CostOfStone, CutList, DraftingSession, InstallCompletion, InstallScheduling, PlanningSection, ResurfaceScheduling, Revision, Templating
 from src.app.interface.response_wrappers import SuccessResponse, success_response
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.routers.fabs import _get_shop_current_stage
@@ -3019,6 +3019,253 @@ async def get_owner_installation_template_dashboard_report(
             "rows": flat_rows,
         },
         "Owner installation and template dashboard report generated",
+    )
+
+
+@router.get("/reports/owner/daily-completion", response_model=SuccessResponse[dict])
+@router.get("/reports/owner/daily-shop-completion", response_model=SuccessResponse[dict])
+async def get_owner_daily_completion_report(
+    from_date: Optional[date] = Query(None, description="Inclusive from date filter"),
+    to_date: Optional[date] = Query(None, description="Inclusive to date filter"),
+    weekdays: Optional[int] = Query(None, ge=0, description="Optional weekday override for AVG PER WEEKDAY"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Daily completion rollup by stage (Template, Draft, SCT, Final, Resurface, Cut, Shop Fab)."""
+    _ = current_user
+
+    effective_to = to_date or from_date or date.today()
+    effective_from = from_date or to_date or (effective_to - timedelta(days=30))
+    if effective_from > effective_to:
+        effective_from, effective_to = effective_to, effective_from
+
+    def _date_key(value) -> Optional[str]:
+        if value is None:
+            return None
+        if hasattr(value, "date"):
+            return value.date().isoformat()
+        return str(value)
+
+    day_rows_map: dict[str, dict] = {}
+    current_day = effective_from
+    while current_day <= effective_to:
+        key = current_day.isoformat()
+        day_rows_map[key] = {
+            "date": key,
+            "template_sqft": 0.0,
+            "draft_sqft": 0.0,
+            "sct_sqft": 0.0,
+            "final_programming_sqft": 0.0,
+            "resurface_sqft": 0.0,
+            "cut_sqft": 0.0,
+            "fab_sqft": 0.0,
+        }
+        current_day += timedelta(days=1)
+
+    template_day_expr = func.date(func.coalesce(Templating.actual_end_date, Templating.actual_start_date, Templating.updated_at, Templating.created_at))
+    template_rows = (
+        await db.execute(
+            select(
+                template_day_expr.label("report_day"),
+                func.coalesce(func.sum(_safe_numeric_col(Templating.total_sqft)), 0).label("sqft"),
+            )
+            .where(
+                Templating.is_completed.is_(True),
+                template_day_expr >= effective_from,
+                template_day_expr <= effective_to,
+            )
+            .group_by(template_day_expr)
+        )
+    ).all()
+    for report_day, sqft in template_rows:
+        key = _date_key(report_day)
+        if key in day_rows_map:
+            day_rows_map[key]["template_sqft"] = round(_to_float(sqft), 2)
+
+    draft_day_expr = func.date(func.coalesce(DraftingSession.session_end_time, DraftingSession.session_start_time))
+    draft_rows = (
+        await db.execute(
+            select(
+                draft_day_expr.label("report_day"),
+                func.coalesce(func.sum(_safe_numeric_col(DraftingSession.cumulative_sqft_drafted)), 0).label("sqft"),
+            )
+            .where(
+                draft_day_expr >= effective_from,
+                draft_day_expr <= effective_to,
+            )
+            .group_by(draft_day_expr)
+        )
+    ).all()
+    for report_day, sqft in draft_rows:
+        key = _date_key(report_day)
+        if key in day_rows_map:
+            day_rows_map[key]["draft_sqft"] = round(_to_float(sqft), 2)
+
+    sct_day_expr = func.date(Fab.sct_completed_date)
+    sct_rows = (
+        await db.execute(
+            select(
+                sct_day_expr.label("report_day"),
+                func.coalesce(func.sum(Fab.total_sqft), 0).label("sqft"),
+            )
+            .where(
+                Fab.sct_completed_date.isnot(None),
+                sct_day_expr >= effective_from,
+                sct_day_expr <= effective_to,
+            )
+            .group_by(sct_day_expr)
+        )
+    ).all()
+    for report_day, sqft in sct_rows:
+        key = _date_key(report_day)
+        if key in day_rows_map:
+            day_rows_map[key]["sct_sqft"] = round(_to_float(sqft), 2)
+
+    final_day_expr = func.date(Fab.final_programming_completed_date)
+    final_rows = (
+        await db.execute(
+            select(
+                final_day_expr.label("report_day"),
+                func.coalesce(func.sum(Fab.total_sqft), 0).label("sqft"),
+            )
+            .where(
+                Fab.final_programming_completed_date.isnot(None),
+                final_day_expr >= effective_from,
+                final_day_expr <= effective_to,
+            )
+            .group_by(final_day_expr)
+        )
+    ).all()
+    for report_day, sqft in final_rows:
+        key = _date_key(report_day)
+        if key in day_rows_map:
+            day_rows_map[key]["final_programming_sqft"] = round(_to_float(sqft), 2)
+
+    resurface_day_expr = func.date(func.coalesce(ResurfaceScheduling.actual_end_date, ResurfaceScheduling.actual_start_date))
+    resurface_rows = (
+        await db.execute(
+            select(
+                resurface_day_expr.label("report_day"),
+                func.coalesce(func.sum(_safe_numeric_col(ResurfaceScheduling.completed_sqft)), 0).label("sqft"),
+            )
+            .where(
+                resurface_day_expr >= effective_from,
+                resurface_day_expr <= effective_to,
+            )
+            .group_by(resurface_day_expr)
+        )
+    ).all()
+    for report_day, sqft in resurface_rows:
+        key = _date_key(report_day)
+        if key in day_rows_map:
+            day_rows_map[key]["resurface_sqft"] = round(_to_float(sqft), 2)
+
+    cut_day_expr = func.date(ShopCutPlan.actual_end_date)
+    cut_rows = (
+        await db.execute(
+            select(
+                cut_day_expr.label("report_day"),
+                func.coalesce(func.sum(Fab.total_sqft), 0).label("sqft"),
+            )
+            .select_from(ShopCutPlan)
+            .join(Fab, Fab.id == ShopCutPlan.fab_id)
+            .where(
+                ShopCutPlan.work_percentage == 100,
+                ShopCutPlan.actual_end_date.isnot(None),
+                cut_day_expr >= effective_from,
+                cut_day_expr <= effective_to,
+            )
+            .group_by(cut_day_expr)
+        )
+    ).all()
+    for report_day, sqft in cut_rows:
+        key = _date_key(report_day)
+        if key in day_rows_map:
+            day_rows_map[key]["cut_sqft"] = round(_to_float(sqft), 2)
+
+    fab_cut_day_subquery = (
+        select(
+            cut_day_expr.label("report_day"),
+            ShopCutPlan.fab_id.label("fab_id"),
+            func.max(Fab.total_sqft).label("fab_sqft"),
+        )
+        .select_from(ShopCutPlan)
+        .join(Fab, Fab.id == ShopCutPlan.fab_id)
+        .where(
+            ShopCutPlan.work_percentage == 100,
+            ShopCutPlan.actual_end_date.isnot(None),
+            cut_day_expr >= effective_from,
+            cut_day_expr <= effective_to,
+        )
+        .group_by(cut_day_expr, ShopCutPlan.fab_id)
+        .subquery("fab_cut_day_subquery")
+    )
+
+    shop_fab_rows = (
+        await db.execute(
+            select(
+                fab_cut_day_subquery.c.report_day,
+                func.coalesce(func.sum(fab_cut_day_subquery.c.fab_sqft), 0).label("sqft"),
+            )
+            .group_by(fab_cut_day_subquery.c.report_day)
+        )
+    ).all()
+    for report_day, sqft in shop_fab_rows:
+        key = _date_key(report_day)
+        if key in day_rows_map:
+            day_rows_map[key]["fab_sqft"] = round(_to_float(sqft), 2)
+
+    daily_rows = [day_rows_map[key] for key in sorted(day_rows_map.keys())]
+
+    totals = {
+        "template_sqft": round(sum(_to_float(row["template_sqft"]) for row in daily_rows), 2),
+        "draft_sqft": round(sum(_to_float(row["draft_sqft"]) for row in daily_rows), 2),
+        "sct_sqft": round(sum(_to_float(row["sct_sqft"]) for row in daily_rows), 2),
+        "final_programming_sqft": round(sum(_to_float(row["final_programming_sqft"]) for row in daily_rows), 2),
+        "resurface_sqft": round(sum(_to_float(row["resurface_sqft"]) for row in daily_rows), 2),
+        "cut_sqft": round(sum(_to_float(row["cut_sqft"]) for row in daily_rows), 2),
+        "fab_sqft": round(sum(_to_float(row["fab_sqft"]) for row in daily_rows), 2),
+    }
+
+    calculated_weekdays = sum(1 for offset in range((effective_to - effective_from).days + 1) if (effective_from + timedelta(days=offset)).weekday() < 5)
+    weekday_count = weekdays if weekdays is not None else calculated_weekdays
+
+    avg_per_weekday = {
+        "template_sqft": round(_safe_div(totals["template_sqft"], weekday_count), 2) if weekday_count else 0.0,
+        "draft_sqft": round(_safe_div(totals["draft_sqft"], weekday_count), 2) if weekday_count else 0.0,
+        "sct_sqft": round(_safe_div(totals["sct_sqft"], weekday_count), 2) if weekday_count else 0.0,
+        "final_programming_sqft": round(_safe_div(totals["final_programming_sqft"], weekday_count), 2) if weekday_count else 0.0,
+        "resurface_sqft": round(_safe_div(totals["resurface_sqft"], weekday_count), 2) if weekday_count else 0.0,
+        "cut_sqft": round(_safe_div(totals["cut_sqft"], weekday_count), 2) if weekday_count else 0.0,
+        "fab_sqft": round(_safe_div(totals["fab_sqft"], weekday_count), 2) if weekday_count else 0.0,
+    }
+
+    return success_response(
+        {
+            "title": "Daily Completion Report",
+            "period": {
+                "from_date": effective_from.isoformat(),
+                "to_date": effective_to.isoformat(),
+            },
+            "summary": {
+                "weekdays": weekday_count,
+                "totals": totals,
+                "avg_per_weekday": avg_per_weekday,
+                "row_count": len(daily_rows),
+            },
+            "columns": [
+                "date",
+                "template_sqft",
+                "draft_sqft",
+                "sct_sqft",
+                "final_programming_sqft",
+                "resurface_sqft",
+                "cut_sqft",
+                "fab_sqft",
+            ],
+            "rows": daily_rows,
+        },
+        "Owner daily completion report generated",
     )
 
 
