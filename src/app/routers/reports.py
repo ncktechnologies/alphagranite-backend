@@ -1781,10 +1781,11 @@ async def get_owner_redo_analysis_report(
     ]
 
     # Annual summary by month.
+    month_bucket_expr = func.date_trunc(literal_column("'month'"), ShopCutPlan.actual_end_date)
     annual_cut_wj_rows = (
         await db.execute(
             select(
-                func.date_trunc("month", ShopCutPlan.actual_end_date).label("month_bucket"),
+                month_bucket_expr.label("month_bucket"),
                 ShopCutPlan.fab_id,
             )
             .select_from(ShopCutPlan)
@@ -1795,7 +1796,7 @@ async def get_owner_redo_analysis_report(
                 normalized_plan.in_(["cut", "wj"]),
                 func.extract("year", ShopCutPlan.actual_end_date) == annual_year,
             )
-            .group_by(func.date_trunc("month", ShopCutPlan.actual_end_date), ShopCutPlan.fab_id)
+            .group_by(month_bucket_expr, ShopCutPlan.fab_id)
             .having(func.count(func.distinct(normalized_plan)) == 2)
         )
     ).all()
