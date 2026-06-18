@@ -114,7 +114,6 @@ async def get_ag_redo_report(
                 Fab.redo_total_sqft,
                 Fab.redo_department,
                 Fab.redo_requested_by,
-                Revision.revision_notes,
             )
             .select_from(Fab)
             .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
@@ -123,7 +122,6 @@ async def get_ag_redo_report(
             .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
             .join(Edge, Edge.id == Fab.edge_id, isouter=True)
             .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
-            .join(Revision, Revision.fab_id == Fab.id, isouter=True)
             .where(and_(*filters))
             .order_by(Fab.created_at.desc(), Fab.id.desc())
         )
@@ -175,12 +173,15 @@ async def get_ag_redo_report(
         redo_total_sqft_raw,
         redo_department,
         redo_requested_by,
-        revision_notes,
     ) in rows:
         cost_per_sqft = round(_to_float(cost_per_sqft_raw), 2) if cost_per_sqft_raw is not None else None
         sqft_value = round(_to_float(sqft), 2)
-        redo_sqft_value = round(_to_float(redo_total_sqft_raw), 2)
-        total_cost = round(_to_float(cost_per_sqft_raw) * _to_float(redo_total_sqft_raw), 2)
+        redo_sqft_raw_value = _to_float(redo_total_sqft_raw)
+        if redo_sqft_raw_value <= 0:
+            # Backward-compatibility for older rows where redo_total_sqft wasn't populated.
+            redo_sqft_raw_value = _to_float(sqft)
+        redo_sqft_value = round(redo_sqft_raw_value, 2)
+        total_cost = round(_to_float(cost_per_sqft_raw) * redo_sqft_raw_value, 2)
 
         info_parts = [
             account_name,
@@ -214,7 +215,7 @@ async def get_ag_redo_report(
                 "redo_requested_by": redo_requested_by,
                 "department": department_name_map.get(int(redo_department), None) if redo_department is not None else None,
                 "person_name": requested_by_name_map.get(int(redo_requested_by), None) if redo_requested_by is not None else None,
-                "reason": revision_notes,
+                "reason": None,
                 "department_options": department_options,
             }
         )
@@ -240,7 +241,6 @@ async def patch_redo_record(
             patch.total_cost,
             patch.department,
             patch.person_name,
-            patch.reason,
         ]
     ):
         raise error_response("At least one field is required", 400)
@@ -256,7 +256,31 @@ async def patch_redo_record(
     if patch.no_of_pieces is not None:
         fab.no_of_pieces = patch.no_of_pieces
     if patch.sqft is not None:
+        # Persist to redo_total_sqft for AG redo cost calculations and keep total_sqft in sync.
+        fab.redo_total_sqft = patch.sqft
         fab.total_sqft = patch.sqft
+    if patch.department is not None:
+        normalized_department = patch.department.strip()
+        if not normalized_department:
+            fab.redo_department = None
+        else:
+            department_row = (
+                await db.execute(
+                    select(Department.id).where(func.lower(Department.name) == normalized_department.lower()).limit(1)
+                )
+            ).first()
+            if department_row is None:
+                raise error_response("Department not found", 400)
+            fab.redo_department = int(department_row[0])
+    if patch.person_name is not None:
+        normalized_person_name = patch.person_name.strip()
+        if not normalized_person_name:
+            fab.redo_requested_by = None
+        else:
+            user = await _resolve_user_by_name(db, normalized_person_name)
+            if user is None:
+                raise error_response("Person not found", 400)
+            fab.redo_requested_by = int(user.id)
 
     cost_record: Optional[CostOfStone] = None
     if patch.cost_per_sqft is not None or patch.total_cost is not None:
@@ -300,33 +324,6 @@ async def patch_redo_record(
         if fab.cost_of_stone_id is None:
             fab.cost_of_stone_id = cost_record.id
 
-    revision: Optional[Revision] = None
-    if patch.department is not None or patch.person_name is not None or patch.reason is not None:
-        revision = (
-            await db.execute(select(Revision).where(Revision.fab_id == fab.id))
-        ).scalar_one_or_none()
-
-        if revision is None:
-            revision = Revision(
-                fab_id=fab.id,
-                revision_type="ag_redo",
-                requested_by=current_user.id,
-                status_id=1,
-                created_at=now,
-                is_completed=False,
-            )
-            db.add(revision)
-
-        if patch.department is not None:
-            revision.department = patch.department
-        if patch.person_name is not None:
-            revision.person_name = patch.person_name
-        if patch.reason is not None:
-            revision.revision_notes = patch.reason
-
-        revision.updated_at = now
-        revision.updated_by = current_user.id
-
     fab.updated_at = now
     fab.updated_by = current_user.id
 
@@ -346,20 +343,36 @@ async def patch_redo_record(
     if current_total_cost is None and fab.cost_of_stone is not None:
         current_total_cost = round(_to_float(fab.cost_of_stone), 2)
 
-    persisted_revision = revision or (
-        await db.execute(select(Revision).where(Revision.fab_id == fab.id))
-    ).scalar_one_or_none()
+    department_name = None
+    if fab.redo_department is not None:
+        department_name = (
+            await db.execute(select(Department.name).where(Department.id == fab.redo_department).limit(1))
+        ).scalar_one_or_none()
+
+    person_name = None
+    if fab.redo_requested_by is not None:
+        user_row = (
+            await db.execute(
+                select(User.first_name, User.last_name).where(User.id == fab.redo_requested_by).limit(1)
+            )
+        ).first()
+        if user_row is not None:
+            person_name = (f"{(user_row[0] or '').strip()} {(user_row[1] or '').strip()}".strip() or f"User {fab.redo_requested_by}")
+
+    effective_sqft = _to_float(fab.redo_total_sqft)
+    if effective_sqft <= 0:
+        effective_sqft = _to_float(fab.total_sqft)
 
     return success_response(
         {
             "redo_id": fab.id,
             "no_of_pieces": fab.no_of_pieces,
-            "sqft": round(_to_float(fab.total_sqft), 2),
+            "sqft": round(effective_sqft, 2),
             "cost_per_sqft": current_cost_per_sqft,
             "total_cost": current_total_cost,
-            "department": persisted_revision.department if persisted_revision else None,
-            "person_name": persisted_revision.person_name if persisted_revision else None,
-            "reason": persisted_revision.revision_notes if persisted_revision else None,
+            "department": department_name,
+            "person_name": person_name,
+            "reason": None,
         },
         "Redo record updated successfully",
     )
