@@ -33,7 +33,7 @@ from src.app.database.user import User
 from src.app.interface.generated_schemas import CNCDrafting, CostOfStone, CutList, DraftingSession, InstallCompletion, InstallScheduling, PlanningSection, ResurfaceScheduling, Revision, ShopRevision, Templating
 from src.app.interface.response_wrappers import SuccessResponse, success_response
 from src.app.middleware.jwt_auth import get_current_user
-from src.app.routers.fabs import _get_shop_current_stage
+from src.app.routers.fabs import FAB_STAGES, PUNCHOUT_REDIRECT_FAB_TYPES, _active_shop_cut_plan_visibility_filter, _get_shop_current_stage, _pending_cnc_widget_filter, _stage_filter_condition
 from src.app.service.monthly_end_of_month_status_report import send_monthly_end_of_month_status_report
 from src.app.utils.helpers import error_response
 
@@ -1423,18 +1423,49 @@ async def get_owner_overview_report(
     job_filters = []
     _apply_datetime_filters(job_filters, BusinessJob.created_at, start_dt, end_dt)
 
-    completed_install_filters = [Fab.current_stage == "install_completion"]
+    completed_install_exists = (
+        select(InstallCompletion.id)
+        .where(
+            InstallCompletion.fab_id == Fab.id,
+            InstallCompletion.is_completed.is_(True),
+        )
+        .exists()
+    )
+    incomplete_install_exists = (
+        select(InstallCompletion.id)
+        .where(
+            InstallCompletion.fab_id == Fab.id,
+            InstallCompletion.is_completed.is_(False),
+        )
+        .exists()
+    )
+
+    completed_install_filters = [completed_install_exists]
     _apply_datetime_filters(completed_install_filters, Fab.updated_at, start_dt, end_dt)
 
     pending_install_filters = [
         or_(
             Fab.current_stage == "install_scheduling",
-            Fab.current_stage == "resurface_scheduling",
+            and_(
+                Fab.current_stage == "install_completion",
+                incomplete_install_exists,
+            ),
         )
     ]
     _apply_datetime_filters(pending_install_filters, Fab.created_at, start_dt, end_dt)
 
-    active_fab_filters = [Fab.status_id == 1]
+    templating_exists = (
+        select(Templating.id)
+        .where(Templating.fab_id == Fab.id)
+        .limit(1)
+        .exists()
+    )
+    active_fab_filters = [
+        or_(
+            Fab.template_needed.is_(False),
+            and_(Fab.template_needed.is_(True), templating_exists),
+        ),
+    ]
     _apply_datetime_filters(active_fab_filters, Fab.created_at, start_dt, end_dt)
 
     total_jobs = (
@@ -1475,71 +1506,120 @@ async def get_owner_overview_report(
         stage_query = stage_query.where(and_(*fab_filters))
 
     stage_rows = (await db.execute(stage_query)).all()
-    stage_count_map: dict[str, dict] = {}
-    stage_key_aliases = {
-        "slabsmith": "slabsmith",
-        "slab_smith": "slabsmith",
-        "finalprogramming": "finalprogramming",
-        "final_programming": "finalprogramming",
-        "cnc": "cnc",
-    }
-    for stage_name, stage_count in stage_rows:
-        stage_label = (stage_name or "unknown").strip() or "unknown"
-        stage_key_raw = stage_label.lower().replace("-", "_").replace(" ", "_")
-        stage_key = stage_key_aliases.get(stage_key_raw, stage_key_raw)
-        stage_count_map[stage_key] = {
-            "stage": stage_label,
-            "count": int(stage_count or 0),
-        }
+    stage_counts_dict = {str(stage_name): int(stage_count or 0) for stage_name, stage_count in stage_rows if stage_name}
 
-    # Ensure widget includes these shop-plan stages even when current_stage is just "shop".
-    target_stage_display = {
-        "slabsmith": "Slabsmith",
-        "finalprogramming": "Final_programming",
+    final_programming_filters = [_stage_filter_condition("final_programming")]
+    _apply_datetime_filters(final_programming_filters, Fab.created_at, start_dt, end_dt)
+    stage_counts_dict["final_programming"] = (
+        await db.execute(select(func.count(Fab.id)).where(and_(*final_programming_filters)))
+    ).scalar() or 0
+
+    cut_list_filters = [_stage_filter_condition("cut_list")]
+    _apply_datetime_filters(cut_list_filters, Fab.created_at, start_dt, end_dt)
+    stage_counts_dict["cut_list"] = (
+        await db.execute(select(func.count(Fab.id)).where(and_(*cut_list_filters)))
+    ).scalar() or 0
+
+    install_completion_filters = [_stage_filter_condition("install_completion")]
+    _apply_datetime_filters(install_completion_filters, Fab.created_at, start_dt, end_dt)
+    stage_counts_dict["install_completion"] = (
+        await db.execute(select(func.count(Fab.id)).where(and_(*install_completion_filters)))
+    ).scalar() or 0
+
+    slabsmith_pending_filters = [
+        or_(Fab.current_stage == "sales_ct", Fab.current_stage == "revision"),
+        or_(Fab.slab_smith_ag_needed.is_(True), Fab.slab_smith_cust_needed.is_(True)),
+        Fab.slabsmith_completed_date.is_(None),
+    ]
+    _apply_datetime_filters(slabsmith_pending_filters, Fab.created_at, start_dt, end_dt)
+    stage_counts_dict["slab_smith_request"] = (
+        await db.execute(select(func.count(Fab.id)).where(and_(*slabsmith_pending_filters)))
+    ).scalar() or 0
+
+    cnc_filters = [_pending_cnc_widget_filter()]
+    _apply_datetime_filters(cnc_filters, Fab.created_at, start_dt, end_dt)
+    stage_counts_dict["cnc"] = (
+        await db.execute(select(func.count(Fab.id)).where(and_(*cnc_filters)))
+    ).scalar() or 0
+
+    cost_of_stone_queue_filters = [
+        Fab.sct_completed.is_(True),
+        or_(
+            Fab.cost_of_stone.is_(None),
+            func.trim(cast(Fab.cost_of_stone, String)) == "",
+        ),
+    ]
+    _apply_datetime_filters(cost_of_stone_queue_filters, Fab.created_at, start_dt, end_dt)
+    stage_counts_dict["cost_of_stone"] = (
+        await db.execute(select(func.count(Fab.id)).where(and_(*cost_of_stone_queue_filters)))
+    ).scalar() or 0
+
+    shop_est_or_install_filter = or_(
+        Fab.shop_est_completion_date.isnot(None),
+        Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+    )
+    already_scheduled_for_install_exists = (
+        select(InstallScheduling.id)
+        .where(
+            InstallScheduling.fab_id == Fab.id,
+            InstallScheduling.installer_id.isnot(None),
+            InstallScheduling.scheduled_install_date.isnot(None),
+        )
+        .exists()
+    )
+    install_scheduling_filters = [
+        Fab.status_id == 1,
+        shop_est_or_install_filter,
+        ~already_scheduled_for_install_exists,
+    ]
+    _apply_datetime_filters(install_scheduling_filters, Fab.created_at, start_dt, end_dt)
+    stage_counts_dict["install_scheduling"] = (
+        await db.execute(select(func.count(Fab.id)).where(and_(*install_scheduling_filters)))
+    ).scalar() or 0
+
+    # Keep Shop count aligned with /fabs?current_stage=shop semantics.
+    shop_filters = [
+        _stage_filter_condition("shop"),
+        _active_shop_cut_plan_visibility_filter(),
+    ]
+    _apply_datetime_filters(shop_filters, Fab.created_at, start_dt, end_dt)
+    stage_counts_dict["shop"] = (
+        await db.execute(select(func.count(Fab.id)).where(and_(*shop_filters)))
+    ).scalar() or 0
+
+    stage_display_labels = {
+        "slab_smith_request": "Slabsmith",
+        "final_programming": "Final_programming",
         "cnc": "CNC",
     }
-    normalized_plan_name = func.lower(
-        func.replace(
-            func.replace(
-                func.replace(func.trim(PlanningSection.plan_name), " ", ""),
-                "_",
-                "",
-            ),
-            "-",
-            "",
-        )
-    )
-    plan_stage_filters = [normalized_plan_name.in_(list(target_stage_display.keys()))]
-    _apply_datetime_filters(plan_stage_filters, Fab.created_at, start_dt, end_dt)
 
-    plan_stage_rows = (
-        await db.execute(
-            select(
-                normalized_plan_name.label("plan_stage"),
-                func.count(func.distinct(ShopCutPlan.fab_id)).label("count"),
-            )
-            .select_from(ShopCutPlan)
-            .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
-            .join(Fab, Fab.id == ShopCutPlan.fab_id)
-            .where(and_(*plan_stage_filters))
-            .group_by(normalized_plan_name)
-        )
-    ).all()
-
-    for plan_stage, stage_count in plan_stage_rows:
-        stage_key = (plan_stage or "").strip()
-        if stage_key in target_stage_display:
-            stage_count_map[stage_key] = {
-                "stage": target_stage_display[stage_key],
-                "count": int(stage_count or 0),
+    stage_breakdown_rows: list[dict] = []
+    for stage_name in FAB_STAGES:
+        count_value = int(stage_counts_dict.get(stage_name, 0))
+        if count_value <= 0 and stage_name not in {"slab_smith_request", "final_programming", "cnc"}:
+            continue
+        stage_breakdown_rows.append(
+            {
+                "stage": stage_display_labels.get(stage_name, stage_name),
+                "count": count_value,
             }
+        )
 
-    for canonical_stage_key, stage_label in target_stage_display.items():
-        if canonical_stage_key not in stage_count_map:
-            stage_count_map[canonical_stage_key] = {"stage": stage_label, "count": 0}
+    fab_stage_set = set(FAB_STAGES)
+    for stage_name, count_value in stage_counts_dict.items():
+        if not stage_name or stage_name in fab_stage_set:
+            continue
+        if int(count_value or 0) <= 0:
+            continue
+        stage_breakdown_rows.append(
+            {
+                "stage": stage_name,
+                "count": int(count_value or 0),
+            }
+        )
 
     stage_breakdown = sorted(
-        stage_count_map.values(),
+        stage_breakdown_rows,
         key=lambda row: (-int(row.get("count", 0)), str(row.get("stage", "")).lower()),
     )
 
@@ -4315,230 +4395,6 @@ async def get_owner_monthly_install_completion_report(
     )
 
 
-@router.get("/reports/owner/daily-install-completion", response_model=SuccessResponse[dict])
-async def get_owner_daily_install_completion_report(
-    from_date: Optional[date] = Query(None, description="Inclusive from date filter"),
-    to_date: Optional[date] = Query(None, description="Inclusive to date filter"),
-    start_date: Optional[date] = Query(None, description="Inclusive start date filter"),
-    end_date: Optional[date] = Query(None, description="Inclusive end date filter"),
-    fab_id: Optional[int] = Query(None, gt=0, description="Optional FAB ID filter"),
-    job_number: Optional[str] = Query(None, description="Optional job number filter"),
-    installer_name: Optional[str] = Query(None, description="Optional installer name filter"),
-    fab_type: Optional[str] = Query(None, description="Optional FAB type filter"),
-    fab_type_sort: str = Query("asc", pattern="^(asc|desc)$", description="Sort order for FAB type"),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Daily install completion report across a date range, grouped by install date."""
-    effective_start_date = from_date if from_date is not None else start_date
-    effective_end_date = to_date if to_date is not None else end_date
-
-    if effective_start_date is None and effective_end_date is None:
-        effective_end_date = date.today()
-        effective_start_date = effective_end_date - timedelta(days=30)
-    elif effective_start_date is None and effective_end_date is not None:
-        effective_start_date = effective_end_date
-    elif effective_start_date is not None and effective_end_date is None:
-        effective_end_date = effective_start_date
-
-    start_dt, end_dt = _range_bounds(effective_start_date, effective_end_date)
-    fab_type_sort_normalized = (fab_type_sort or "asc").strip().lower()
-    fab_type_order = (
-        func.lower(Fab.fab_type).desc()
-        if fab_type_sort_normalized == "desc"
-        else func.lower(Fab.fab_type).asc()
-    )
-
-    query = (
-        select(
-            InstallCompletion.completion_date,
-            Fab.fab_type,
-            Fab.id,
-            BusinessJob.job_number,
-            InstallCompletion.installer_id,
-            User.first_name.label("installer_first_name"),
-            User.last_name.label("installer_last_name"),
-            BusinessJob.name.label("job_name"),
-            Account.name.label("account_name"),
-            StoneType.name.label("stone_type_name"),
-            StoneColor.name.label("stone_color_name"),
-            Edge.name.label("edge_name"),
-            StoneThickness.thickness.label("stone_thickness_value"),
-            Fab.input_area,
-            Fab.no_of_pieces,
-            InstallCompletion.total_sqft_installed,
-            Fab.revenue,
-            Fab.cost_of_stone,
-            CostOfStone.total_cost,
-        )
-        .join(Fab, Fab.id == InstallCompletion.fab_id)
-        .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
-        .join(User, User.id == InstallCompletion.installer_id, isouter=True)
-        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
-        .join(StoneType, StoneType.id == Fab.stone_type_id, isouter=True)
-        .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
-        .join(Edge, Edge.id == Fab.edge_id, isouter=True)
-        .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
-        .join(CostOfStone, CostOfStone.id == Fab.cost_of_stone_id, isouter=True)
-        .where(InstallCompletion.completion_date >= start_dt, InstallCompletion.completion_date <= end_dt)
-        .order_by(InstallCompletion.completion_date.asc(), fab_type_order, Fab.id.asc())
-    )
-
-    if fab_type:
-        query = query.where(func.lower(Fab.fab_type) == fab_type.strip().lower())
-    if fab_id is not None:
-        query = query.where(Fab.id == fab_id)
-    if job_number:
-        query = query.where(BusinessJob.job_number.ilike(f"%{job_number.strip()}%"))
-    if installer_name:
-        installer_like = f"%{installer_name.strip().lower()}%"
-        query = query.where(
-            or_(
-                func.lower(User.first_name).like(installer_like),
-                func.lower(User.last_name).like(installer_like),
-                func.lower(User.username).like(installer_like),
-                func.lower(User.email).like(installer_like),
-                func.lower(
-                    func.concat(
-                        func.coalesce(User.first_name, ""),
-                        " ",
-                        func.coalesce(User.last_name, ""),
-                    )
-                ).like(installer_like),
-            )
-        )
-
-    records = (await db.execute(query)).all()
-
-    rows = []
-    daily_rollup: dict[str, dict] = defaultdict(lambda: {
-        "pieces": 0,
-        "sq_ft": 0.0,
-        "revenue": 0.0,
-        "cost_of_stone": 0.0,
-        "gp": 0.0,
-        "row_count": 0,
-    })
-
-    for completion_date, row_fab_type, fab_id, job_number, installer_id, installer_first_name, installer_last_name, job_name, account_name, stone_type_name, stone_color_name, edge_name, stone_thickness_value, input_area, pieces, sq_ft, revenue, fab_cost_of_stone, cos_total_cost in records:
-        sq_ft_value = round(_to_float(sq_ft), 2)
-        revenue_value = round(_to_float(revenue), 2)
-        cost_value = round(_to_float(fab_cost_of_stone if fab_cost_of_stone is not None else cos_total_cost), 2)
-        gp_value = round(revenue_value - cost_value, 2)
-        pieces_value = int(_to_float(pieces))
-        revenue_per_sqft = round((revenue_value / sq_ft_value), 2) if sq_ft_value else 0.0
-        day_key = completion_date.date().isoformat()
-        installer_name = f"{(installer_first_name or '').strip()} {(installer_last_name or '').strip()}".strip() or (
-            f"Installer {installer_id}" if installer_id else None
-        )
-
-        daily_rollup[day_key]["pieces"] += pieces_value
-        daily_rollup[day_key]["sq_ft"] += sq_ft_value
-        daily_rollup[day_key]["revenue"] += revenue_value
-        daily_rollup[day_key]["cost_of_stone"] += cost_value
-        daily_rollup[day_key]["gp"] += gp_value
-        daily_rollup[day_key]["row_count"] += 1
-
-        rows.append(
-            {
-                "install_date": day_key,
-                "fab_type": row_fab_type,
-                "fab_id": fab_id,
-                "job_number": job_number,
-                "installer_id": installer_id,
-                "installer_name": installer_name,
-                "job_name": job_name,
-                "account_name": account_name,
-                "stone_type_name": stone_type_name,
-                "stone_color_name": stone_color_name,
-                "edge_name": edge_name,
-                "stone_thickness_value": stone_thickness_value,
-                "input_area": input_area,
-                "pieces": pieces_value,
-                "sq_ft": sq_ft_value,
-                "revenue": revenue_value,
-                "revenue_per_sq_ft": revenue_per_sqft,
-                "cost_of_stone": cost_value,
-                "gp": gp_value,
-            }
-        )
-
-    daily_totals = []
-    for day_key in sorted(daily_rollup.keys()):
-        item = daily_rollup[day_key]
-        day_sqft = round(item["sq_ft"], 2)
-        day_revenue = round(item["revenue"], 2)
-        daily_totals.append(
-            {
-                "install_date": day_key,
-                "pieces": int(item["pieces"]),
-                "sq_ft": day_sqft,
-                "revenue": day_revenue,
-                "revenue_per_sq_ft": round((day_revenue / day_sqft), 2) if day_sqft else 0.0,
-                "cost_of_stone": round(item["cost_of_stone"], 2),
-                "gp": round(item["gp"], 2),
-                "row_count": int(item["row_count"]),
-            }
-        )
-
-    total_sqft = round(sum(item["sq_ft"] for item in daily_rollup.values()), 2)
-    total_revenue = round(sum(item["revenue"] for item in daily_rollup.values()), 2)
-    total_cost = round(sum(item["cost_of_stone"] for item in daily_rollup.values()), 2)
-    total_gp = round(sum(item["gp"] for item in daily_rollup.values()), 2)
-
-    return success_response(
-        {
-            "title": "Daily Install Completion",
-            "period": {
-                "start_date": effective_start_date.isoformat() if effective_start_date else None,
-                "end_date": effective_end_date.isoformat() if effective_end_date else None,
-            },
-            "filters": {
-                "from_date": effective_start_date.isoformat() if effective_start_date else None,
-                "to_date": effective_end_date.isoformat() if effective_end_date else None,
-                "fab_id": fab_id,
-                "job_number": job_number,
-                "installer_name": installer_name,
-                "fab_type": fab_type,
-            },
-            "columns": [
-                "install_date",
-                "fab_type",
-                "fab_id",
-                "job_number",
-                "installer_id",
-                "installer_name",
-                "job_name",
-                "account_name",
-                "stone_type_name",
-                "stone_color_name",
-                "edge_name",
-                "stone_thickness_value",
-                "input_area",
-                "pieces",
-                "sq_ft",
-                "revenue",
-                "revenue_per_sq_ft",
-                "cost_of_stone",
-                "gp",
-            ],
-            "summary": {
-                "pieces": int(sum(item["pieces"] for item in daily_rollup.values())),
-                "sq_ft": total_sqft,
-                "revenue": total_revenue,
-                "revenue_per_sq_ft": round((total_revenue / total_sqft), 2) if total_sqft else 0.0,
-                "cost_of_stone": total_cost,
-                "gp": total_gp,
-                "total_cost_of_stone": total_cost,
-                "total_gp": total_gp,
-                "row_count": len(rows),
-            },
-            "daily_totals": daily_totals,
-            "rows": rows,
-        },
-        "Owner daily install completion report generated",
-    )
-
 
 @router.get("/reports/owner/monthly-cut-completion", response_model=SuccessResponse[dict])
 async def get_owner_monthly_cut_completion_report(
@@ -4981,7 +4837,7 @@ async def patch_owner_daily_install_completion(
         "Daily install completion record updated successfully",
     )
 
-
+@router.get("/reports/owner/daily-install-completion", response_model=SuccessResponse[dict])
 @router.get("/reports/daily-install-completion", response_model=SuccessResponse[dict])
 async def get_daily_install_completion_report(
     start_date: Optional[date] = Query(None, description="Inclusive start date filter"),
@@ -4992,41 +4848,44 @@ async def get_daily_install_completion_report(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Daily install completion report based on scheduled install dates with optional filters and daily/grand totals."""
+    """Daily install completion report based on completed installs with optional filters and daily/grand totals."""
     start_dt, end_dt = _range_bounds(start_date, end_date)
 
     query = (
         select(
-            InstallScheduling.scheduled_install_date,
+            InstallCompletion.completion_date,
             Fab.id,
             Fab.fab_type,
             BusinessJob.job_number,
             BusinessJob.name,
-            InstallScheduling.installer_id,
+            InstallCompletion.installer_id,
             User.first_name,
             User.last_name,
-            InstallScheduling.total_sqft,
+            InstallCompletion.total_sqft_installed,
             Fab.revenue,
             Fab.gp,
         )
-        .select_from(InstallScheduling)
-        .join(Fab, Fab.id == InstallScheduling.fab_id)
+        .select_from(InstallCompletion)
+        .join(Fab, Fab.id == InstallCompletion.fab_id)
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
-        .join(User, User.id == InstallScheduling.installer_id, isouter=True)
-        .where(InstallScheduling.scheduled_install_date.is_not(None))
-        .order_by(InstallScheduling.scheduled_install_date.asc(), Fab.id.asc())
+        .join(User, User.id == InstallCompletion.installer_id, isouter=True)
+        .where(
+            InstallCompletion.completion_date.is_not(None),
+            InstallCompletion.is_completed.is_(True),
+        )
+        .order_by(InstallCompletion.completion_date.asc(), Fab.id.asc())
     )
 
     if start_dt is not None:
-        query = query.where(InstallScheduling.scheduled_install_date >= start_dt)
+        query = query.where(InstallCompletion.completion_date >= start_dt)
     if end_dt is not None:
-        query = query.where(InstallScheduling.scheduled_install_date <= end_dt)
+        query = query.where(InstallCompletion.completion_date <= end_dt)
     if job_number:
         query = query.where(BusinessJob.job_number.ilike(f"%{job_number.strip()}%"))
     if fab_id is not None:
         query = query.where(Fab.id == fab_id)
     if installer_id is not None:
-        query = query.where(InstallScheduling.installer_id == installer_id)
+        query = query.where(InstallCompletion.installer_id == installer_id)
 
     records = (await db.execute(query)).all()
 
@@ -5043,7 +4902,7 @@ async def get_daily_install_completion_report(
     grand_total_gp = 0.0
 
     for (
-        scheduled_install_date,
+        completion_date,
         row_fab_id,
         row_fab_type,
         row_job_number,
@@ -5055,7 +4914,7 @@ async def get_daily_install_completion_report(
         revenue_raw,
         gp_raw,
     ) in records:
-        day_key = scheduled_install_date.date().isoformat()
+        day_key = completion_date.date().isoformat()
         sqft_value = round(_to_float(sqft_installed_raw), 2)
         revenue_value = round(_to_float(revenue_raw), 2)
         gp_value = round(_to_float(gp_raw), 2)
@@ -6444,7 +6303,7 @@ async def export_owner_report(
         )
     elif key == "daily-install-completion":
         data = _unwrap_success_data(
-            await get_owner_daily_install_completion_report(start_date=start_date, end_date=end_date, db=db, current_user=current_user)
+            await get_daily_install_completion_report(start_date=start_date, end_date=end_date, db=db, current_user=current_user)
         )
     elif key == "monthly-cut-completion":
         if year is None or month is None:
