@@ -181,7 +181,7 @@ async def get_ag_redo_report(
             # Backward-compatibility for older rows where redo_total_sqft wasn't populated.
             redo_sqft_raw_value = _to_float(sqft)
         redo_sqft_value = round(redo_sqft_raw_value, 2)
-        total_cost = round(_to_float(cost_per_sqft_raw) * redo_sqft_raw_value, 2)
+        total_cost = round(_to_float(cost_per_sqft_raw) * redo_sqft_raw_value * 2.1, 2)
 
         info_parts = [
             account_name,
