@@ -33,7 +33,7 @@ from src.app.database.user import User
 from src.app.interface.generated_schemas import CNCDrafting, CostOfStone, CutList, DraftingSession, InstallCompletion, InstallScheduling, PlanningSection, ResurfaceScheduling, Revision, ShopRevision, Templating
 from src.app.interface.response_wrappers import SuccessResponse, success_response
 from src.app.middleware.jwt_auth import get_current_user
-from src.app.routers.fabs import _get_shop_current_stage
+from src.app.routers.fabs import _get_shop_current_stage, _pending_cnc_widget_filter, _stage_filter_condition
 from src.app.service.monthly_end_of_month_status_report import send_monthly_end_of_month_status_report
 from src.app.utils.helpers import error_response
 
@@ -1492,47 +1492,60 @@ async def get_owner_overview_report(
             "count": int(stage_count or 0),
         }
 
-    # Ensure widget includes these shop-plan stages even when current_stage is just "shop".
+    # Keep Shop count aligned with /fabs?current_stage=shop semantics.
+    shop_filters = [_stage_filter_condition("shop")]
+    _apply_datetime_filters(shop_filters, Fab.created_at, start_dt, end_dt)
+    shop_count = (
+        await db.execute(select(func.count(Fab.id)).where(and_(*shop_filters)))
+    ).scalar() or 0
+    if "shop" in stage_count_map:
+        stage_count_map["shop"]["count"] = int(shop_count)
+    else:
+        stage_count_map["shop"] = {
+            "stage": "shop",
+            "count": int(shop_count),
+        }
+
+    # Keep these three stage counts aligned with get_all_stages() semantics.
     target_stage_display = {
         "slabsmith": "Slabsmith",
         "finalprogramming": "Final_programming",
         "cnc": "CNC",
     }
-    normalized_plan_name = func.lower(
-        func.replace(
-            func.replace(
-                func.replace(func.trim(PlanningSection.plan_name), " ", ""),
-                "_",
-                "",
-            ),
-            "-",
-            "",
-        )
-    )
-    plan_stage_filters = [normalized_plan_name.in_(list(target_stage_display.keys()))]
-    _apply_datetime_filters(plan_stage_filters, Fab.created_at, start_dt, end_dt)
 
-    plan_stage_rows = (
-        await db.execute(
-            select(
-                normalized_plan_name.label("plan_stage"),
-                func.count(func.distinct(ShopCutPlan.fab_id)).label("count"),
-            )
-            .select_from(ShopCutPlan)
-            .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
-            .join(Fab, Fab.id == ShopCutPlan.fab_id)
-            .where(and_(*plan_stage_filters))
-            .group_by(normalized_plan_name)
-        )
-    ).all()
+    slabsmith_pending_filters = [
+        or_(Fab.current_stage == "sales_ct", Fab.current_stage == "revision"),
+        or_(Fab.slab_smith_ag_needed.is_(True), Fab.slab_smith_cust_needed.is_(True)),
+        Fab.slabsmith_completed_date.is_(None),
+    ]
+    _apply_datetime_filters(slabsmith_pending_filters, Fab.created_at, start_dt, end_dt)
+    slabsmith_pending_count = (
+        await db.execute(select(func.count(Fab.id)).where(and_(*slabsmith_pending_filters)))
+    ).scalar() or 0
+    stage_count_map["slabsmith"] = {
+        "stage": target_stage_display["slabsmith"],
+        "count": int(slabsmith_pending_count),
+    }
 
-    for plan_stage, stage_count in plan_stage_rows:
-        stage_key = (plan_stage or "").strip()
-        if stage_key in target_stage_display:
-            stage_count_map[stage_key] = {
-                "stage": target_stage_display[stage_key],
-                "count": int(stage_count or 0),
-            }
+    final_programming_filters = [_stage_filter_condition("final_programming")]
+    _apply_datetime_filters(final_programming_filters, Fab.created_at, start_dt, end_dt)
+    final_programming_count = (
+        await db.execute(select(func.count(Fab.id)).where(and_(*final_programming_filters)))
+    ).scalar() or 0
+    stage_count_map["finalprogramming"] = {
+        "stage": target_stage_display["finalprogramming"],
+        "count": int(final_programming_count),
+    }
+
+    cnc_filters = [_pending_cnc_widget_filter()]
+    _apply_datetime_filters(cnc_filters, Fab.created_at, start_dt, end_dt)
+    cnc_count = (
+        await db.execute(select(func.count(Fab.id)).where(and_(*cnc_filters)))
+    ).scalar() or 0
+    stage_count_map["cnc"] = {
+        "stage": target_stage_display["cnc"],
+        "count": int(cnc_count),
+    }
 
     for canonical_stage_key, stage_label in target_stage_display.items():
         if canonical_stage_key not in stage_count_map:
