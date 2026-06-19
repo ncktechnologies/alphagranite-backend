@@ -5074,6 +5074,15 @@ async def get_daily_install_completion_report(
 ):
     """Daily install completion report based on scheduled install dates with optional filters and daily/grand totals."""
     start_dt, end_dt = _range_bounds(start_date, end_date)
+    completed_install_exists = (
+        select(InstallCompletion.id)
+        .where(
+            InstallCompletion.fab_id == Fab.id,
+            InstallCompletion.is_completed.is_(True),
+        )
+        .limit(1)
+        .exists()
+    )
 
     query = (
         select(
@@ -5093,7 +5102,10 @@ async def get_daily_install_completion_report(
         .join(Fab, Fab.id == InstallScheduling.fab_id)
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
         .join(User, User.id == InstallScheduling.installer_id, isouter=True)
-        .where(InstallScheduling.scheduled_install_date.is_not(None))
+        .where(
+            InstallScheduling.scheduled_install_date.is_not(None),
+            completed_install_exists,
+        )
         .order_by(InstallScheduling.scheduled_install_date.asc(), Fab.id.asc())
     )
 
