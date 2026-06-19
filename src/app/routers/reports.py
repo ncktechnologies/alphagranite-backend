@@ -1434,7 +1434,18 @@ async def get_owner_overview_report(
     ]
     _apply_datetime_filters(pending_install_filters, Fab.created_at, start_dt, end_dt)
 
-    active_fab_filters = [Fab.status_id == 1]
+    templating_exists = (
+        select(Templating.id)
+        .where(Templating.fab_id == Fab.id)
+        .limit(1)
+        .exists()
+    )
+    active_fab_filters = [
+        or_(
+            Fab.template_needed.is_(False),
+            and_(Fab.template_needed.is_(True), templating_exists),
+        ),
+    ]
     _apply_datetime_filters(active_fab_filters, Fab.created_at, start_dt, end_dt)
 
     total_jobs = (
