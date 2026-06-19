@@ -5072,53 +5072,44 @@ async def get_daily_install_completion_report(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Daily install completion report based on scheduled install dates with optional filters and daily/grand totals."""
+    """Daily install completion report based on completed installs with optional filters and daily/grand totals."""
     start_dt, end_dt = _range_bounds(start_date, end_date)
-    completed_install_exists = (
-        select(InstallCompletion.id)
-        .where(
-            InstallCompletion.fab_id == Fab.id,
-            InstallCompletion.is_completed.is_(True),
-        )
-        .limit(1)
-        .exists()
-    )
 
     query = (
         select(
-            InstallScheduling.scheduled_install_date,
+            InstallCompletion.completion_date,
             Fab.id,
             Fab.fab_type,
             BusinessJob.job_number,
             BusinessJob.name,
-            InstallScheduling.installer_id,
+            InstallCompletion.installer_id,
             User.first_name,
             User.last_name,
-            InstallScheduling.total_sqft,
+            InstallCompletion.total_sqft_installed,
             Fab.revenue,
             Fab.gp,
         )
-        .select_from(InstallScheduling)
-        .join(Fab, Fab.id == InstallScheduling.fab_id)
+        .select_from(InstallCompletion)
+        .join(Fab, Fab.id == InstallCompletion.fab_id)
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
-        .join(User, User.id == InstallScheduling.installer_id, isouter=True)
+        .join(User, User.id == InstallCompletion.installer_id, isouter=True)
         .where(
-            InstallScheduling.scheduled_install_date.is_not(None),
-            completed_install_exists,
+            InstallCompletion.completion_date.is_not(None),
+            InstallCompletion.is_completed.is_(True),
         )
-        .order_by(InstallScheduling.scheduled_install_date.asc(), Fab.id.asc())
+        .order_by(InstallCompletion.completion_date.asc(), Fab.id.asc())
     )
 
     if start_dt is not None:
-        query = query.where(InstallScheduling.scheduled_install_date >= start_dt)
+        query = query.where(InstallCompletion.completion_date >= start_dt)
     if end_dt is not None:
-        query = query.where(InstallScheduling.scheduled_install_date <= end_dt)
+        query = query.where(InstallCompletion.completion_date <= end_dt)
     if job_number:
         query = query.where(BusinessJob.job_number.ilike(f"%{job_number.strip()}%"))
     if fab_id is not None:
         query = query.where(Fab.id == fab_id)
     if installer_id is not None:
-        query = query.where(InstallScheduling.installer_id == installer_id)
+        query = query.where(InstallCompletion.installer_id == installer_id)
 
     records = (await db.execute(query)).all()
 
@@ -5135,7 +5126,7 @@ async def get_daily_install_completion_report(
     grand_total_gp = 0.0
 
     for (
-        scheduled_install_date,
+        completion_date,
         row_fab_id,
         row_fab_type,
         row_job_number,
@@ -5147,7 +5138,7 @@ async def get_daily_install_completion_report(
         revenue_raw,
         gp_raw,
     ) in records:
-        day_key = scheduled_install_date.date().isoformat()
+        day_key = completion_date.date().isoformat()
         sqft_value = round(_to_float(sqft_installed_raw), 2)
         revenue_value = round(_to_float(revenue_raw), 2)
         gp_value = round(_to_float(gp_raw), 2)
