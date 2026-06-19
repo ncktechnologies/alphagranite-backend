@@ -112,6 +112,7 @@ async def get_ag_redo_report(
                 Fab.total_sqft,
                 Fab.cost_per_sqft,
                 Fab.redo_total_sqft,
+                Fab.notes,
                 Fab.redo_department,
                 Fab.redo_requested_by,
             )
@@ -127,8 +128,8 @@ async def get_ag_redo_report(
         )
     ).all()
 
-    department_ids = sorted({int(row[15]) for row in rows if row[15] is not None})
-    requested_by_ids = sorted({int(row[16]) for row in rows if row[16] is not None})
+    department_ids = sorted({int(row[16]) for row in rows if row[16] is not None})
+    requested_by_ids = sorted({int(row[17]) for row in rows if row[17] is not None})
 
     department_name_map: dict[int, str] = {}
     if department_ids:
@@ -171,6 +172,7 @@ async def get_ag_redo_report(
         sqft,
         cost_per_sqft_raw,
         redo_total_sqft_raw,
+        notes,
         redo_department,
         redo_requested_by,
     ) in rows:
@@ -215,7 +217,8 @@ async def get_ag_redo_report(
                 "redo_requested_by": redo_requested_by,
                 "department": department_name_map.get(int(redo_department), None) if redo_department is not None else None,
                 "person_name": requested_by_name_map.get(int(redo_requested_by), None) if redo_requested_by is not None else None,
-                "reason": None,
+                "note": _notes_to_text(notes),
+                "reason": _notes_to_text(notes),
                 "department_options": department_options,
             }
         )
