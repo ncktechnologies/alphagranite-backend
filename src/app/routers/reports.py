@@ -1782,7 +1782,7 @@ async def get_owner_redo_analysis_report(
         return _to_float(row.total_sqft)
 
     def _redo_value(row) -> float:
-        return _to_float(row.cost_per_sqft) * _redo_sqft(row)
+        return _to_float(row.cost_per_sqft) * _redo_sqft(row) * 2.1
 
     def _redo_total_cost(row) -> float:
         return _to_float(row.cost_per_sqft) * 2.1 * _redo_sqft(row)
