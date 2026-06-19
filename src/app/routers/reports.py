@@ -112,6 +112,7 @@ async def get_ag_redo_report(
                 Fab.total_sqft,
                 Fab.cost_per_sqft,
                 Fab.redo_total_sqft,
+                Fab.notes,
                 Fab.redo_department,
                 Fab.redo_requested_by,
             )
@@ -127,8 +128,8 @@ async def get_ag_redo_report(
         )
     ).all()
 
-    department_ids = sorted({int(row[15]) for row in rows if row[15] is not None})
-    requested_by_ids = sorted({int(row[16]) for row in rows if row[16] is not None})
+    department_ids = sorted({int(row[16]) for row in rows if row[16] is not None})
+    requested_by_ids = sorted({int(row[17]) for row in rows if row[17] is not None})
 
     department_name_map: dict[int, str] = {}
     if department_ids:
@@ -171,6 +172,7 @@ async def get_ag_redo_report(
         sqft,
         cost_per_sqft_raw,
         redo_total_sqft_raw,
+        notes,
         redo_department,
         redo_requested_by,
     ) in rows:
@@ -181,7 +183,7 @@ async def get_ag_redo_report(
             # Backward-compatibility for older rows where redo_total_sqft wasn't populated.
             redo_sqft_raw_value = _to_float(sqft)
         redo_sqft_value = round(redo_sqft_raw_value, 2)
-        total_cost = round(_to_float(cost_per_sqft_raw) * redo_sqft_raw_value, 2)
+        total_cost = round(_to_float(cost_per_sqft_raw) * redo_sqft_raw_value * 2.1, 2)
 
         info_parts = [
             account_name,
@@ -215,7 +217,8 @@ async def get_ag_redo_report(
                 "redo_requested_by": redo_requested_by,
                 "department": department_name_map.get(int(redo_department), None) if redo_department is not None else None,
                 "person_name": requested_by_name_map.get(int(redo_requested_by), None) if redo_requested_by is not None else None,
-                "reason": None,
+                "note": _notes_to_text(notes),
+                "reason": _notes_to_text(notes),
                 "department_options": department_options,
             }
         )
@@ -1782,7 +1785,7 @@ async def get_owner_redo_analysis_report(
         return _to_float(row.total_sqft)
 
     def _redo_value(row) -> float:
-        return _to_float(row.cost_per_sqft) * _redo_sqft(row)
+        return _to_float(row.cost_per_sqft) * _redo_sqft(row) * 2.1
 
     def _redo_total_cost(row) -> float:
         return _to_float(row.cost_per_sqft) * 2.1 * _redo_sqft(row)
@@ -4843,6 +4846,7 @@ async def get_daily_install_completion_report(
     start_date: Optional[date] = Query(None, description="Inclusive start date filter"),
     end_date: Optional[date] = Query(None, description="Inclusive end date filter"),
     job_number: Optional[str] = Query(None, description="Optional job number filter"),
+    fab_type: Optional[str] = Query(None, description="Optional FAB type filter"),
     fab_id: Optional[int] = Query(None, gt=0, description="Optional FAB ID filter"),
     installer_id: Optional[int] = Query(None, gt=0, description="Optional installer user ID filter"),
     db: AsyncSession = Depends(get_db),
@@ -4869,7 +4873,8 @@ async def get_daily_install_completion_report(
             User.last_name,
             InstallCompletion.total_sqft_installed,
             Fab.revenue,
-            Fab.gp,
+            Fab.cost_of_stone,
+            CostOfStone.total_cost,
         )
         .select_from(InstallCompletion)
         .join(Fab, Fab.id == InstallCompletion.fab_id)
@@ -4879,6 +4884,7 @@ async def get_daily_install_completion_report(
         .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
         .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
         .join(Edge, Edge.id == Fab.edge_id, isouter=True)
+        .join(CostOfStone, CostOfStone.id == Fab.cost_of_stone_id, isouter=True)
         .join(User, User.id == InstallCompletion.installer_id, isouter=True)
         .where(
             InstallCompletion.completion_date.is_not(None),
@@ -4893,6 +4899,8 @@ async def get_daily_install_completion_report(
         query = query.where(InstallCompletion.completion_date <= end_dt)
     if job_number:
         query = query.where(BusinessJob.job_number.ilike(f"%{job_number.strip()}%"))
+    if fab_type:
+        query = query.where(func.lower(Fab.fab_type) == fab_type.strip().lower())
     if fab_id is not None:
         query = query.where(Fab.id == fab_id)
     if installer_id is not None:
@@ -4929,12 +4937,14 @@ async def get_daily_install_completion_report(
         installer_last_name,
         sqft_installed_raw,
         revenue_raw,
-        gp_raw,
+        fab_cost_of_stone,
+        cos_total_cost,
     ) in records:
         day_key = completion_date.date().isoformat()
         sqft_value = round(_to_float(sqft_installed_raw), 2)
         revenue_value = round(_to_float(revenue_raw), 2)
-        gp_value = round(_to_float(gp_raw), 2)
+        cost_value = round(_to_float(fab_cost_of_stone if fab_cost_of_stone is not None else cos_total_cost), 2)
+        gp_value = round(revenue_value - cost_value, 2)
 
         daily_totals_map[day_key]["total_sqft"] += sqft_value
         daily_totals_map[day_key]["total_revenue"] += revenue_value
@@ -4991,6 +5001,7 @@ async def get_daily_install_completion_report(
             },
             "filters": {
                 "job_number": job_number,
+                "fab_type": fab_type,
                 "fab_id": fab_id,
                 "installer_id": installer_id,
             },
