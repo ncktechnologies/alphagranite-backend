@@ -33,7 +33,7 @@ from src.app.database.user import User
 from src.app.interface.generated_schemas import CNCDrafting, CostOfStone, CutList, DraftingSession, InstallCompletion, InstallScheduling, PlanningSection, ResurfaceScheduling, Revision, ShopRevision, Templating
 from src.app.interface.response_wrappers import SuccessResponse, success_response
 from src.app.middleware.jwt_auth import get_current_user
-from src.app.routers.fabs import FAB_STAGES, PUNCHOUT_REDIRECT_FAB_TYPES, _get_shop_current_stage, _pending_cnc_widget_filter, _stage_filter_condition
+from src.app.routers.fabs import FAB_STAGES, PUNCHOUT_REDIRECT_FAB_TYPES, _active_shop_cut_plan_visibility_filter, _get_shop_current_stage, _pending_cnc_widget_filter, _stage_filter_condition
 from src.app.service.monthly_end_of_month_status_report import send_monthly_end_of_month_status_report
 from src.app.utils.helpers import error_response
 
@@ -1544,6 +1544,16 @@ async def get_owner_overview_report(
     _apply_datetime_filters(install_scheduling_filters, Fab.created_at, start_dt, end_dt)
     stage_counts_dict["install_scheduling"] = (
         await db.execute(select(func.count(Fab.id)).where(and_(*install_scheduling_filters)))
+    ).scalar() or 0
+
+    # Keep Shop count aligned with /fabs?current_stage=shop semantics.
+    shop_filters = [
+        _stage_filter_condition("shop"),
+        _active_shop_cut_plan_visibility_filter(),
+    ]
+    _apply_datetime_filters(shop_filters, Fab.created_at, start_dt, end_dt)
+    stage_counts_dict["shop"] = (
+        await db.execute(select(func.count(Fab.id)).where(and_(*shop_filters)))
     ).scalar() or 0
 
     stage_display_labels = {
