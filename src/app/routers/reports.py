@@ -1423,13 +1423,33 @@ async def get_owner_overview_report(
     job_filters = []
     _apply_datetime_filters(job_filters, BusinessJob.created_at, start_dt, end_dt)
 
-    completed_install_filters = [Fab.current_stage == "install_completion"]
+    completed_install_exists = (
+        select(InstallCompletion.id)
+        .where(
+            InstallCompletion.fab_id == Fab.id,
+            InstallCompletion.is_completed.is_(True),
+        )
+        .exists()
+    )
+    incomplete_install_exists = (
+        select(InstallCompletion.id)
+        .where(
+            InstallCompletion.fab_id == Fab.id,
+            InstallCompletion.is_completed.is_(False),
+        )
+        .exists()
+    )
+
+    completed_install_filters = [completed_install_exists]
     _apply_datetime_filters(completed_install_filters, Fab.updated_at, start_dt, end_dt)
 
     pending_install_filters = [
         or_(
             Fab.current_stage == "install_scheduling",
-            Fab.current_stage == "resurface_scheduling",
+            and_(
+                Fab.current_stage == "install_completion",
+                incomplete_install_exists,
+            ),
         )
     ]
     _apply_datetime_filters(pending_install_filters, Fab.created_at, start_dt, end_dt)
