@@ -33,7 +33,7 @@ from src.app.database.user import User
 from src.app.interface.generated_schemas import CNCDrafting, CostOfStone, CutList, DraftingSession, InstallCompletion, InstallScheduling, PlanningSection, ResurfaceScheduling, Revision, ShopRevision, Templating
 from src.app.interface.response_wrappers import SuccessResponse, success_response
 from src.app.middleware.jwt_auth import get_current_user
-from src.app.routers.fabs import _get_shop_current_stage, _pending_cnc_widget_filter, _stage_filter_condition
+from src.app.routers.fabs import FAB_STAGES, PUNCHOUT_REDIRECT_FAB_TYPES, _get_shop_current_stage, _pending_cnc_widget_filter, _stage_filter_condition
 from src.app.service.monthly_end_of_month_status_report import send_monthly_end_of_month_status_report
 from src.app.utils.helpers import error_response
 
@@ -1475,43 +1475,25 @@ async def get_owner_overview_report(
         stage_query = stage_query.where(and_(*fab_filters))
 
     stage_rows = (await db.execute(stage_query)).all()
-    stage_count_map: dict[str, dict] = {}
-    stage_key_aliases = {
-        "slabsmith": "slabsmith",
-        "slab_smith": "slabsmith",
-        "finalprogramming": "finalprogramming",
-        "final_programming": "finalprogramming",
-        "cnc": "cnc",
-    }
-    for stage_name, stage_count in stage_rows:
-        stage_label = (stage_name or "unknown").strip() or "unknown"
-        stage_key_raw = stage_label.lower().replace("-", "_").replace(" ", "_")
-        stage_key = stage_key_aliases.get(stage_key_raw, stage_key_raw)
-        stage_count_map[stage_key] = {
-            "stage": stage_label,
-            "count": int(stage_count or 0),
-        }
+    stage_counts_dict = {str(stage_name): int(stage_count or 0) for stage_name, stage_count in stage_rows if stage_name}
 
-    # Keep Shop count aligned with /fabs?current_stage=shop semantics.
-    shop_filters = [_stage_filter_condition("shop")]
-    _apply_datetime_filters(shop_filters, Fab.created_at, start_dt, end_dt)
-    shop_count = (
-        await db.execute(select(func.count(Fab.id)).where(and_(*shop_filters)))
+    final_programming_filters = [_stage_filter_condition("final_programming")]
+    _apply_datetime_filters(final_programming_filters, Fab.created_at, start_dt, end_dt)
+    stage_counts_dict["final_programming"] = (
+        await db.execute(select(func.count(Fab.id)).where(and_(*final_programming_filters)))
     ).scalar() or 0
-    if "shop" in stage_count_map:
-        stage_count_map["shop"]["count"] = int(shop_count)
-    else:
-        stage_count_map["shop"] = {
-            "stage": "shop",
-            "count": int(shop_count),
-        }
 
-    # Keep these three stage counts aligned with get_all_stages() semantics.
-    target_stage_display = {
-        "slabsmith": "Slabsmith",
-        "finalprogramming": "Final_programming",
-        "cnc": "CNC",
-    }
+    cut_list_filters = [_stage_filter_condition("cut_list")]
+    _apply_datetime_filters(cut_list_filters, Fab.created_at, start_dt, end_dt)
+    stage_counts_dict["cut_list"] = (
+        await db.execute(select(func.count(Fab.id)).where(and_(*cut_list_filters)))
+    ).scalar() or 0
+
+    install_completion_filters = [_stage_filter_condition("install_completion")]
+    _apply_datetime_filters(install_completion_filters, Fab.created_at, start_dt, end_dt)
+    stage_counts_dict["install_completion"] = (
+        await db.execute(select(func.count(Fab.id)).where(and_(*install_completion_filters)))
+    ).scalar() or 0
 
     slabsmith_pending_filters = [
         or_(Fab.current_stage == "sales_ct", Fab.current_stage == "revision"),
@@ -1519,40 +1501,84 @@ async def get_owner_overview_report(
         Fab.slabsmith_completed_date.is_(None),
     ]
     _apply_datetime_filters(slabsmith_pending_filters, Fab.created_at, start_dt, end_dt)
-    slabsmith_pending_count = (
+    stage_counts_dict["slab_smith_request"] = (
         await db.execute(select(func.count(Fab.id)).where(and_(*slabsmith_pending_filters)))
     ).scalar() or 0
-    stage_count_map["slabsmith"] = {
-        "stage": target_stage_display["slabsmith"],
-        "count": int(slabsmith_pending_count),
-    }
-
-    final_programming_filters = [_stage_filter_condition("final_programming")]
-    _apply_datetime_filters(final_programming_filters, Fab.created_at, start_dt, end_dt)
-    final_programming_count = (
-        await db.execute(select(func.count(Fab.id)).where(and_(*final_programming_filters)))
-    ).scalar() or 0
-    stage_count_map["finalprogramming"] = {
-        "stage": target_stage_display["finalprogramming"],
-        "count": int(final_programming_count),
-    }
 
     cnc_filters = [_pending_cnc_widget_filter()]
     _apply_datetime_filters(cnc_filters, Fab.created_at, start_dt, end_dt)
-    cnc_count = (
+    stage_counts_dict["cnc"] = (
         await db.execute(select(func.count(Fab.id)).where(and_(*cnc_filters)))
     ).scalar() or 0
-    stage_count_map["cnc"] = {
-        "stage": target_stage_display["cnc"],
-        "count": int(cnc_count),
+
+    cost_of_stone_queue_filters = [
+        Fab.sct_completed.is_(True),
+        or_(
+            Fab.cost_of_stone.is_(None),
+            func.trim(cast(Fab.cost_of_stone, String)) == "",
+        ),
+    ]
+    _apply_datetime_filters(cost_of_stone_queue_filters, Fab.created_at, start_dt, end_dt)
+    stage_counts_dict["cost_of_stone"] = (
+        await db.execute(select(func.count(Fab.id)).where(and_(*cost_of_stone_queue_filters)))
+    ).scalar() or 0
+
+    shop_est_or_install_filter = or_(
+        Fab.shop_est_completion_date.isnot(None),
+        Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+    )
+    already_scheduled_for_install_exists = (
+        select(InstallScheduling.id)
+        .where(
+            InstallScheduling.fab_id == Fab.id,
+            InstallScheduling.installer_id.isnot(None),
+            InstallScheduling.scheduled_install_date.isnot(None),
+        )
+        .exists()
+    )
+    install_scheduling_filters = [
+        Fab.status_id == 1,
+        shop_est_or_install_filter,
+        ~already_scheduled_for_install_exists,
+    ]
+    _apply_datetime_filters(install_scheduling_filters, Fab.created_at, start_dt, end_dt)
+    stage_counts_dict["install_scheduling"] = (
+        await db.execute(select(func.count(Fab.id)).where(and_(*install_scheduling_filters)))
+    ).scalar() or 0
+
+    stage_display_labels = {
+        "slab_smith_request": "Slabsmith",
+        "final_programming": "Final_programming",
+        "cnc": "CNC",
     }
 
-    for canonical_stage_key, stage_label in target_stage_display.items():
-        if canonical_stage_key not in stage_count_map:
-            stage_count_map[canonical_stage_key] = {"stage": stage_label, "count": 0}
+    stage_breakdown_rows: list[dict] = []
+    for stage_name in FAB_STAGES:
+        count_value = int(stage_counts_dict.get(stage_name, 0))
+        if count_value <= 0 and stage_name not in {"slab_smith_request", "final_programming", "cnc"}:
+            continue
+        stage_breakdown_rows.append(
+            {
+                "stage": stage_display_labels.get(stage_name, stage_name),
+                "count": count_value,
+            }
+        )
+
+    fab_stage_set = set(FAB_STAGES)
+    for stage_name, count_value in stage_counts_dict.items():
+        if not stage_name or stage_name in fab_stage_set:
+            continue
+        if int(count_value or 0) <= 0:
+            continue
+        stage_breakdown_rows.append(
+            {
+                "stage": stage_name,
+                "count": int(count_value or 0),
+            }
+        )
 
     stage_breakdown = sorted(
-        stage_count_map.values(),
+        stage_breakdown_rows,
         key=lambda row: (-int(row.get("count", 0)), str(row.get("stage", "")).lower()),
     )
 
