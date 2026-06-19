@@ -4858,6 +4858,12 @@ async def get_daily_install_completion_report(
             Fab.fab_type,
             BusinessJob.job_number,
             BusinessJob.name,
+            Account.name,
+            StoneType.name,
+            StoneColor.name,
+            StoneThickness.thickness,
+            Edge.name,
+            Fab.input_area,
             InstallCompletion.installer_id,
             User.first_name,
             User.last_name,
@@ -4868,6 +4874,11 @@ async def get_daily_install_completion_report(
         .select_from(InstallCompletion)
         .join(Fab, Fab.id == InstallCompletion.fab_id)
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+        .join(StoneType, StoneType.id == Fab.stone_type_id, isouter=True)
+        .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
+        .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
+        .join(Edge, Edge.id == Fab.edge_id, isouter=True)
         .join(User, User.id == InstallCompletion.installer_id, isouter=True)
         .where(
             InstallCompletion.completion_date.is_not(None),
@@ -4907,6 +4918,12 @@ async def get_daily_install_completion_report(
         row_fab_type,
         row_job_number,
         row_job_name,
+        row_account_name,
+        row_stone_type_name,
+        row_stone_color_name,
+        row_stone_thickness_value,
+        row_edge_name,
+        row_input_area,
         row_installer_id,
         installer_first_name,
         installer_last_name,
@@ -4939,6 +4956,12 @@ async def get_daily_install_completion_report(
                 "fab_type": row_fab_type,
                 "job_number": row_job_number,
                 "job_name": row_job_name,
+                "account_name": row_account_name,
+                "stone_type_name": row_stone_type_name,
+                "stone_color_name": row_stone_color_name,
+                "stone_thickness_value": row_stone_thickness_value,
+                "edge_name": row_edge_name,
+                "input_area": row_input_area,
                 "installer_id": row_installer_id,
                 "installer_name": installer_name,
                 "sqft": sqft_value,
