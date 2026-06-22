@@ -2625,6 +2625,21 @@ async def _get_shop_production_stage_counts(
 
     fab_entries = []
     now_dt = datetime.now()
+    shop_stage_order = {
+        "unplanned": 0,
+        "cut": 1,
+        "wj": 2,
+        "cnc": 3,
+        "edging": 4,
+        "miter": 5,
+        "hand work": 6,
+        "touch up": 7,
+        "resurfacing": 8,
+    }
+
+    def _shop_stage_sort_key(stage_name: Optional[str]) -> tuple[int, str]:
+        normalized_stage = _normalize_shop_stage_name(stage_name)
+        return shop_stage_order.get(normalized_stage, len(shop_stage_order)), normalized_stage
 
     for fab_data in fabs_map.values():
         plans = fab_data["plans"]
@@ -2712,11 +2727,11 @@ async def _get_shop_production_stage_counts(
             }
         )
 
-    stage_counts = sorted(stage_counts, key=lambda row: (-row["fab_count"], row["shop_current_stage"]))
+    stage_counts = sorted(stage_counts, key=lambda row: _shop_stage_sort_key(row["shop_current_stage"]))
     fab_entries = sorted(
         fab_entries,
         key=lambda row: (
-            row["shop_current_stage"],
+            _shop_stage_sort_key(row["shop_current_stage"]),
             (row["stale_days"] if row["stale_days"] is not None else -1),
             row["fab_id"],
         ),
