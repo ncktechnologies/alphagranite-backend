@@ -2993,7 +2993,10 @@ async def get_all_stages(
 
     # Keep cost_of_stone count aligned with /fabs/cost-of-stone queue behavior.
     cost_of_stone_queue_filters = [
-        Fab.sct_completed.is_(True),
+        or_(
+            Fab.sct_completed.is_(True),
+            Fab.sct_needed.is_(False),
+        ),
         or_(
             Fab.cost_of_stone.is_(None),
             func.trim(sa.cast(Fab.cost_of_stone, sa.String)) == "",
@@ -5357,7 +5360,7 @@ async def get_fabs_cost_of_stone_queue(
 
     Includes FABs where:
     1) cost_of_stone is blank (NULL/empty string), but not 0
-    2) sct_completed is true
+    2) sct_completed is true OR sct_needed is false
     Returns rows grouped by sct_completed_date.
     """
     _ = current_user
@@ -5388,7 +5391,10 @@ async def get_fabs_cost_of_stone_queue(
         .outerjoin(Edge, Fab.edge_id == Edge.id)
         .outerjoin(StoneThickness, Fab.stone_thickness_id == StoneThickness.id)
         .where(
-            Fab.sct_completed.is_(True),
+            or_(
+                Fab.sct_completed.is_(True),
+                Fab.sct_needed.is_(False),
+            ),
             or_(
                 Fab.cost_of_stone.is_(None),
                 func.trim(sa.cast(Fab.cost_of_stone, sa.String)) == "",

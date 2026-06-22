@@ -3083,7 +3083,12 @@ async def get_owner_install_performance_report(
     current_user: User = Depends(get_current_user),
 ):
     """Installer-focused output and labor efficiency based on completion and timer data."""
-    start_dt, end_dt = _range_bounds(start_date, end_date)
+    effective_end_date = end_date or start_date or date.today()
+    effective_start_date = start_date or end_date or (effective_end_date - timedelta(days=6))
+    if effective_start_date > effective_end_date:
+        effective_start_date, effective_end_date = effective_end_date, effective_start_date
+
+    start_dt, end_dt = _range_bounds(effective_start_date, effective_end_date)
 
     matched_installer_ids: Optional[list[int]] = None
     if installer_name:
@@ -3114,8 +3119,8 @@ async def get_owner_install_performance_report(
             return success_response(
                 {
                     "period": {
-                        "start_date": start_date.isoformat() if start_date else None,
-                        "end_date": end_date.isoformat() if end_date else None,
+                        "start_date": effective_start_date.isoformat() if effective_start_date else None,
+                        "end_date": effective_end_date.isoformat() if effective_end_date else None,
                     },
                     "filters": {
                         "installer_id": installer_id,
@@ -3262,8 +3267,8 @@ async def get_owner_install_performance_report(
     return success_response(
         {
             "period": {
-                "start_date": start_date.isoformat() if start_date else None,
-                "end_date": end_date.isoformat() if end_date else None,
+                "start_date": effective_start_date.isoformat() if effective_start_date else None,
+                "end_date": effective_end_date.isoformat() if effective_end_date else None,
             },
             "filters": {
                 "installer_id": installer_id,
@@ -4022,8 +4027,11 @@ async def get_owner_daily_completion_report(
     """Daily completion rollup by stage (Template, Draft, SCT, Final, Resurface, Cut, Shop Fab)."""
     _ = current_user
 
-    effective_to = to_date or from_date or date.today()
-    effective_from = from_date or to_date or (effective_to - timedelta(days=30))
+    today = date.today()
+    current_month_start = date(today.year, today.month, 1)
+
+    effective_to = to_date or from_date or today
+    effective_from = from_date or to_date or current_month_start
     if effective_from > effective_to:
         effective_from, effective_to = effective_to, effective_from
 
@@ -4951,7 +4959,12 @@ async def get_daily_install_completion_report(
     current_user: User = Depends(get_current_user),
 ):
     """Daily install completion report based on completed installs with optional filters and daily/grand totals."""
-    start_dt, end_dt = _range_bounds(start_date, end_date)
+    effective_end_date = end_date or start_date or date.today()
+    effective_start_date = start_date or end_date or (effective_end_date - timedelta(days=6))
+    if effective_start_date > effective_end_date:
+        effective_start_date, effective_end_date = effective_end_date, effective_start_date
+
+    start_dt, end_dt = _range_bounds(effective_start_date, effective_end_date)
 
     query = (
         select(
@@ -5100,8 +5113,8 @@ async def get_daily_install_completion_report(
     return success_response(
         {
             "period": {
-                "start_date": start_date.isoformat() if start_date else None,
-                "end_date": end_date.isoformat() if end_date else None,
+                "start_date": effective_start_date.isoformat() if effective_start_date else None,
+                "end_date": effective_end_date.isoformat() if effective_end_date else None,
             },
             "filters": {
                 "job_number": job_number,
