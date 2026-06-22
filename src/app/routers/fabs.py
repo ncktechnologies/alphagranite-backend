@@ -3001,6 +3001,10 @@ async def get_all_stages(
             Fab.cost_of_stone.is_(None),
             func.trim(sa.cast(Fab.cost_of_stone, sa.String)) == "",
         ),
+        or_(
+            Fab.fab_type.is_(None),
+            func.upper(sa.func.trim(Fab.fab_type)) != "RESURFACE",
+        ),
     ]
     cost_of_stone_count_result = await db.execute(
         select(func.count(Fab.id)).where(*cost_of_stone_queue_filters)
@@ -5398,6 +5402,10 @@ async def get_fabs_cost_of_stone_queue(
             or_(
                 Fab.cost_of_stone.is_(None),
                 func.trim(sa.cast(Fab.cost_of_stone, sa.String)) == "",
+            ),
+            or_(
+                Fab.fab_type.is_(None),
+                func.upper(sa.func.trim(Fab.fab_type)) != "RESURFACE",
             ),
         )
     )
