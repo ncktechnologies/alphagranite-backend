@@ -23,6 +23,7 @@ from src.app.database.department import Department
 from src.app.database.edge import Edge
 from src.app.database.fab import Fab
 from src.app.database.installer_rate_history import InstallerRateHistory
+from src.app.database.service_level_setting import ServiceLevelSetting
 from src.app.database.installer_job_timer_session import InstallerJobTimerSession
 from src.app.database.templater_job_timer_session import TemplaterJobTimerSession
 from src.app.database.shop_cut_plan import ShopCutPlan
@@ -77,6 +78,20 @@ class DailyInstallCompletionPatchRequest(BaseModel):
     sq_ft: Optional[float] = Field(default=None, ge=0)
     installer_id: Optional[int] = Field(default=None, gt=0)
     installer_name: Optional[str] = None
+
+
+class ServiceLevelSettingUpdate(BaseModel):
+    target_days: Optional[float] = Field(default=None, ge=0, description="Days at or below = green")
+    at_risk_days: Optional[float] = Field(default=None, ge=0, description="Yellow window: days beyond target before red")
+    is_applicable: Optional[bool] = None
+
+
+class ServiceLevelSettingCreate(BaseModel):
+    fab_type: str = Field(..., min_length=1, max_length=100)
+    stage_name: str = Field(..., min_length=1, max_length=100)
+    target_days: float = Field(default=1.0, ge=0)
+    at_risk_days: float = Field(default=0.0, ge=0)
+    is_applicable: bool = True
 
 
 @router.get("/redos", response_model=SuccessResponse[list[dict]])
@@ -5615,20 +5630,42 @@ async def get_owner_service_level_report(
     """Service-level report with KPI widgets, stage heat map, and Fab-level bottleneck rows."""
     start_dt, end_dt = _range_bounds(start_date, end_date)
 
-    stage_target_days = {
-        "Pre-Draft Review": 2.0,
-        "Drafting": 3.0,
-        "SCT": 3.0,
-        "SlabSmith": 2.0,
-        "Final Programming": 2.0,
-        "CNC": 1.0,
-    }
-    revision_target_days = {
-        "cad": 1.0,
-        "template": 1.0,
-        "sales": 1.0,
-        "client": 2.0,
-    }
+    # ── Load SLA settings from DB ───────────────────────────────────────────
+    # Build a two-level lookup:  sla_map[normalized_fab_type][stage_name] = {target, at_risk}
+    sla_rows = (
+        await db.execute(select(ServiceLevelSetting).where(ServiceLevelSetting.is_applicable.is_(True)))
+    ).scalars().all()
+    sla_map: dict[str, dict[str, dict]] = {}
+    for sla_row in sla_rows:
+        ft = sla_row.fab_type.strip().upper()
+        if ft not in sla_map:
+            sla_map[ft] = {}
+        sla_map[ft][sla_row.stage_name] = {
+            "target_days": sla_row.target_days,
+            "at_risk_days": sla_row.at_risk_days,
+        }
+
+    def _sla_for(fab_type_raw: Optional[str], stage_name: str) -> dict:
+        """Return {target_days, at_risk_days} from DB, falling back to DEFAULT then hardcoded."""
+        _hardcoded = {
+            "Pre-Draft Review": {"target_days": 2.0, "at_risk_days": 1.0},
+            "Drafting": {"target_days": 3.0, "at_risk_days": 1.0},
+            "SCT": {"target_days": 3.0, "at_risk_days": 1.0},
+            "SlabSmith": {"target_days": 2.0, "at_risk_days": 1.0},
+            "Final Programming": {"target_days": 2.0, "at_risk_days": 0.0},
+            "CNC": {"target_days": 1.0, "at_risk_days": 0.0},
+            "Revisions": {"target_days": 2.0, "at_risk_days": 1.0},
+        }
+        normalized_ft = (fab_type_raw or "").strip().upper()
+        # 1. Exact fab-type match
+        if normalized_ft in sla_map and stage_name in sla_map[normalized_ft]:
+            return sla_map[normalized_ft][stage_name]
+        # 2. DEFAULT row
+        if "DEFAULT" in sla_map and stage_name in sla_map["DEFAULT"]:
+            return sla_map["DEFAULT"][stage_name]
+        # 3. Hardcoded fallback
+        return _hardcoded.get(stage_name, {"target_days": float(sla_days), "at_risk_days": 0.0})
+    # ────────────────────────────────────────────────────────────────────────
 
     def _revision_subtype(value: Optional[str]) -> Optional[str]:
         text = (value or "").strip().lower()
@@ -5644,19 +5681,15 @@ async def get_owner_service_level_report(
             return "client"
         return None
 
-    def _target_days_for(stage_name: str, revision_type: Optional[str]) -> float:
-        if stage_name == "Revisions":
-            revision_key = _revision_subtype(revision_type)
-            if revision_key is not None:
-                return revision_target_days[revision_key]
-            return float(sla_days)
-        return float(stage_target_days.get(stage_name, float(sla_days)))
+    def _target_days_for(stage_name: str, revision_type: Optional[str], fab_type_raw: Optional[str] = None) -> float:
+        sla = _sla_for(fab_type_raw, stage_name)
+        return float(sla["target_days"])
 
-    def _risk_color(age_days: float, target_days: float) -> str:
-        yellow_threshold = max(target_days * 0.75, 0.0)
-        if age_days > target_days:
+    def _risk_color(age_days: float, target_days: float, at_risk_days: float = 0.0) -> str:
+        red_threshold = target_days + at_risk_days
+        if age_days > red_threshold:
             return "red"
-        if age_days >= yellow_threshold:
+        if age_days > target_days:
             return "yellow"
         return "green"
 
@@ -6003,8 +6036,10 @@ async def get_owner_service_level_report(
 
         days_since_template = _days_between(template_completed_at, now_dt)
         days_in_stage = max((now_dt.date() - stage_anchor.date()).days, 0)
-        target_days = _target_days_for(stage_name, revision_type)
-        risk_color = _risk_color(float(days_in_stage), target_days)
+        sla = _sla_for(fab_type, stage_name)
+        target_days = float(sla["target_days"])
+        at_risk_days = float(sla["at_risk_days"])
+        risk_color = _risk_color(float(days_in_stage), target_days, at_risk_days)
 
         age_days = days_in_stage
         if age_days <= 7:
@@ -6112,7 +6147,8 @@ async def get_owner_service_level_report(
         row = stage_rollup[stage_name]
         total_wip = int(row["total_wip"])
         avg_days = round((row["total_age_days"] / total_wip), 2) if total_wip else 0.0
-        target_days = _target_days_for(stage_name, None)
+        default_sla = _sla_for(None, stage_name)
+        target_days = float(default_sla["target_days"])
         stage_bottleneck_heat_map.append(
             {
                 "stage": stage_name,
@@ -6179,21 +6215,20 @@ async def get_owner_service_level_report(
             },
             "stage_bottleneck_heat_map": stage_bottleneck_heat_map,
             "sla_rules": {
-                "green": "Within 75% of stage SLA threshold",
-                "yellow": "75% to 100% of stage SLA threshold",
-                "red": "Exceeds stage SLA threshold",
-                "stage_target_days": {
-                    "Pre-Draft Review": 2,
-                    "Drafting": 3,
-                    "Revisions - CAD": 1,
-                    "Revisions - Template": 1,
-                    "Revisions - Sales": 1,
-                    "Revisions - Client": 2,
-                    "SCT": 3,
-                    "SlabSmith": 2,
-                    "Final Programming": 2,
-                    "CNC": 1,
-                },
+                "green": "At or below target days for the FAB type and stage",
+                "yellow": "Beyond target days but within at-risk window",
+                "red": "Exceeds target + at-risk days threshold",
+                "settings": [
+                    {
+                        "id": r.id,
+                        "fab_type": r.fab_type,
+                        "stage_name": r.stage_name,
+                        "target_days": r.target_days,
+                        "at_risk_days": r.at_risk_days,
+                        "is_applicable": r.is_applicable,
+                    }
+                    for r in sla_rows
+                ],
             },
             "fab_status_rows": fab_status_rows,
             "cycle_time_stats": [cycle_stats],
@@ -6301,6 +6336,147 @@ async def create_installer_rate(
         },
         "Installer rate created",
     )
+
+
+@router.get("/reports/owner/service-level-settings", response_model=SuccessResponse[list[dict]])
+async def get_service_level_settings(
+    fab_type: Optional[str] = Query(None, description="Filter by fab type"),
+    stage_name: Optional[str] = Query(None, description="Filter by stage name"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return all SLA target-day settings, optionally filtered by fab_type or stage_name."""
+    _ = current_user
+    query = select(ServiceLevelSetting).order_by(
+        ServiceLevelSetting.fab_type.asc(), ServiceLevelSetting.stage_name.asc()
+    )
+    if fab_type is not None:
+        query = query.where(ServiceLevelSetting.fab_type.ilike(fab_type.strip()))
+    if stage_name is not None:
+        query = query.where(ServiceLevelSetting.stage_name.ilike(stage_name.strip()))
+    rows = (await db.execute(query)).scalars().all()
+    return success_response(
+        [
+            {
+                "id": row.id,
+                "fab_type": row.fab_type,
+                "stage_name": row.stage_name,
+                "target_days": row.target_days,
+                "at_risk_days": row.at_risk_days,
+                "is_applicable": row.is_applicable,
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                "updated_by": row.updated_by,
+            }
+            for row in rows
+        ],
+        "Service level settings retrieved",
+    )
+
+
+@router.post("/reports/owner/service-level-settings", response_model=SuccessResponse[dict])
+async def create_service_level_setting(
+    payload: ServiceLevelSettingCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Create a new SLA target-day setting row."""
+    # Prevent duplicates on (fab_type, stage_name)
+    existing = (
+        await db.execute(
+            select(ServiceLevelSetting).where(
+                ServiceLevelSetting.fab_type == payload.fab_type,
+                ServiceLevelSetting.stage_name == payload.stage_name,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        return error_response(
+            f"Setting for fab_type='{payload.fab_type}' stage='{payload.stage_name}' already exists (id={existing.id}). Use PATCH to update.",
+            400,
+        )
+
+    row = ServiceLevelSetting(
+        fab_type=payload.fab_type,
+        stage_name=payload.stage_name,
+        target_days=payload.target_days,
+        at_risk_days=payload.at_risk_days,
+        is_applicable=payload.is_applicable,
+        updated_by=current_user.id,
+        updated_at=datetime.now(),
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return success_response(
+        {
+            "id": row.id,
+            "fab_type": row.fab_type,
+            "stage_name": row.stage_name,
+            "target_days": row.target_days,
+            "at_risk_days": row.at_risk_days,
+            "is_applicable": row.is_applicable,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            "updated_by": row.updated_by,
+        },
+        "Service level setting created",
+    )
+
+
+@router.patch("/reports/owner/service-level-settings/{setting_id}", response_model=SuccessResponse[dict])
+async def update_service_level_setting(
+    setting_id: int,
+    payload: ServiceLevelSettingUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update target_days, at_risk_days, or is_applicable for a single SLA setting row."""
+    if payload.target_days is None and payload.at_risk_days is None and payload.is_applicable is None:
+        return error_response("At least one field is required", 400)
+
+    row = (await db.execute(select(ServiceLevelSetting).where(ServiceLevelSetting.id == setting_id))).scalar_one_or_none()
+    if not row:
+        return error_response("Service level setting not found", 404)
+
+    if payload.target_days is not None:
+        row.target_days = payload.target_days
+    if payload.at_risk_days is not None:
+        row.at_risk_days = payload.at_risk_days
+    if payload.is_applicable is not None:
+        row.is_applicable = payload.is_applicable
+
+    row.updated_at = datetime.now()
+    row.updated_by = current_user.id
+    await db.commit()
+    await db.refresh(row)
+
+    return success_response(
+        {
+            "id": row.id,
+            "fab_type": row.fab_type,
+            "stage_name": row.stage_name,
+            "target_days": row.target_days,
+            "at_risk_days": row.at_risk_days,
+            "is_applicable": row.is_applicable,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            "updated_by": row.updated_by,
+        },
+        "Service level setting updated",
+    )
+
+
+@router.delete("/reports/owner/service-level-settings/{setting_id}", response_model=SuccessResponse[dict])
+async def delete_service_level_setting(
+    setting_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete a single SLA setting row."""
+    row = (await db.execute(select(ServiceLevelSetting).where(ServiceLevelSetting.id == setting_id))).scalar_one_or_none()
+    if not row:
+        return error_response("Service level setting not found", 404)
+    await db.delete(row)
+    await db.commit()
+    return success_response({"id": setting_id}, "Service level setting deleted")
 
 
 @router.get("/reports/owner/management-packet", response_model=SuccessResponse[dict])

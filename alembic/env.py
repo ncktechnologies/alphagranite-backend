@@ -67,6 +67,7 @@ from src.app.interface.generated_schemas import (
     InstallScheduling, InstallCompletion,
     CNCDrafting, CNCDraftingSession, CNCDraftingSessionNote,
 )
+from src.app.database.service_level_setting import ServiceLevelSetting  # noqa: F401
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
