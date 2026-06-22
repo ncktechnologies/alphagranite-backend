@@ -3912,11 +3912,12 @@ async def get_owner_installation_template_dashboard_report(
         group["rows"].append(flat_rows[-1])
 
     grouped_rows = []
-    for group in sorted(
+    for group_data in sorted(
         grouped_rows_map.values(),
         key=lambda item: (_department_rank(item["department"]), item["installer"].lower()),
     ):
-        total_seconds = int(group.pop("total_seconds"))
+        total_seconds = int(group_data.get("total_seconds") or 0)
+        group = {k: v for k, v in group_data.items() if k != "total_seconds"}
         group["installer_hours"] = round(total_seconds / 3600, 2)
         group["installer_hours_display"] = _format_duration_hhmm(total_seconds)
         group["rows"] = sorted(group["rows"], key=lambda item: item.get("activity_date") or "", reverse=True)
