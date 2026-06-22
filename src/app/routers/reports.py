@@ -2625,6 +2625,21 @@ async def _get_shop_production_stage_counts(
 
     fab_entries = []
     now_dt = datetime.now()
+    shop_stage_order = {
+        "unplanned": 0,
+        "cut": 1,
+        "wj": 2,
+        "cnc": 3,
+        "edging": 4,
+        "miter": 5,
+        "hand work": 6,
+        "touch up": 7,
+        "resurfacing": 8,
+    }
+
+    def _shop_stage_sort_key(stage_name: Optional[str]) -> tuple[int, str]:
+        normalized_stage = _normalize_shop_stage_name(stage_name)
+        return shop_stage_order.get(normalized_stage, len(shop_stage_order)), normalized_stage
 
     for fab_data in fabs_map.values():
         plans = fab_data["plans"]
@@ -2712,11 +2727,11 @@ async def _get_shop_production_stage_counts(
             }
         )
 
-    stage_counts = sorted(stage_counts, key=lambda row: (-row["fab_count"], row["shop_current_stage"]))
+    stage_counts = sorted(stage_counts, key=lambda row: _shop_stage_sort_key(row["shop_current_stage"]))
     fab_entries = sorted(
         fab_entries,
         key=lambda row: (
-            row["shop_current_stage"],
+            _shop_stage_sort_key(row["shop_current_stage"]),
             (row["stale_days"] if row["stale_days"] is not None else -1),
             row["fab_id"],
         ),
@@ -3276,7 +3291,7 @@ async def get_owner_weekly_trends_report(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Weekly trendline for owner review: new fabs, completed installs, revenue, and GP."""
+    """Weekly trendline for owner review with fab, install, and template metrics."""
     _ = current_user
     if from_date is not None or to_date is not None:
         effective_from = from_date or to_date
@@ -3308,11 +3323,13 @@ async def get_owner_weekly_trends_report(
         await db.execute(fab_query)
     ).all()
 
+    install_activity_date = func.coalesce(InstallCompletion.completion_date, InstallCompletion.install_date)
     install_filters = []
-    _apply_datetime_filters(install_filters, InstallCompletion.completion_date, start_dt, end_dt)
+    _apply_datetime_filters(install_filters, install_activity_date, start_dt, end_dt)
 
     install_query = select(
-        InstallCompletion.completion_date,
+        install_activity_date.label("activity_date"),
+        InstallCompletion.is_completed,
         InstallCompletion.total_sqft_installed,
     )
     if install_filters:
@@ -3322,7 +3339,36 @@ async def get_owner_weekly_trends_report(
         await db.execute(install_query)
     ).all()
 
+    template_activity_date = func.coalesce(Templating.actual_end_date, Templating.actual_start_date, Templating.created_at)
+    template_filters = []
+    _apply_datetime_filters(template_filters, template_activity_date, start_dt, end_dt)
+
+    template_query = select(
+        template_activity_date.label("activity_date"),
+        Templating.total_sqft,
+        Templating.is_completed,
+    )
+    if template_filters:
+        template_query = template_query.where(and_(*template_filters))
+
+    template_rows = (
+        await db.execute(template_query)
+    ).all()
+
     by_week: dict[str, dict] = {}
+
+    def _blank_week_row(week_key: str) -> dict:
+        return {
+            "week_start": week_key,
+            "fabs_created": 0,
+            "installs_completed": 0,
+            "installs_not_completed": 0,
+            "revenue": 0.0,
+            "gross_profit": 0.0,
+            "sqft_installed": 0.0,
+            "sqft_templated": 0.0,
+            "sqft_not_templated": 0.0,
+        }
 
     for week_start, fabs_created, revenue, gp in fab_week_rows:
         key = week_start.date().isoformat()
@@ -3330,32 +3376,62 @@ async def get_owner_weekly_trends_report(
             "week_start": key,
             "fabs_created": int(fabs_created or 0),
             "installs_completed": 0,
+            "installs_not_completed": 0,
             "revenue": round(_to_float(revenue), 2),
             "gross_profit": round(_to_float(gp), 2),
             "sqft_installed": 0.0,
+            "sqft_templated": 0.0,
+            "sqft_not_templated": 0.0,
         }
 
-    installs_by_week: dict[str, dict] = defaultdict(lambda: {"installs_completed": 0, "sqft_installed": 0.0})
-    for completed_at, sqft_installed in install_rows:
-        if completed_at is None:
+    installs_by_week: dict[str, dict] = defaultdict(
+        lambda: {
+            "installs_completed": 0,
+            "installs_not_completed": 0,
+            "sqft_installed": 0.0,
+        }
+    )
+    for activity_at, is_completed, sqft_installed in install_rows:
+        if activity_at is None:
             continue
-        week_start = completed_at.date() - timedelta(days=completed_at.weekday())
+        activity_day = activity_at.date() if hasattr(activity_at, "date") else activity_at
+        week_start = activity_day - timedelta(days=activity_day.weekday())
         key = week_start.isoformat()
-        installs_by_week[key]["installs_completed"] += 1
-        installs_by_week[key]["sqft_installed"] += _to_float(sqft_installed)
+        if bool(is_completed):
+            installs_by_week[key]["installs_completed"] += 1
+            installs_by_week[key]["sqft_installed"] += _to_float(sqft_installed)
+        else:
+            installs_by_week[key]["installs_not_completed"] += 1
+
+    templates_by_week: dict[str, dict] = defaultdict(
+        lambda: {
+            "sqft_templated": 0.0,
+            "sqft_not_templated": 0.0,
+        }
+    )
+    for activity_at, total_sqft, is_completed in template_rows:
+        if activity_at is None:
+            continue
+        activity_day = activity_at.date() if hasattr(activity_at, "date") else activity_at
+        week_start = activity_day - timedelta(days=activity_day.weekday())
+        key = week_start.isoformat()
+        if bool(is_completed):
+            templates_by_week[key]["sqft_templated"] += _to_float(total_sqft)
+        else:
+            templates_by_week[key]["sqft_not_templated"] += _to_float(total_sqft)
 
     for key, values in installs_by_week.items():
         if key not in by_week:
-            by_week[key] = {
-                "week_start": key,
-                "fabs_created": 0,
-                "installs_completed": 0,
-                "revenue": 0.0,
-                "gross_profit": 0.0,
-                "sqft_installed": 0.0,
-            }
+            by_week[key] = _blank_week_row(key)
         by_week[key]["installs_completed"] = values["installs_completed"]
+        by_week[key]["installs_not_completed"] = values["installs_not_completed"]
         by_week[key]["sqft_installed"] = round(values["sqft_installed"], 2)
+
+    for key, values in templates_by_week.items():
+        if key not in by_week:
+            by_week[key] = _blank_week_row(key)
+        by_week[key]["sqft_templated"] = round(values["sqft_templated"], 2)
+        by_week[key]["sqft_not_templated"] = round(values["sqft_not_templated"], 2)
 
     weekly_rows = [by_week[key] for key in sorted(by_week.keys())]
 
@@ -3588,8 +3664,15 @@ async def get_owner_installation_template_dashboard_report(
             )
         return base_query
 
-    grouped_rows_map: dict[str, dict] = {}
+    grouped_rows_map: dict[tuple[str, str], dict] = {}
     flat_rows: list[dict] = []
+
+    def _department_rank(department: str) -> int:
+        if department == "Templater":
+            return 0
+        if department == "Installer":
+            return 1
+        return 2
 
     installer_timer_totals = (
         select(
@@ -3687,19 +3770,20 @@ async def get_owner_installation_template_dashboard_report(
 
     template_rows_db = (await db.execute(template_query)).all()
 
-    def _get_group(installer_name: str, installer_id: Optional[int], default_label: str) -> dict:
-        group = grouped_rows_map.get(installer_name)
+    def _get_group(department: str, installer_name: str, installer_id: Optional[int]) -> dict:
+        group_key = (department, installer_name)
+        group = grouped_rows_map.get(group_key)
         if group is None:
             group = {
+                "department": department,
                 "installer": installer_name,
                 "installer_id": installer_id,
-                "activity_label": default_label,
+                "activity_label": department,
                 "total_seconds": 0,
-                "activity_types": set(),
                 "job_count": 0,
                 "rows": [],
             }
-            grouped_rows_map[installer_name] = group
+            grouped_rows_map[group_key] = group
         return group
 
     for row in install_rows_db:
@@ -3728,13 +3812,13 @@ async def get_owner_installation_template_dashboard_report(
         installed_sqft = round(_to_float(sqft_installed_raw), 2)
         incomplete_sqft = round(max(_to_float(job_sqft) - installed_sqft, 0.0), 2) if _to_float(job_sqft) > 0 else 0.0
         total_seconds = int(_to_float(work_seconds))
-        group = _get_group(installer_name, installer_id, "Installer")
+        group = _get_group("Installer", installer_name, installer_id)
         group["total_seconds"] += total_seconds
         group["job_count"] += 1
-        group["activity_types"].add("Installation")
 
         flat_rows.append(
             {
+            "department": "Installer",
                 "installer": installer_name,
                 "installer_id": installer_id,
                 "installer_hours": round(total_seconds / 3600, 2),
@@ -3797,13 +3881,13 @@ async def get_owner_installation_template_dashboard_report(
         total_seconds = int(_to_float(work_seconds))
         if total_seconds <= 0 and duration_minutes is not None:
             total_seconds = int(_to_float(duration_minutes) * 60)
-        group = _get_group(installer_name, technician_id, "Templater")
+        group = _get_group("Templater", installer_name, technician_id)
         group["total_seconds"] += total_seconds
         group["job_count"] += 1
-        group["activity_types"].add("Template")
 
         flat_rows.append(
             {
+                "department": "Templater",
                 "installer": installer_name,
                 "installer_id": technician_id,
                 "installer_hours": round(total_seconds / 3600, 2),
@@ -3828,10 +3912,12 @@ async def get_owner_installation_template_dashboard_report(
         group["rows"].append(flat_rows[-1])
 
     grouped_rows = []
-    for group in sorted(grouped_rows_map.values(), key=lambda item: item["installer"].lower()):
-        activity_types = group.pop("activity_types")
-        total_seconds = int(group.pop("total_seconds"))
-        group["activity_label"] = "Mixed" if len(activity_types) > 1 else next(iter(activity_types), group.get("activity_label"))
+    for group_data in sorted(
+        grouped_rows_map.values(),
+        key=lambda item: (_department_rank(item["department"]), item["installer"].lower()),
+    ):
+        total_seconds = int(group_data.get("total_seconds") or 0)
+        group = {k: v for k, v in group_data.items() if k != "total_seconds"}
         group["installer_hours"] = round(total_seconds / 3600, 2)
         group["installer_hours_display"] = _format_duration_hhmm(total_seconds)
         group["rows"] = sorted(group["rows"], key=lambda item: item.get("activity_date") or "", reverse=True)
@@ -3839,9 +3925,22 @@ async def get_owner_installation_template_dashboard_report(
 
     flat_rows.sort(key=lambda item: item.get("activity_date") or "", reverse=True)
 
-    total_seconds = sum(int(round(_to_float(group["installer_hours"]) * 3600)) for group in grouped_rows)
-    templates_sq_ft = round(
+    total_seconds_templated = sum(
+        int(group["total_seconds"])
+        for group in grouped_rows_map.values()
+        if group["department"] == "Templater"
+    )
+    total_seconds_installed = sum(
+        int(group["total_seconds"])
+        for group in grouped_rows_map.values()
+        if group["department"] == "Installer"
+    )
+    sqft_templated = round(
         sum(_to_float(row["sq_ft_installed"]) for row in flat_rows if row["activity_type"] == "Template" and row["activity_complete"]),
+        2,
+    )
+    sqft_not_templated = round(
+        sum(_to_float(row["sq_ft_incomplete"]) for row in flat_rows if row["department"] == "Templater"),
         2,
     )
     installs_sq_ft = round(
@@ -3897,11 +3996,10 @@ async def get_owner_installation_template_dashboard_report(
                 "fab_types": fab_type_options,
             },
             "summary": {
-                "total_hours": _format_duration_hhmm(total_seconds),
-                "total_hours_value": round(total_seconds / 3600, 2),
-                "templates_sq_ft": templates_sq_ft,
-                "installs_sq_ft": installs_sq_ft,
-                "incomplete_sq_ft": incomplete_sq_ft,
+                "total_hours_templated": _format_duration_hhmm(total_seconds_templated),
+                "total_hours_installed": _format_duration_hhmm(total_seconds_installed),
+                "sqft_templated": sqft_templated,
+                "sqft_not_templated": sqft_not_templated,
                 "row_count": len(flat_rows),
                 "group_count": len(grouped_rows),
             },
@@ -4912,12 +5010,14 @@ async def get_daily_install_completion_report(
     daily_totals_map: dict[str, dict] = defaultdict(lambda: {
         "total_sqft": 0.0,
         "total_revenue": 0.0,
+        "total_cost_of_stone": 0.0,
         "total_gp": 0.0,
         "count": 0,
     })
 
     grand_total_sqft = 0.0
     grand_total_revenue = 0.0
+    grand_total_cost_of_stone = 0.0
     grand_total_gp = 0.0
 
     for (
@@ -4948,11 +5048,13 @@ async def get_daily_install_completion_report(
 
         daily_totals_map[day_key]["total_sqft"] += sqft_value
         daily_totals_map[day_key]["total_revenue"] += revenue_value
+        daily_totals_map[day_key]["total_cost_of_stone"] += cost_value
         daily_totals_map[day_key]["total_gp"] += gp_value
         daily_totals_map[day_key]["count"] += 1
 
         grand_total_sqft += sqft_value
         grand_total_revenue += revenue_value
+        grand_total_cost_of_stone += cost_value
         grand_total_gp += gp_value
 
         installer_name = (
@@ -4976,6 +5078,7 @@ async def get_daily_install_completion_report(
                 "installer_name": installer_name,
                 "sqft": sqft_value,
                 "revenue": revenue_value,
+                "cost_of_stone": cost_value,
                 "gp": gp_value,
             }
         )
@@ -4988,6 +5091,7 @@ async def get_daily_install_completion_report(
                 "install_date": day_key,
                 "total_sqft": round(item["total_sqft"], 2),
                 "total_revenue": round(item["total_revenue"], 2),
+                "total_cost_of_stone": round(item["total_cost_of_stone"], 2),
                 "total_gp": round(item["total_gp"], 2),
                 "entry_count": int(item["count"]),
             }
@@ -5008,6 +5112,7 @@ async def get_daily_install_completion_report(
             "grand_totals": {
                 "total_sqft": round(grand_total_sqft, 2),
                 "total_revenue": round(grand_total_revenue, 2),
+                "total_cost_of_stone": round(grand_total_cost_of_stone, 2),
                 "total_gp": round(grand_total_gp, 2),
                 "entry_count": len(entries),
             },
