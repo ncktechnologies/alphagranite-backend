@@ -3291,7 +3291,7 @@ async def get_owner_weekly_trends_report(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Weekly trendline for owner review: new fabs, completed installs, revenue, and GP."""
+    """Weekly trendline for owner review with fab, install, and template metrics."""
     _ = current_user
     if from_date is not None or to_date is not None:
         effective_from = from_date or to_date
@@ -3323,11 +3323,13 @@ async def get_owner_weekly_trends_report(
         await db.execute(fab_query)
     ).all()
 
+    install_activity_date = func.coalesce(InstallCompletion.completion_date, InstallCompletion.install_date)
     install_filters = []
-    _apply_datetime_filters(install_filters, InstallCompletion.completion_date, start_dt, end_dt)
+    _apply_datetime_filters(install_filters, install_activity_date, start_dt, end_dt)
 
     install_query = select(
-        InstallCompletion.completion_date,
+        install_activity_date.label("activity_date"),
+        InstallCompletion.is_completed,
         InstallCompletion.total_sqft_installed,
     )
     if install_filters:
@@ -3337,7 +3339,36 @@ async def get_owner_weekly_trends_report(
         await db.execute(install_query)
     ).all()
 
+    template_activity_date = func.coalesce(Templating.actual_end_date, Templating.actual_start_date, Templating.created_at)
+    template_filters = []
+    _apply_datetime_filters(template_filters, template_activity_date, start_dt, end_dt)
+
+    template_query = select(
+        template_activity_date.label("activity_date"),
+        Templating.total_sqft,
+        Templating.is_completed,
+    )
+    if template_filters:
+        template_query = template_query.where(and_(*template_filters))
+
+    template_rows = (
+        await db.execute(template_query)
+    ).all()
+
     by_week: dict[str, dict] = {}
+
+    def _blank_week_row(week_key: str) -> dict:
+        return {
+            "week_start": week_key,
+            "fabs_created": 0,
+            "installs_completed": 0,
+            "installs_not_completed": 0,
+            "revenue": 0.0,
+            "gross_profit": 0.0,
+            "sqft_installed": 0.0,
+            "sqft_templated": 0.0,
+            "sqft_not_templated": 0.0,
+        }
 
     for week_start, fabs_created, revenue, gp in fab_week_rows:
         key = week_start.date().isoformat()
@@ -3345,32 +3376,62 @@ async def get_owner_weekly_trends_report(
             "week_start": key,
             "fabs_created": int(fabs_created or 0),
             "installs_completed": 0,
+            "installs_not_completed": 0,
             "revenue": round(_to_float(revenue), 2),
             "gross_profit": round(_to_float(gp), 2),
             "sqft_installed": 0.0,
+            "sqft_templated": 0.0,
+            "sqft_not_templated": 0.0,
         }
 
-    installs_by_week: dict[str, dict] = defaultdict(lambda: {"installs_completed": 0, "sqft_installed": 0.0})
-    for completed_at, sqft_installed in install_rows:
-        if completed_at is None:
+    installs_by_week: dict[str, dict] = defaultdict(
+        lambda: {
+            "installs_completed": 0,
+            "installs_not_completed": 0,
+            "sqft_installed": 0.0,
+        }
+    )
+    for activity_at, is_completed, sqft_installed in install_rows:
+        if activity_at is None:
             continue
-        week_start = completed_at.date() - timedelta(days=completed_at.weekday())
+        activity_day = activity_at.date() if hasattr(activity_at, "date") else activity_at
+        week_start = activity_day - timedelta(days=activity_day.weekday())
         key = week_start.isoformat()
-        installs_by_week[key]["installs_completed"] += 1
-        installs_by_week[key]["sqft_installed"] += _to_float(sqft_installed)
+        if bool(is_completed):
+            installs_by_week[key]["installs_completed"] += 1
+            installs_by_week[key]["sqft_installed"] += _to_float(sqft_installed)
+        else:
+            installs_by_week[key]["installs_not_completed"] += 1
+
+    templates_by_week: dict[str, dict] = defaultdict(
+        lambda: {
+            "sqft_templated": 0.0,
+            "sqft_not_templated": 0.0,
+        }
+    )
+    for activity_at, total_sqft, is_completed in template_rows:
+        if activity_at is None:
+            continue
+        activity_day = activity_at.date() if hasattr(activity_at, "date") else activity_at
+        week_start = activity_day - timedelta(days=activity_day.weekday())
+        key = week_start.isoformat()
+        if bool(is_completed):
+            templates_by_week[key]["sqft_templated"] += _to_float(total_sqft)
+        else:
+            templates_by_week[key]["sqft_not_templated"] += _to_float(total_sqft)
 
     for key, values in installs_by_week.items():
         if key not in by_week:
-            by_week[key] = {
-                "week_start": key,
-                "fabs_created": 0,
-                "installs_completed": 0,
-                "revenue": 0.0,
-                "gross_profit": 0.0,
-                "sqft_installed": 0.0,
-            }
+            by_week[key] = _blank_week_row(key)
         by_week[key]["installs_completed"] = values["installs_completed"]
+        by_week[key]["installs_not_completed"] = values["installs_not_completed"]
         by_week[key]["sqft_installed"] = round(values["sqft_installed"], 2)
+
+    for key, values in templates_by_week.items():
+        if key not in by_week:
+            by_week[key] = _blank_week_row(key)
+        by_week[key]["sqft_templated"] = round(values["sqft_templated"], 2)
+        by_week[key]["sqft_not_templated"] = round(values["sqft_not_templated"], 2)
 
     weekly_rows = [by_week[key] for key in sorted(by_week.keys())]
 
