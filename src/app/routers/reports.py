@@ -4912,12 +4912,14 @@ async def get_daily_install_completion_report(
     daily_totals_map: dict[str, dict] = defaultdict(lambda: {
         "total_sqft": 0.0,
         "total_revenue": 0.0,
+        "total_cost_of_stone": 0.0,
         "total_gp": 0.0,
         "count": 0,
     })
 
     grand_total_sqft = 0.0
     grand_total_revenue = 0.0
+    grand_total_cost_of_stone = 0.0
     grand_total_gp = 0.0
 
     for (
@@ -4948,11 +4950,13 @@ async def get_daily_install_completion_report(
 
         daily_totals_map[day_key]["total_sqft"] += sqft_value
         daily_totals_map[day_key]["total_revenue"] += revenue_value
+        daily_totals_map[day_key]["total_cost_of_stone"] += cost_value
         daily_totals_map[day_key]["total_gp"] += gp_value
         daily_totals_map[day_key]["count"] += 1
 
         grand_total_sqft += sqft_value
         grand_total_revenue += revenue_value
+        grand_total_cost_of_stone += cost_value
         grand_total_gp += gp_value
 
         installer_name = (
@@ -4976,6 +4980,7 @@ async def get_daily_install_completion_report(
                 "installer_name": installer_name,
                 "sqft": sqft_value,
                 "revenue": revenue_value,
+                "cost_of_stone": cost_value,
                 "gp": gp_value,
             }
         )
@@ -4988,6 +4993,7 @@ async def get_daily_install_completion_report(
                 "install_date": day_key,
                 "total_sqft": round(item["total_sqft"], 2),
                 "total_revenue": round(item["total_revenue"], 2),
+                "total_cost_of_stone": round(item["total_cost_of_stone"], 2),
                 "total_gp": round(item["total_gp"], 2),
                 "entry_count": int(item["count"]),
             }
@@ -5008,6 +5014,7 @@ async def get_daily_install_completion_report(
             "grand_totals": {
                 "total_sqft": round(grand_total_sqft, 2),
                 "total_revenue": round(grand_total_revenue, 2),
+                "total_cost_of_stone": round(grand_total_cost_of_stone, 2),
                 "total_gp": round(grand_total_gp, 2),
                 "entry_count": len(entries),
             },
