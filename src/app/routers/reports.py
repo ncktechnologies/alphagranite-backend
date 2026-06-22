@@ -3588,8 +3588,15 @@ async def get_owner_installation_template_dashboard_report(
             )
         return base_query
 
-    grouped_rows_map: dict[str, dict] = {}
+    grouped_rows_map: dict[tuple[str, str], dict] = {}
     flat_rows: list[dict] = []
+
+    def _department_rank(department: str) -> int:
+        if department == "Templater":
+            return 0
+        if department == "Installer":
+            return 1
+        return 2
 
     installer_timer_totals = (
         select(
@@ -3687,19 +3694,20 @@ async def get_owner_installation_template_dashboard_report(
 
     template_rows_db = (await db.execute(template_query)).all()
 
-    def _get_group(installer_name: str, installer_id: Optional[int], default_label: str) -> dict:
-        group = grouped_rows_map.get(installer_name)
+    def _get_group(department: str, installer_name: str, installer_id: Optional[int]) -> dict:
+        group_key = (department, installer_name)
+        group = grouped_rows_map.get(group_key)
         if group is None:
             group = {
+                "department": department,
                 "installer": installer_name,
                 "installer_id": installer_id,
-                "activity_label": default_label,
+                "activity_label": department,
                 "total_seconds": 0,
-                "activity_types": set(),
                 "job_count": 0,
                 "rows": [],
             }
-            grouped_rows_map[installer_name] = group
+            grouped_rows_map[group_key] = group
         return group
 
     for row in install_rows_db:
@@ -3728,13 +3736,13 @@ async def get_owner_installation_template_dashboard_report(
         installed_sqft = round(_to_float(sqft_installed_raw), 2)
         incomplete_sqft = round(max(_to_float(job_sqft) - installed_sqft, 0.0), 2) if _to_float(job_sqft) > 0 else 0.0
         total_seconds = int(_to_float(work_seconds))
-        group = _get_group(installer_name, installer_id, "Installer")
+        group = _get_group("Installer", installer_name, installer_id)
         group["total_seconds"] += total_seconds
         group["job_count"] += 1
-        group["activity_types"].add("Installation")
 
         flat_rows.append(
             {
+            "department": "Installer",
                 "installer": installer_name,
                 "installer_id": installer_id,
                 "installer_hours": round(total_seconds / 3600, 2),
@@ -3797,13 +3805,13 @@ async def get_owner_installation_template_dashboard_report(
         total_seconds = int(_to_float(work_seconds))
         if total_seconds <= 0 and duration_minutes is not None:
             total_seconds = int(_to_float(duration_minutes) * 60)
-        group = _get_group(installer_name, technician_id, "Templater")
+        group = _get_group("Templater", installer_name, technician_id)
         group["total_seconds"] += total_seconds
         group["job_count"] += 1
-        group["activity_types"].add("Template")
 
         flat_rows.append(
             {
+                "department": "Templater",
                 "installer": installer_name,
                 "installer_id": technician_id,
                 "installer_hours": round(total_seconds / 3600, 2),
@@ -3828,10 +3836,11 @@ async def get_owner_installation_template_dashboard_report(
         group["rows"].append(flat_rows[-1])
 
     grouped_rows = []
-    for group in sorted(grouped_rows_map.values(), key=lambda item: item["installer"].lower()):
-        activity_types = group.pop("activity_types")
+    for group in sorted(
+        grouped_rows_map.values(),
+        key=lambda item: (_department_rank(item["department"]), item["installer"].lower()),
+    ):
         total_seconds = int(group.pop("total_seconds"))
-        group["activity_label"] = "Mixed" if len(activity_types) > 1 else next(iter(activity_types), group.get("activity_label"))
         group["installer_hours"] = round(total_seconds / 3600, 2)
         group["installer_hours_display"] = _format_duration_hhmm(total_seconds)
         group["rows"] = sorted(group["rows"], key=lambda item: item.get("activity_date") or "", reverse=True)
@@ -3839,9 +3848,22 @@ async def get_owner_installation_template_dashboard_report(
 
     flat_rows.sort(key=lambda item: item.get("activity_date") or "", reverse=True)
 
-    total_seconds = sum(int(round(_to_float(group["installer_hours"]) * 3600)) for group in grouped_rows)
-    templates_sq_ft = round(
+    total_seconds_templated = sum(
+        int(group["total_seconds"])
+        for group in grouped_rows_map.values()
+        if group["department"] == "Templater"
+    )
+    total_seconds_installed = sum(
+        int(group["total_seconds"])
+        for group in grouped_rows_map.values()
+        if group["department"] == "Installer"
+    )
+    sqft_templated = round(
         sum(_to_float(row["sq_ft_installed"]) for row in flat_rows if row["activity_type"] == "Template" and row["activity_complete"]),
+        2,
+    )
+    sqft_not_templated = round(
+        sum(_to_float(row["sq_ft_incomplete"]) for row in flat_rows if row["department"] == "Templater"),
         2,
     )
     installs_sq_ft = round(
@@ -3897,11 +3919,10 @@ async def get_owner_installation_template_dashboard_report(
                 "fab_types": fab_type_options,
             },
             "summary": {
-                "total_hours": _format_duration_hhmm(total_seconds),
-                "total_hours_value": round(total_seconds / 3600, 2),
-                "templates_sq_ft": templates_sq_ft,
-                "installs_sq_ft": installs_sq_ft,
-                "incomplete_sq_ft": incomplete_sq_ft,
+                "total_hours_templated": _format_duration_hhmm(total_seconds_templated),
+                "total_hours_installed": _format_duration_hhmm(total_seconds_installed),
+                "sqft_templated": sqft_templated,
+                "sqft_not_templated": sqft_not_templated,
                 "row_count": len(flat_rows),
                 "group_count": len(grouped_rows),
             },
