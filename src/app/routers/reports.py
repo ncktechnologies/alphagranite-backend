@@ -4077,10 +4077,8 @@ async def get_owner_daily_completion_report(
     _ = current_user
 
     today = date.today()
-    current_month_start = date(today.year, today.month, 1)
-
     effective_to = to_date or from_date or today
-    effective_from = from_date or to_date or current_month_start
+    effective_from = from_date or to_date or (effective_to - timedelta(days=6))
     if effective_from > effective_to:
         effective_from, effective_to = effective_to, effective_from
 
