@@ -94,8 +94,8 @@ class ServiceLevelSettingCreate(BaseModel):
     is_applicable: bool = True
 
 
-@router.get("/redos", response_model=SuccessResponse[list[dict]])
-@router.get("/reports/redos", response_model=SuccessResponse[list[dict]])
+@router.get("/redos", response_model=SuccessResponse[dict])
+@router.get("/reports/redos", response_model=SuccessResponse[dict])
 async def get_ag_redo_report(
     from_date: Optional[date] = Query(None, description="Inclusive from date filter"),
     to_date: Optional[date] = Query(None, description="Inclusive to date filter"),
@@ -138,6 +138,7 @@ async def get_ag_redo_report(
             .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
             .join(Edge, Edge.id == Fab.edge_id, isouter=True)
             .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
+            .add_columns(Fab.cost_of_stone)
             .where(and_(*filters))
             .order_by(Fab.created_at.desc(), Fab.id.desc())
         )
@@ -190,6 +191,7 @@ async def get_ag_redo_report(
         notes,
         redo_department,
         redo_requested_by,
+        cost_of_stone_raw,
     ) in rows:
         cost_per_sqft = round(_to_float(cost_per_sqft_raw), 2) if cost_per_sqft_raw is not None else None
         sqft_value = round(_to_float(sqft), 2)
@@ -199,6 +201,7 @@ async def get_ag_redo_report(
             redo_sqft_raw_value = _to_float(sqft)
         redo_sqft_value = round(redo_sqft_raw_value, 2)
         total_cost = round(_to_float(cost_per_sqft_raw) * redo_sqft_raw_value * 2.1, 2)
+        cost_of_stone_value = round(_to_float(cost_of_stone_raw), 2)
 
         info_parts = [
             account_name,
@@ -228,6 +231,7 @@ async def get_ag_redo_report(
                 "cost_per_sqft": cost_per_sqft,
                 "redo_total_sqft": redo_sqft_value,
                 "total_cost": total_cost,
+                "cost_of_stone": cost_of_stone_value,
                 "redo_department": redo_department,
                 "redo_requested_by": redo_requested_by,
                 "department": department_name_map.get(int(redo_department), None) if redo_department is not None else None,
@@ -238,7 +242,19 @@ async def get_ag_redo_report(
             }
         )
 
-    return success_response(data, "AG REDO report data retrieved successfully")
+    summary = {
+        "total_sqft": round(sum(_to_float(row.get("redo_total_sqft")) for row in data), 2),
+        "total_cost": round(sum(_to_float(row.get("total_cost")) for row in data), 2),
+        "total_cost_of_stone": round(sum(_to_float(row.get("cost_of_stone")) for row in data), 2),
+    }
+
+    return success_response(
+        {
+            "summary": summary,
+            "rows": data,
+        },
+        "AG REDO report data retrieved successfully",
+    )
 
 
 @router.patch("/redos/{redo_id}", response_model=SuccessResponse[dict])
@@ -1783,6 +1799,11 @@ async def get_owner_redo_analysis_report(
                 Fab.cost_per_sqft,
                 Fab.total_sqft,
                 Fab.created_at,
+                Fab.input_area,
+                Fab.stone_type_id,
+                Fab.stone_color_id,
+                Fab.stone_thickness_id,
+                Fab.edge_id,
             )
             .where(
                 ag_redo_filter,
@@ -1811,6 +1832,10 @@ async def get_owner_redo_analysis_report(
     dept_ids = sorted({int(row.redo_department) for row in selected_period_ag_redo_rows if row.redo_department is not None})
     requested_by_ids = sorted({int(row.redo_requested_by) for row in selected_period_ag_redo_rows if row.redo_requested_by is not None})
     job_ids = sorted({int(row.job_id) for row in selected_period_ag_redo_rows if row.job_id is not None})
+    stone_type_ids = sorted({int(row.stone_type_id) for row in selected_period_ag_redo_rows if row.stone_type_id is not None})
+    stone_color_ids = sorted({int(row.stone_color_id) for row in selected_period_ag_redo_rows if row.stone_color_id is not None})
+    stone_thickness_ids = sorted({int(row.stone_thickness_id) for row in selected_period_ag_redo_rows if row.stone_thickness_id is not None})
+    edge_ids = sorted({int(row.edge_id) for row in selected_period_ag_redo_rows if row.edge_id is not None})
 
     department_name_map: dict[int, str] = {}
     if dept_ids:
@@ -1850,6 +1875,26 @@ async def get_owner_redo_analysis_report(
             }
             for row in job_rows
         }
+
+    stone_type_map: dict[int, str] = {}
+    if stone_type_ids:
+        stone_type_rows = (await db.execute(select(StoneType.id, StoneType.name).where(StoneType.id.in_(stone_type_ids)))).all()
+        stone_type_map = {row[0]: row[1] for row in stone_type_rows}
+
+    stone_color_map: dict[int, str] = {}
+    if stone_color_ids:
+        stone_color_rows = (await db.execute(select(StoneColor.id, StoneColor.name).where(StoneColor.id.in_(stone_color_ids)))).all()
+        stone_color_map = {row[0]: row[1] for row in stone_color_rows}
+
+    stone_thickness_map: dict[int, str] = {}
+    if stone_thickness_ids:
+        stone_thickness_rows = (await db.execute(select(StoneThickness.id, StoneThickness.thickness).where(StoneThickness.id.in_(stone_thickness_ids)))).all()
+        stone_thickness_map = {row[0]: row[1] for row in stone_thickness_rows}
+
+    edge_map: dict[int, str] = {}
+    if edge_ids:
+        edge_rows = (await db.execute(select(Edge.id, Edge.name).where(Edge.id.in_(edge_ids)))).all()
+        edge_map = {row[0]: row[1] for row in edge_rows}
 
     redo_by_department_map: dict[int, dict] = {}
     redo_by_employee_map: dict[int, dict] = {}
@@ -1931,6 +1976,11 @@ async def get_owner_redo_analysis_report(
                 "job_name": job_meta.get("job_name"),
                 "account_id": job_meta.get("account_id"),
                 "account_name": job_meta.get("account_name"),
+                "input_area": row.input_area,
+                "stone_type_name": stone_type_map.get(int(row.stone_type_id), None) if row.stone_type_id else None,
+                "stone_color_name": stone_color_map.get(int(row.stone_color_id), None) if row.stone_color_id else None,
+                "stone_thickness_value": stone_thickness_map.get(int(row.stone_thickness_id), None) if row.stone_thickness_id else None,
+                "edge_name": edge_map.get(int(row.edge_id), None) if row.edge_id else None,
                 "cost_per_sqft": round(_to_float(row.cost_per_sqft), 2),
                 "redo_total_sqft": round(redo_sqft_value, 2),
                 "redo_total_cost": round(redo_total_cost_value, 2),
@@ -2270,6 +2320,10 @@ async def get_owner_revision_report(
     end_date: Optional[date] = Query(None, description="Inclusive end date filter"),
     month: Optional[int] = Query(None, ge=1, le=12, description="Optional month filter when date range is not provided"),
     year: Optional[int] = Query(None, ge=2000, le=2100, description="Optional year filter when month filter is used"),
+    revision_type: Optional[str] = Query(None, description="Optional revision type filter (sales, client, cad, template, shop)"),
+    fab_type: Optional[str] = Query(None, description="Optional FAB type filter"),
+    job_name: Optional[str] = Query(None, description="Optional job name filter"),
+    account_name: Optional[str] = Query(None, description="Optional account name filter"),
     top_n: int = Query(10, ge=1, le=100, description="Top N rows for account/job client-revision ranking"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -2323,6 +2377,15 @@ async def get_owner_revision_report(
         ),
     )
 
+    normalized_revision_type = (revision_type or "").strip().lower()
+    valid_revision_types = {"sales", "client", "cad", "template", "shop"}
+    if normalized_revision_type and normalized_revision_type not in valid_revision_types:
+        return success_response(
+            None,
+            "Invalid revision_type. Use one of: sales, client, cad, template, shop",
+            status_code=400,
+        )
+
     revision_query = (
         select(
             Revision.id.label("revision_id"),
@@ -2337,11 +2400,21 @@ async def get_owner_revision_report(
             BusinessJob.name.label("job_name"),
             Account.id.label("account_id"),
             Account.name.label("account_name"),
+            Fab.fab_type,
+            Fab.input_area,
+            StoneType.name.label("stone_type_name"),
+            StoneColor.name.label("stone_color_name"),
+            StoneThickness.thickness.label("stone_thickness_value"),
+            Edge.name.label("edge_name"),
         )
         .select_from(Revision)
         .join(Fab, Fab.id == Revision.fab_id)
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
         .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+        .join(StoneType, StoneType.id == Fab.stone_type_id, isouter=True)
+        .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
+        .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
+        .join(Edge, Edge.id == Fab.edge_id, isouter=True)
         .where(active_fab_condition)
         .order_by(Revision.created_at.desc(), Revision.id.desc())
     )
@@ -2349,6 +2422,16 @@ async def get_owner_revision_report(
         revision_query = revision_query.where(Revision.created_at >= start_dt)
     if end_dt is not None:
         revision_query = revision_query.where(Revision.created_at <= end_dt)
+    if normalized_revision_type and normalized_revision_type != "shop":
+        revision_query = revision_query.where(func.lower(func.coalesce(Revision.revision_type, "")) == normalized_revision_type)
+    elif normalized_revision_type == "shop":
+        revision_query = revision_query.where(literal_column("1=0"))
+    if fab_type:
+        revision_query = revision_query.where(func.lower(Fab.fab_type) == fab_type.strip().lower())
+    if job_name:
+        revision_query = revision_query.where(BusinessJob.name.ilike(f"%{job_name.strip()}%"))
+    if account_name:
+        revision_query = revision_query.where(Account.name.ilike(f"%{account_name.strip()}%"))
     revision_rows = (await db.execute(revision_query)).all()
 
     shop_revision_query = (
@@ -2367,11 +2450,21 @@ async def get_owner_revision_report(
             BusinessJob.name.label("job_name"),
             Account.id.label("account_id"),
             Account.name.label("account_name"),
+            Fab.fab_type,
+            Fab.input_area,
+            StoneType.name.label("stone_type_name"),
+            StoneColor.name.label("stone_color_name"),
+            StoneThickness.thickness.label("stone_thickness_value"),
+            Edge.name.label("edge_name"),
         )
         .select_from(ShopRevision)
         .join(Fab, Fab.id == ShopRevision.fab_id)
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
         .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+        .join(StoneType, StoneType.id == Fab.stone_type_id, isouter=True)
+        .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
+        .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
+        .join(Edge, Edge.id == Fab.edge_id, isouter=True)
         .where(active_fab_condition)
         .order_by(ShopRevision.created_at.desc(), ShopRevision.id.desc())
     )
@@ -2379,6 +2472,14 @@ async def get_owner_revision_report(
         shop_revision_query = shop_revision_query.where(ShopRevision.created_at >= start_dt)
     if end_dt is not None:
         shop_revision_query = shop_revision_query.where(ShopRevision.created_at <= end_dt)
+    if normalized_revision_type and normalized_revision_type != "shop":
+        shop_revision_query = shop_revision_query.where(literal_column("1=0"))
+    if fab_type:
+        shop_revision_query = shop_revision_query.where(func.lower(Fab.fab_type) == fab_type.strip().lower())
+    if job_name:
+        shop_revision_query = shop_revision_query.where(BusinessJob.name.ilike(f"%{job_name.strip()}%"))
+    if account_name:
+        shop_revision_query = shop_revision_query.where(Account.name.ilike(f"%{account_name.strip()}%"))
     shop_revision_rows = (await db.execute(shop_revision_query)).all()
 
     user_ids: set[int] = set()
@@ -2435,6 +2536,12 @@ async def get_owner_revision_report(
                 "job_name": row.job_name,
                 "account_id": row.account_id,
                 "account_name": row.account_name,
+                "fab_type": row.fab_type,
+                "input_area": row.input_area,
+                "stone_type_name": row.stone_type_name,
+                "stone_color_name": row.stone_color_name,
+                "stone_thickness_value": row.stone_thickness_value,
+                "edge_name": row.edge_name,
             }
         )
 
@@ -2462,72 +2569,100 @@ async def get_owner_revision_report(
                 "job_name": row.job_name,
                 "account_id": row.account_id,
                 "account_name": row.account_name,
+                "fab_type": row.fab_type,
+                "input_area": row.input_area,
+                "stone_type_name": row.stone_type_name,
+                "stone_color_name": row.stone_color_name,
+                "stone_thickness_value": row.stone_thickness_value,
+                "edge_name": row.edge_name,
             }
         )
 
     client_type_filter = func.lower(func.coalesce(Revision.revision_type, "")) == "client"
 
-    top_accounts_query = (
-        select(
-            Account.id,
-            Account.name,
-            func.count(Revision.id).label("client_revision_count"),
+    top_accounts_with_client_revisions = []
+    if normalized_revision_type in {"", "client"}:
+        top_accounts_query = (
+            select(
+                Account.id,
+                Account.name,
+                func.count(Revision.id).label("client_revision_count"),
+            )
+            .select_from(Revision)
+            .join(Fab, Fab.id == Revision.fab_id)
+            .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+            .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+            .where(active_fab_condition, client_type_filter)
+            .group_by(Account.id, Account.name)
+            .order_by(func.count(Revision.id).desc(), Account.name.asc())
+            .limit(top_n)
         )
-        .select_from(Revision)
-        .join(Fab, Fab.id == Revision.fab_id)
-        .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
-        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
-        .where(active_fab_condition, client_type_filter)
-        .group_by(Account.id, Account.name)
-        .order_by(func.count(Revision.id).desc(), Account.name.asc())
-        .limit(top_n)
-    )
-    if start_dt is not None:
-        top_accounts_query = top_accounts_query.where(Revision.created_at >= start_dt)
-    if end_dt is not None:
-        top_accounts_query = top_accounts_query.where(Revision.created_at <= end_dt)
-    top_accounts_with_client_revisions = [
-        {
-            "account_id": row[0],
-            "account_name": row[1] or "Unassigned Account",
-            "client_revision_count": int(row[2] or 0),
-        }
-        for row in (await db.execute(top_accounts_query)).all()
-    ]
+        if start_dt is not None:
+            top_accounts_query = top_accounts_query.where(Revision.created_at >= start_dt)
+        if end_dt is not None:
+            top_accounts_query = top_accounts_query.where(Revision.created_at <= end_dt)
+        if fab_type:
+            top_accounts_query = top_accounts_query.where(func.lower(Fab.fab_type) == fab_type.strip().lower())
+        if job_name:
+            top_accounts_query = top_accounts_query.where(BusinessJob.name.ilike(f"%{job_name.strip()}%"))
+        if account_name:
+            top_accounts_query = top_accounts_query.where(Account.name.ilike(f"%{account_name.strip()}%"))
+        top_accounts_with_client_revisions = [
+            {
+                "account_id": row[0],
+                "account_name": row[1] or "Unassigned Account",
+                "client_revision_count": int(row[2] or 0),
+            }
+            for row in (await db.execute(top_accounts_query)).all()
+        ]
 
-    top_jobs_query = (
-        select(
-            BusinessJob.id,
-            BusinessJob.job_number,
-            BusinessJob.name,
-            func.count(Revision.id).label("client_revision_count"),
+    top_jobs_with_client_revisions = []
+    if normalized_revision_type in {"", "client"}:
+        top_jobs_query = (
+            select(
+                BusinessJob.id,
+                BusinessJob.job_number,
+                BusinessJob.name,
+                func.count(Revision.id).label("client_revision_count"),
+            )
+            .select_from(Revision)
+            .join(Fab, Fab.id == Revision.fab_id)
+            .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+            .where(active_fab_condition, client_type_filter)
+            .group_by(BusinessJob.id, BusinessJob.job_number, BusinessJob.name)
+            .order_by(func.count(Revision.id).desc(), BusinessJob.job_number.asc())
+            .limit(top_n)
         )
-        .select_from(Revision)
-        .join(Fab, Fab.id == Revision.fab_id)
-        .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
-        .where(active_fab_condition, client_type_filter)
-        .group_by(BusinessJob.id, BusinessJob.job_number, BusinessJob.name)
-        .order_by(func.count(Revision.id).desc(), BusinessJob.job_number.asc())
-        .limit(top_n)
-    )
-    if start_dt is not None:
-        top_jobs_query = top_jobs_query.where(Revision.created_at >= start_dt)
-    if end_dt is not None:
-        top_jobs_query = top_jobs_query.where(Revision.created_at <= end_dt)
-    top_jobs_with_client_revisions = [
-        {
-            "job_id": row[0],
-            "job_number": row[1],
-            "job_name": row[2],
-            "client_revision_count": int(row[3] or 0),
-        }
-        for row in (await db.execute(top_jobs_query)).all()
-    ]
+        if start_dt is not None:
+            top_jobs_query = top_jobs_query.where(Revision.created_at >= start_dt)
+        if end_dt is not None:
+            top_jobs_query = top_jobs_query.where(Revision.created_at <= end_dt)
+        if fab_type:
+            top_jobs_query = top_jobs_query.where(func.lower(Fab.fab_type) == fab_type.strip().lower())
+        if job_name:
+            top_jobs_query = top_jobs_query.where(BusinessJob.name.ilike(f"%{job_name.strip()}%"))
+        if account_name:
+            top_jobs_query = top_jobs_query.where(Account.name.ilike(f"%{account_name.strip()}%"))
+        top_jobs_with_client_revisions = [
+            {
+                "job_id": row[0],
+                "job_number": row[1],
+                "job_name": row[2],
+                "client_revision_count": int(row[3] or 0),
+            }
+            for row in (await db.execute(top_jobs_query)).all()
+        ]
 
     return success_response(
         {
             "title": "Revision Report",
             "period": period_payload,
+            "filters": {
+                "revision_type": revision_type,
+                "fab_type": fab_type,
+                "job_name": job_name,
+                "account_name": account_name,
+            },
             "summary": {
                 "sales_ct_revision_count": len(sales_ct_revisions),
                 "shop_revision_count": len(shop_revisions),
@@ -2559,6 +2694,7 @@ async def _get_shop_production_stage_counts(
     include_non_shop_stages: bool,
 ) -> dict:
     filters = [Fab.status_id == status_id]
+    edge_activity_names = {"edge", "edging"}
 
     if not include_non_shop_stages:
         filters.append(Fab.current_stage.in_(["shop", "cut_list"]))
@@ -2588,7 +2724,13 @@ async def _get_shop_production_stage_counts(
             .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
             .join(ShopCutPlan, ShopCutPlan.fab_id == Fab.id, isouter=True)
             .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id, isouter=True)
-            .where(and_(*filters))
+            .where(
+                and_(*filters),
+                or_(
+                    PlanningSection.id.is_(None),
+                    func.lower(func.trim(func.coalesce(PlanningSection.plan_name, ""))).notin_(edge_activity_names),
+                ),
+            )
             .order_by(Fab.id.asc(), ShopCutPlan.sequence.asc(), ShopCutPlan.id.asc())
         )
     ).all()
@@ -2622,7 +2764,7 @@ async def _get_shop_production_stage_counts(
                 "plans": [],
             }
 
-        if plan_name is not None:
+        if plan_name is not None and _normalize_shop_stage_name(plan_name) not in edge_activity_names:
             fabs_map[fab_id]["plans"].append(
                 {
                     "sequence": sequence,
@@ -2645,11 +2787,10 @@ async def _get_shop_production_stage_counts(
         "cut": 1,
         "wj": 2,
         "cnc": 3,
-        "edging": 4,
-        "miter": 5,
-        "hand work": 6,
-        "touch up": 7,
-        "resurfacing": 8,
+        "miter": 4,
+        "hand work": 5,
+        "touch up": 6,
+        "resurfacing": 7,
     }
 
     def _shop_stage_sort_key(stage_name: Optional[str]) -> tuple[int, str]:
@@ -4018,6 +4159,8 @@ async def get_owner_installation_template_dashboard_report(
             "summary": {
                 "total_hours_templated": _format_duration_hhmm(total_seconds_templated),
                 "total_hours_installed": _format_duration_hhmm(total_seconds_installed),
+                "sqft_installed": installs_sq_ft,
+                "sqft_not_installed": incomplete_sq_ft,
                 "sqft_templated": sqft_templated,
                 "sqft_not_templated": sqft_not_templated,
                 "row_count": len(flat_rows),
@@ -4043,10 +4186,8 @@ async def get_owner_daily_completion_report(
     _ = current_user
 
     today = date.today()
-    current_month_start = date(today.year, today.month, 1)
-
     effective_to = to_date or from_date or today
-    effective_from = from_date or to_date or current_month_start
+    effective_from = from_date or to_date or (effective_to - timedelta(days=6))
     if effective_from > effective_to:
         effective_from, effective_to = effective_to, effective_from
 
@@ -5621,6 +5762,8 @@ async def get_owner_service_level_report(
     end_date: Optional[date] = Query(None, description="Inclusive end date filter"),
     date_basis: str = Query("completed", pattern="^(created|scheduled|completed)$"),
     sla_days: int = Query(14, ge=1, le=365, description="SLA threshold in days"),
+    stage: Optional[str] = Query(None, description="Optional stage filter (e.g. Drafting, SCT, CNC)"),
+    status: Optional[str] = Query(None, description="Optional status filter (on_track/at_risk/over_sla or green/yellow/red)"),
     sort_by: str = Query("stage", pattern="^(fab_id|job_number|stage)$", description="Sort fab_status_rows by fab_id, job_number, or stage"),
     sort_order: str = Query("asc", pattern="^(asc|desc)$", description="Sort direction for fab_status_rows"),
     breach_limit: int = Query(500, ge=1, le=5000),
@@ -5629,6 +5772,17 @@ async def get_owner_service_level_report(
 ):
     """Service-level report with KPI widgets, stage heat map, and Fab-level bottleneck rows."""
     start_dt, end_dt = _range_bounds(start_date, end_date)
+
+    templating_exists = (
+        select(Templating.id)
+        .where(Templating.fab_id == Fab.id)
+        .limit(1)
+        .exists()
+    )
+    active_fab_filter = or_(
+        Fab.template_needed.is_(False),
+        and_(Fab.template_needed.is_(True), templating_exists),
+    )
 
     # ── Load SLA settings from DB ───────────────────────────────────────────
     # Build a two-level lookup:  sla_map[normalized_fab_type][stage_name] = {target, at_risk}
@@ -5711,6 +5865,12 @@ async def get_owner_service_level_report(
             return "Drafting"
         return "Other"
 
+    def _normalize_filter_text(value: Optional[str]) -> str:
+        return " ".join((value or "").replace("_", " ").replace("-", " ").strip().lower().split())
+
+    stage_filter_value = _normalize_filter_text(stage) if stage else None
+    status_filter_value = _normalize_filter_text(status) if status else None
+
     completion_query = (
         select(
             Fab.id.label("fab_id"),
@@ -5728,6 +5888,7 @@ async def get_owner_service_level_report(
         .select_from(InstallCompletion)
         .join(Fab, Fab.id == InstallCompletion.fab_id)
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .where(active_fab_filter)
     )
 
     if date_basis == "created":
@@ -5884,7 +6045,7 @@ async def get_owner_service_level_report(
         .join(schedule_subquery, schedule_subquery.c.fab_id == Fab.id, isouter=True)
         .join(completed_subquery, completed_subquery.c.fab_id == Fab.id, isouter=True)
         .join(revision_subquery, revision_subquery.c.fab_id == Fab.id, isouter=True)
-        .where(completed_subquery.c.completion_date.is_(None), Fab.status_id == 1)
+        .where(completed_subquery.c.completion_date.is_(None), Fab.status_id == 1, active_fab_filter)
     )
 
     if date_basis == "created":
@@ -6040,6 +6201,30 @@ async def get_owner_service_level_report(
         target_days = float(sla["target_days"])
         at_risk_days = float(sla["at_risk_days"])
         risk_color = _risk_color(float(days_in_stage), target_days, at_risk_days)
+        status_label = "On Track" if risk_color == "green" else "At Risk" if risk_color == "yellow" else "Over SLA"
+        effective_stage_name = stage_name if stage_name != "Other" else (current_stage or "Other")
+
+        if stage_filter_value:
+            if _normalize_filter_text(effective_stage_name) != stage_filter_value:
+                continue
+
+        if status_filter_value:
+            status_aliases = {
+                "on track": "on track",
+                "ontrack": "on track",
+                "at risk": "at risk",
+                "atrisk": "at risk",
+                "over sla": "over sla",
+                "oversla": "over sla",
+                "green": "green",
+                "yellow": "yellow",
+                "red": "red",
+            }
+            row_status_key = status_aliases.get(_normalize_filter_text(status_label), _normalize_filter_text(status_label))
+            row_risk_key = status_aliases.get(_normalize_filter_text(risk_color), _normalize_filter_text(risk_color))
+            filter_key = status_aliases.get(status_filter_value, status_filter_value)
+            if filter_key not in {row_status_key, row_risk_key}:
+                continue
 
         age_days = days_in_stage
         if age_days <= 7:
@@ -6083,7 +6268,6 @@ async def get_owner_service_level_report(
             assigned_user_id = drafter_id or sales_person_id
 
         priority_flag = str(job_priority or "").strip() or ("High" if risk_color == "red" else "Medium")
-        status_label = "On Track" if risk_color == "green" else "At Risk" if risk_color == "yellow" else "Over SLA"
 
         fab_status_rows.append(
             {
@@ -6098,7 +6282,7 @@ async def get_owner_service_level_report(
                 "stone_thickness_value": stone_thickness_value,
                 "edge_name": edge_name,
                 "fab_info": (f"{job_name or ''} | {round(_to_float(total_sqft), 2)} sqft | {int(_to_float(no_of_pieces))} pcs").strip(" |"),
-                "current_stage": stage_name if stage_name != "Other" else current_stage,
+                "current_stage": effective_stage_name,
                 "days_since_template": days_since_template,
                 "days_in_stage": days_in_stage,
                 "revision_type": revision_type,
@@ -6122,7 +6306,7 @@ async def get_owner_service_level_report(
                     "stone_color_name": stone_color_name,
                     "stone_thickness_value": stone_thickness_value,
                     "edge_name": edge_name,
-                    "current_stage": stage_name if stage_name != "Other" else current_stage,
+                    "current_stage": effective_stage_name,
                     "age_days": days_in_stage,
                     "sla_days": target_days,
                     "days_over_sla": round(days_in_stage - target_days, 2),
@@ -6197,6 +6381,10 @@ async def get_owner_service_level_report(
             "sort": {
                 "sort_by": sort_by_normalized,
                 "sort_order": sort_order_normalized,
+            },
+            "filters": {
+                "stage": stage,
+                "status": status,
             },
             "widgets": widgets,
             "summary": {
