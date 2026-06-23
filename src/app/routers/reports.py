@@ -1783,6 +1783,11 @@ async def get_owner_redo_analysis_report(
                 Fab.cost_per_sqft,
                 Fab.total_sqft,
                 Fab.created_at,
+                Fab.input_area,
+                Fab.stone_type_id,
+                Fab.stone_color_id,
+                Fab.stone_thickness_id,
+                Fab.edge_id,
             )
             .where(
                 ag_redo_filter,
@@ -1811,6 +1816,10 @@ async def get_owner_redo_analysis_report(
     dept_ids = sorted({int(row.redo_department) for row in selected_period_ag_redo_rows if row.redo_department is not None})
     requested_by_ids = sorted({int(row.redo_requested_by) for row in selected_period_ag_redo_rows if row.redo_requested_by is not None})
     job_ids = sorted({int(row.job_id) for row in selected_period_ag_redo_rows if row.job_id is not None})
+    stone_type_ids = sorted({int(row.stone_type_id) for row in selected_period_ag_redo_rows if row.stone_type_id is not None})
+    stone_color_ids = sorted({int(row.stone_color_id) for row in selected_period_ag_redo_rows if row.stone_color_id is not None})
+    stone_thickness_ids = sorted({int(row.stone_thickness_id) for row in selected_period_ag_redo_rows if row.stone_thickness_id is not None})
+    edge_ids = sorted({int(row.edge_id) for row in selected_period_ag_redo_rows if row.edge_id is not None})
 
     department_name_map: dict[int, str] = {}
     if dept_ids:
@@ -1850,6 +1859,26 @@ async def get_owner_redo_analysis_report(
             }
             for row in job_rows
         }
+
+    stone_type_map: dict[int, str] = {}
+    if stone_type_ids:
+        stone_type_rows = (await db.execute(select(StoneType.id, StoneType.name).where(StoneType.id.in_(stone_type_ids)))).all()
+        stone_type_map = {row[0]: row[1] for row in stone_type_rows}
+
+    stone_color_map: dict[int, str] = {}
+    if stone_color_ids:
+        stone_color_rows = (await db.execute(select(StoneColor.id, StoneColor.name).where(StoneColor.id.in_(stone_color_ids)))).all()
+        stone_color_map = {row[0]: row[1] for row in stone_color_rows}
+
+    stone_thickness_map: dict[int, str] = {}
+    if stone_thickness_ids:
+        stone_thickness_rows = (await db.execute(select(StoneThickness.id, StoneThickness.thickness).where(StoneThickness.id.in_(stone_thickness_ids)))).all()
+        stone_thickness_map = {row[0]: row[1] for row in stone_thickness_rows}
+
+    edge_map: dict[int, str] = {}
+    if edge_ids:
+        edge_rows = (await db.execute(select(Edge.id, Edge.name).where(Edge.id.in_(edge_ids)))).all()
+        edge_map = {row[0]: row[1] for row in edge_rows}
 
     redo_by_department_map: dict[int, dict] = {}
     redo_by_employee_map: dict[int, dict] = {}
@@ -1931,6 +1960,11 @@ async def get_owner_redo_analysis_report(
                 "job_name": job_meta.get("job_name"),
                 "account_id": job_meta.get("account_id"),
                 "account_name": job_meta.get("account_name"),
+                "input_area": row.input_area,
+                "stone_type_name": stone_type_map.get(int(row.stone_type_id), None) if row.stone_type_id else None,
+                "stone_color_name": stone_color_map.get(int(row.stone_color_id), None) if row.stone_color_id else None,
+                "stone_thickness_value": stone_thickness_map.get(int(row.stone_thickness_id), None) if row.stone_thickness_id else None,
+                "edge_name": edge_map.get(int(row.edge_id), None) if row.edge_id else None,
                 "cost_per_sqft": round(_to_float(row.cost_per_sqft), 2),
                 "redo_total_sqft": round(redo_sqft_value, 2),
                 "redo_total_cost": round(redo_total_cost_value, 2),
