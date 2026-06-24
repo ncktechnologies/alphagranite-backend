@@ -72,9 +72,13 @@ def _build_operator_file_view_url(
     if file_id is None:
         return None
 
+    normalized_base_url = (base_url or "").strip()
+    if normalized_base_url.startswith("http://"):
+        normalized_base_url = f"https://{normalized_base_url[len('http://') :]}"
+
     # Return the simple file viewer URL which doesn't require operator/job context
     # and doesn't require auth token for browser viewing
-    return f"{base_url}/api/v1/files/{file_id}/view"
+    return f"{normalized_base_url}/api/v1/files/{file_id}/view"
 
 
 def _serialize_operator_file(file: File, base_url: str, operator_id: int) -> dict:
