@@ -314,6 +314,7 @@ class Revision(SQLModel, table=True):
     scheduled_end_date: Optional[datetime] = Field(default=None)
     actual_start_date: Optional[datetime] = Field(default=None)
     actual_end_date: Optional[datetime] = Field(default=None)
+    revision_reason: Optional[str] = Field(default=None)
     revision_notes: Optional[str] = Field(default=None)
     department: Optional[str] = Field(default=None, max_length=255)
     person_name: Optional[str] = Field(default=None, max_length=255)

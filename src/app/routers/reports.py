@@ -5790,6 +5790,22 @@ async def get_owner_service_level_report(
         Fab.template_needed.is_(False),
         and_(Fab.template_needed.is_(True), templating_exists),
     )
+    non_resurface_filter = func.upper(func.trim(func.coalesce(Fab.fab_type, ""))) != "RESURFACE"
+    normalized_stage_value = func.replace(
+        func.replace(
+            func.replace(func.lower(func.coalesce(Fab.current_stage, "")), " ", ""),
+            "_",
+            "",
+        ),
+        "-",
+        "",
+    )
+    not_cutlist_stage_filter = ~normalized_stage_value.like("%cutlist%")
+    eligible_fab_filter = and_(
+        active_fab_filter,
+        non_resurface_filter,
+        not_cutlist_stage_filter,
+    )
 
     # ── Load SLA settings from DB ───────────────────────────────────────────
     # Build a two-level lookup:  sla_map[normalized_fab_type][stage_name] = {target, at_risk}
@@ -5895,7 +5911,7 @@ async def get_owner_service_level_report(
         .select_from(InstallCompletion)
         .join(Fab, Fab.id == InstallCompletion.fab_id)
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
-        .where(active_fab_filter)
+        .where(eligible_fab_filter)
     )
 
     if date_basis == "created":
@@ -6052,7 +6068,7 @@ async def get_owner_service_level_report(
         .join(schedule_subquery, schedule_subquery.c.fab_id == Fab.id, isouter=True)
         .join(completed_subquery, completed_subquery.c.fab_id == Fab.id, isouter=True)
         .join(revision_subquery, revision_subquery.c.fab_id == Fab.id, isouter=True)
-        .where(completed_subquery.c.completion_date.is_(None), Fab.status_id == 1, active_fab_filter)
+        .where(completed_subquery.c.completion_date.is_(None), Fab.status_id == 1, eligible_fab_filter)
     )
 
     if date_basis == "created":

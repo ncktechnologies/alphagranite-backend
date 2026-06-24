@@ -1003,6 +1003,7 @@ class ResurfaceSchedulingResponse(BaseModel):
 class RevisionCreate(BaseModel):
     fab_id: int = Field(..., gt=0)
     revision_type: str = Field(..., min_length=1)
+    revision_reason: Optional[str] = None
     requested_by: int = Field(..., gt=0)
     assigned_to: Optional[int] = None
     scheduled_start_date: Optional[datetime] = None
@@ -1012,6 +1013,7 @@ class RevisionCreate(BaseModel):
 
 class RevisionUpdate(BaseModel):
     revision_type: Optional[str] = None
+    revision_reason: Optional[str] = None
     assigned_to: Optional[int] = None
     scheduled_start_date: Optional[datetime] = None
     scheduled_end_date: Optional[datetime] = None
@@ -1026,6 +1028,7 @@ class RevisionResponse(BaseModel):
     id: int
     fab_id: int
     revision_type: str
+    revision_reason: Optional[str]
     requested_by: int
     assigned_to: Optional[int]
     scheduled_start_date: Optional[datetime]
