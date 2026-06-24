@@ -282,7 +282,7 @@ async def get_roles(
     limit: int = Query(100, ge=1, le=500, description="Maximum number of records to return"),
     search: Optional[str] = Query(None, description="Search term for role name or description"),
     status_id: Optional[int] = Query(None, description="Filter by status ID (1=Active, 2=Inactive)"),
-    sort_by: Optional[str] = Query("id", description="Field to sort by (id, name, created_at, updated_at, status)"),
+    sort_by: Optional[str] = Query("name", description="Field to sort by (id, name, created_at, updated_at, status)"),
     sort_order: Optional[str] = Query("asc", description="Sort order (asc, desc)"),
     with_stats: bool = Query(False, description="Include member statistics and top members in the response"),
     db: AsyncSession = Depends(get_db)

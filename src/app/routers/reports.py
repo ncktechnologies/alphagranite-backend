@@ -2391,6 +2391,7 @@ async def get_owner_revision_report(
             Revision.id.label("revision_id"),
             Revision.fab_id,
             Revision.revision_type,
+            Revision.revision_reason,
             Revision.revision_notes,
             Revision.requested_by,
             Revision.assigned_to,
@@ -2525,6 +2526,7 @@ async def get_owner_revision_report(
                 "fab_id": row.fab_id,
                 "revision_type": normalized_type or None,
                 "revision_type_label": mapped_type,
+                "revision_reason": row.revision_reason,
                 "revision_notes": row.revision_notes,
                 "requested_by": row.requested_by,
                 "requested_by_name": user_name_map.get(row.requested_by, f"User {row.requested_by}" if row.requested_by else None),
@@ -3860,6 +3862,7 @@ async def get_owner_installation_template_dashboard_report(
             InstallCompletion.installer_id,
             InstallerUser.first_name.label("installer_first_name"),
             InstallerUser.last_name.label("installer_last_name"),
+            BusinessJob.id.label("job_id"),
             BusinessJob.job_number,
             BusinessJob.name.label("job_name"),
             Account.name.label("account_name"),
@@ -3897,6 +3900,7 @@ async def get_owner_installation_template_dashboard_report(
             Templating.technician_id,
             InstallerUser.first_name.label("installer_first_name"),
             InstallerUser.last_name.label("installer_last_name"),
+            BusinessJob.id.label("job_id"),
             BusinessJob.job_number,
             BusinessJob.name.label("job_name"),
             Account.name.label("account_name"),
@@ -3952,6 +3956,7 @@ async def get_owner_installation_template_dashboard_report(
             installer_id,
             installer_first_name,
             installer_last_name,
+            job_id,
             job_number,
             job_name,
             account_name,
@@ -3985,6 +3990,7 @@ async def get_owner_installation_template_dashboard_report(
                 "installer_hours": round(total_seconds / 3600, 2),
                 "activity_type": "Installation",
                 "activity_date": completed_at.isoformat() if completed_at else None,
+                "job_id": job_id,
                 "fab_id": fab_row_id,
                 "fab_type": row_fab_type,
                 "job_number": job_number,
@@ -4008,6 +4014,7 @@ async def get_owner_installation_template_dashboard_report(
             technician_id,
             installer_first_name,
             installer_last_name,
+            job_id,
             job_number,
             job_name,
             account_name,
@@ -4054,6 +4061,7 @@ async def get_owner_installation_template_dashboard_report(
                 "installer_hours": round(total_seconds / 3600, 2),
                 "activity_type": "Template",
                 "activity_date": activity_date_value.isoformat() if activity_date_value else None,
+                "job_id": job_id,
                 "fab_id": fab_row_id,
                 "fab_type": row_fab_type,
                 "job_number": job_number,
@@ -4137,6 +4145,7 @@ async def get_owner_installation_template_dashboard_report(
             "columns": [
                 "installer",
                 "installer_hours",
+                "job_id",
                 "job_name",
                 "account_name",
                 "activity_complete",
@@ -5783,6 +5792,22 @@ async def get_owner_service_level_report(
         Fab.template_needed.is_(False),
         and_(Fab.template_needed.is_(True), templating_exists),
     )
+    non_resurface_filter = func.upper(func.trim(func.coalesce(Fab.fab_type, ""))) != "RESURFACE"
+    normalized_stage_value = func.replace(
+        func.replace(
+            func.replace(func.lower(func.coalesce(Fab.current_stage, "")), " ", ""),
+            "_",
+            "",
+        ),
+        "-",
+        "",
+    )
+    not_cutlist_stage_filter = ~normalized_stage_value.like("%cutlist%")
+    eligible_fab_filter = and_(
+        active_fab_filter,
+        non_resurface_filter,
+        not_cutlist_stage_filter,
+    )
 
     # ── Load SLA settings from DB ───────────────────────────────────────────
     # Build a two-level lookup:  sla_map[normalized_fab_type][stage_name] = {target, at_risk}
@@ -5888,7 +5913,7 @@ async def get_owner_service_level_report(
         .select_from(InstallCompletion)
         .join(Fab, Fab.id == InstallCompletion.fab_id)
         .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
-        .where(active_fab_filter)
+        .where(eligible_fab_filter)
     )
 
     if date_basis == "created":
@@ -6045,7 +6070,7 @@ async def get_owner_service_level_report(
         .join(schedule_subquery, schedule_subquery.c.fab_id == Fab.id, isouter=True)
         .join(completed_subquery, completed_subquery.c.fab_id == Fab.id, isouter=True)
         .join(revision_subquery, revision_subquery.c.fab_id == Fab.id, isouter=True)
-        .where(completed_subquery.c.completion_date.is_(None), Fab.status_id == 1, active_fab_filter)
+        .where(completed_subquery.c.completion_date.is_(None), Fab.status_id == 1, eligible_fab_filter)
     )
 
     if date_basis == "created":
