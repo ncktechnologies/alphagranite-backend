@@ -5405,7 +5405,7 @@ async def get_fabs_cost_of_stone_queue(
             ),
             or_(
                 Fab.fab_type.is_(None),
-                func.upper(sa.func.trim(Fab.fab_type)) != "RESURFACE",
+                func.upper(sa.func.trim(Fab.fab_type)).notin_(["RESURFACE", "PUNCHOUT-AG", "PUNCHOUT-BILLABLE"]),
             ),
         )
     )
