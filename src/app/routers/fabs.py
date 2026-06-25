@@ -3003,7 +3003,7 @@ async def get_all_stages(
         ),
         or_(
             Fab.fab_type.is_(None),
-            func.upper(sa.func.trim(Fab.fab_type)) != "RESURFACE",
+            func.upper(sa.func.trim(Fab.fab_type)).notin_(["RESURFACE", "PUNCHOUT-AG", "PUNCHOUT-BILLABLE"]),
         ),
     ]
     cost_of_stone_count_result = await db.execute(
