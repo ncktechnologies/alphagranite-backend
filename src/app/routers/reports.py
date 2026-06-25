@@ -80,6 +80,18 @@ class DailyInstallCompletionPatchRequest(BaseModel):
     installer_name: Optional[str] = None
 
 
+class InstallationTemplateDashboardPatchRequest(BaseModel):
+    type: str = Field(..., description="'templater' or 'installer'")
+    fab_id: int
+    job_id: Optional[int] = None
+    installer_id: Optional[int] = None
+    activity_complete: Optional[bool] = Field(None, alias="Activity Complete")
+    sqft_templated: Optional[float] = Field(None, alias="sqft templated")
+    sqft_not_templated: Optional[float] = Field(None, alias="sqft not templated")
+    reason: Optional[str] = None
+    duration: Optional[int] = None
+
+
 class ServiceLevelSettingUpdate(BaseModel):
     target_days: Optional[float] = Field(default=None, ge=0, description="Days at or below = green")
     at_risk_days: Optional[float] = Field(default=None, ge=0, description="Yellow window: days beyond target before red")
@@ -3787,6 +3799,66 @@ async def get_owner_installation_template_report(
         },
         "Owner installation and template report generated",
     )
+
+
+@router.patch("/reports/owner/installation-template-dashboard", response_model=SuccessResponse[dict])
+async def update_owner_installation_template_dashboard(
+    request: InstallationTemplateDashboardPatchRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update fields for a specific templater or installer row in the dashboard."""
+    _ = current_user
+
+    if request.type.lower() == "templater":
+        # Update Templating
+        templating_record = (await db.execute(select(Templating).where(Templating.fab_id == request.fab_id))).scalars().first()
+        if templating_record:
+            if request.activity_complete is not None:
+                templating_record.is_completed = request.activity_complete
+            if request.reason is not None:
+                templating_record.notes = [request.reason]
+            if request.duration is not None:
+                templating_record.duration = request.duration
+            templating_record.updated_at = datetime.now()
+            templating_record.updated_by = current_user.id
+            db.add(templating_record)
+
+        # Update TemplaterJobTimerSession
+        if request.sqft_templated is not None or request.sqft_not_templated is not None:
+            if request.job_id is not None:
+                query = select(TemplaterJobTimerSession).where(
+                    TemplaterJobTimerSession.job_id == request.job_id
+                )
+                if request.installer_id:
+                    query = query.where(TemplaterJobTimerSession.templater_id == request.installer_id)
+                query = query.order_by(TemplaterJobTimerSession.id.desc())
+                timer_session = (await db.execute(query)).scalars().first()
+                if timer_session:
+                    if request.sqft_templated is not None:
+                        timer_session.sqft_templated = request.sqft_templated
+                    if request.sqft_not_templated is not None:
+                        timer_session.sqft_not_templated = request.sqft_not_templated
+                    timer_session.updated_at = datetime.now()
+                    timer_session.updated_by = current_user.id
+                    db.add(timer_session)
+
+    elif request.type.lower() == "installer":
+        # Update InstallCompletion
+        install_record = (await db.execute(select(InstallCompletion).where(InstallCompletion.fab_id == request.fab_id))).scalars().first()
+        if install_record:
+            if request.activity_complete is not None:
+                install_record.is_completed = request.activity_complete
+            if request.reason is not None:
+                install_record.completion_notes = request.reason
+            install_record.updated_at = datetime.now()
+            install_record.updated_by = current_user.id
+            db.add(install_record)
+    else:
+        return error_response(status.HTTP_400_BAD_REQUEST, "Invalid type. Must be 'templater' or 'installer'")
+
+    await db.commit()
+    return success_response({}, "Dashboard record updated successfully")
 
 
 @router.get("/reports/owner/installation-template-dashboard", response_model=SuccessResponse[dict])
