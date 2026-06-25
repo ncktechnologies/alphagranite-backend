@@ -9,7 +9,7 @@ from collections import defaultdict
 from datetime import date, datetime, time, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, case, cast, func, literal_column, or_, select
@@ -3810,7 +3810,16 @@ async def update_owner_installation_template_dashboard(
     """Update fields for a specific templater or installer row in the dashboard."""
     _ = current_user
 
-    if request.type.lower() == "templater":
+    # Early validation of type parameter
+    valid_types = {"templater", "installer"}
+    request_type = request.type.lower().strip()
+    if request_type not in valid_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid type. Must be 'templater' or 'installer'",
+        )
+
+    if request_type == "templater":
         # Update Templating
         templating_record = (await db.execute(select(Templating).where(Templating.fab_id == request.fab_id))).scalars().first()
         if templating_record:
@@ -3843,7 +3852,7 @@ async def update_owner_installation_template_dashboard(
                     timer_session.updated_by = current_user.id
                     db.add(timer_session)
 
-    elif request.type.lower() == "installer":
+    else:  # request_type == "installer"
         # Update InstallCompletion
         install_record = (await db.execute(select(InstallCompletion).where(InstallCompletion.fab_id == request.fab_id))).scalars().first()
         if install_record:
@@ -3854,11 +3863,36 @@ async def update_owner_installation_template_dashboard(
             install_record.updated_at = datetime.now()
             install_record.updated_by = current_user.id
             db.add(install_record)
-    else:
-        return error_response(status.HTTP_400_BAD_REQUEST, "Invalid type. Must be 'templater' or 'installer'")
 
     await db.commit()
-    return success_response({}, "Dashboard record updated successfully")
+
+    # Fetch and return the updated record(s)
+    updated_data = {}
+    if request_type == "templater":
+        templating_record = (await db.execute(select(Templating).where(Templating.fab_id == request.fab_id))).scalars().first()
+        if templating_record:
+            updated_data = {
+                "fab_id": templating_record.fab_id,
+                "is_completed": templating_record.is_completed,
+                "notes": templating_record.notes,
+                "duration": templating_record.duration,
+                "updated_at": templating_record.updated_at.isoformat() if templating_record.updated_at else None,
+                "updated_by": templating_record.updated_by,
+            }
+    else:  # request_type == "installer"
+        install_record = (await db.execute(select(InstallCompletion).where(InstallCompletion.fab_id == request.fab_id))).scalars().first()
+        if install_record:
+            updated_data = {
+                "fab_id": install_record.fab_id,
+                "is_completed": install_record.is_completed,
+                "completion_notes": install_record.completion_notes,
+                "completion_date": install_record.completion_date.isoformat() if install_record.completion_date else None,
+                "total_sqft_installed": install_record.total_sqft_installed,
+                "updated_at": install_record.updated_at.isoformat() if install_record.updated_at else None,
+                "updated_by": install_record.updated_by,
+            }
+
+    return success_response(updated_data, "Dashboard record updated successfully")
 
 
 @router.get("/reports/owner/installation-template-dashboard", response_model=SuccessResponse[dict])
