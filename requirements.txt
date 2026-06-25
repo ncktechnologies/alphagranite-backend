@@ -18,6 +18,7 @@ email-validator
 pydantic-settings
 dnspython
 openpyxl
+reportlab
 
 # test
 httpx>=0.25.0

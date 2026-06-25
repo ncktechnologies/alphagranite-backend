@@ -4254,6 +4254,210 @@ async def get_owner_installation_template_dashboard_report(
     )
 
 
+@router.get("/reports/owner/installation-template-dashboard/pdf")
+async def get_owner_installation_template_dashboard_pdf(
+    from_date: Optional[date] = Query(None, description="Inclusive from date filter"),
+    to_date: Optional[date] = Query(None, description="Inclusive to date filter"),
+    search: Optional[str] = Query(None, description="Search by job name, job number, or FAB ID"),
+    fab_type: Optional[str] = Query(None, description="Optional FAB type filter"),
+    sales_person_id: Optional[int] = Query(None, gt=0, description="Optional sales person filter"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Download a PDF version of the installation and template dashboard report."""
+    import json as _json
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import letter, landscape
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable
+    from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+
+    # Reuse existing data-fetching logic
+    json_response = await get_owner_installation_template_dashboard_report(
+        from_date=from_date,
+        to_date=to_date,
+        search=search,
+        fab_type=fab_type,
+        sales_person_id=sales_person_id,
+        db=db,
+        current_user=current_user,
+    )
+    payload = _json.loads(json_response.body)
+    data = payload.get("data", {})
+
+    summary = data.get("summary", {})
+    groups = data.get("groups", [])
+    period = data.get("period", {})
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=landscape(letter),
+        leftMargin=0.5 * inch,
+        rightMargin=0.5 * inch,
+        topMargin=0.5 * inch,
+        bottomMargin=0.5 * inch,
+    )
+
+    styles = getSampleStyleSheet()
+    brand_blue = colors.HexColor("#1E3A5F")
+    brand_light = colors.HexColor("#E8EDF3")
+    green_ok = colors.HexColor("#2E7D32")
+    red_no = colors.HexColor("#C62828")
+    grey_mid = colors.HexColor("#6B7280")
+
+    title_style = ParagraphStyle("ReportTitle", parent=styles["Heading1"], fontSize=16, textColor=brand_blue, spaceAfter=4)
+    subtitle_style = ParagraphStyle("ReportSubtitle", parent=styles["Normal"], fontSize=9, textColor=grey_mid, spaceAfter=2)
+    group_header_style = ParagraphStyle("GroupHeader", parent=styles["Normal"], fontSize=10, textColor=brand_blue, fontName="Helvetica-Bold", spaceBefore=8, spaceAfter=3)
+    cell_style = ParagraphStyle("Cell", parent=styles["Normal"], fontSize=7, leading=9)
+    small_style = ParagraphStyle("Small", parent=styles["Normal"], fontSize=7, textColor=grey_mid)
+
+    story = []
+
+    # ── Title & period ──
+    period_from = period.get("from_date") or "All time"
+    period_to = period.get("to_date") or "All time"
+    period_label = f"{period_from} – {period_to}" if period.get("from_date") or period.get("to_date") else "All time"
+
+    story.append(Paragraph("Installation & Template Dashboard Report", title_style))
+    story.append(Paragraph(f"Period: {period_label}  |  Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", subtitle_style))
+
+    active_filters = []
+    if search:
+        active_filters.append(f"Search: {search}")
+    if fab_type:
+        active_filters.append(f"FAB Type: {fab_type}")
+    if sales_person_id:
+        active_filters.append(f"Sales Person ID: {sales_person_id}")
+    if active_filters:
+        story.append(Paragraph("Filters: " + "  |  ".join(active_filters), subtitle_style))
+
+    story.append(Spacer(1, 6))
+
+    # ── Summary bar ──
+    summary_data = [
+        ["Total Hours Templated", "Total Hours Installed", "Sqft Templated", "Sqft Not Templated", "Sqft Installed", "Sqft Not Installed", "Jobs"],
+        [
+            summary.get("total_hours_templated", "–"),
+            summary.get("total_hours_installed", "–"),
+            str(summary.get("sqft_templated", 0)),
+            str(summary.get("sqft_not_templated", 0)),
+            str(summary.get("sqft_installed", 0)),
+            str(summary.get("sqft_not_installed", 0)),
+            str(summary.get("row_count", 0)),
+        ],
+    ]
+    col_w = doc.width / len(summary_data[0])
+    summary_table = Table(summary_data, colWidths=[col_w] * len(summary_data[0]))
+    summary_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), brand_blue),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, 1), [brand_light]),
+        ("FONTNAME", (0, 1), (-1, 1), "Helvetica-Bold"),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.white),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(summary_table)
+    story.append(Spacer(1, 10))
+
+    # ── Per-group tables ──
+    row_headers = ["#", "Date", "Job #", "Job Name", "Account", "FAB Type", "Sqft ✓", "Sqft ✗", "Duration", "Complete", "Notes"]
+    col_widths = [
+        0.25 * inch,  # #
+        0.65 * inch,  # Date
+        0.65 * inch,  # Job #
+        1.4 * inch,   # Job Name
+        1.0 * inch,   # Account
+        0.7 * inch,   # FAB Type
+        0.55 * inch,  # Sqft ✓
+        0.55 * inch,  # Sqft ✗
+        0.55 * inch,  # Duration
+        0.55 * inch,  # Complete
+        1.7 * inch,   # Notes
+    ]
+
+    for group in groups:
+        department = group.get("department", "")
+        installer = group.get("installer", "Unknown")
+        hours_display = group.get("installer_hours_display", "0:00")
+        job_count = group.get("job_count", 0)
+        rows = group.get("rows", [])
+
+        dept_color = brand_blue if department == "Installer" else colors.HexColor("#4A6741")
+        story.append(Paragraph(
+            f"{department} — {installer}   |   Total Hours: {hours_display}   |   Jobs: {job_count}",
+            ParagraphStyle("GH", parent=group_header_style, textColor=dept_color),
+        ))
+
+        table_data = [row_headers]
+        for idx, r in enumerate(rows, start=1):
+            activity_date = (r.get("activity_date") or "")[:10]
+            complete = "Yes" if r.get("activity_complete") else "No"
+            notes = r.get("reason_if_not_complete") or ""
+            sqft_ok = r.get("sqft_templated" if department == "Templater" else "sq_ft_installed", 0)
+            sqft_no = r.get("sqft_not_templated" if department == "Templater" else "sq_ft_incomplete", 0)
+            table_data.append([
+                str(idx),
+                activity_date,
+                r.get("job_number") or "–",
+                Paragraph(r.get("job_name") or "–", cell_style),
+                Paragraph(r.get("account_name") or "–", cell_style),
+                r.get("fab_type") or "–",
+                str(sqft_ok),
+                str(sqft_no),
+                r.get("duration") or "–",
+                complete,
+                Paragraph(notes, cell_style),
+            ])
+
+        tbl = Table(table_data, colWidths=col_widths, repeatRows=1)
+        row_fills = []
+        for i in range(1, len(table_data)):
+            bg = colors.white if i % 2 == 0 else brand_light
+            row_fills.append(("BACKGROUND", (0, i), (-1, i), bg))
+
+        complete_col_idx = row_headers.index("Complete")
+        complete_style_cmds = []
+        for i, r in enumerate(rows, start=1):
+            txt_color = green_ok if r.get("activity_complete") else red_no
+            complete_style_cmds.append(("TEXTCOLOR", (complete_col_idx, i), (complete_col_idx, i), txt_color))
+
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), dept_color),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("ALIGN", (3, 1), (4, -1), "LEFT"),
+            ("ALIGN", (complete_col_idx, 1), (complete_col_idx, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#D1D5DB")),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            *row_fills,
+            *complete_style_cmds,
+        ]))
+        story.append(tbl)
+        story.append(Spacer(1, 6))
+
+    doc.build(story)
+    buf.seek(0)
+
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"installation_template_dashboard_{stamp}.pdf"
+    return StreamingResponse(
+        buf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
 @router.get("/reports/owner/daily-completion", response_model=SuccessResponse[dict])
 @router.get("/reports/owner/daily-shop-completion", response_model=SuccessResponse[dict])
 async def get_owner_daily_completion_report(
