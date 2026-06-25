@@ -287,6 +287,7 @@ async def patch_redo_record(
             patch.total_cost,
             patch.department,
             patch.person_name,
+            patch.reason,
         ]
     ):
         raise error_response("At least one field is required", 400)
@@ -327,6 +328,12 @@ async def patch_redo_record(
             if user is None:
                 raise error_response("Person not found", 400)
             fab.redo_requested_by = int(user.id)
+    if patch.reason is not None:
+        normalized_reason = patch.reason.strip()
+        if normalized_reason:
+            fab.notes = [normalized_reason]
+        else:
+            fab.notes = None
 
     cost_record: Optional[CostOfStone] = None
     if patch.cost_per_sqft is not None or patch.total_cost is not None:
@@ -367,6 +374,7 @@ async def patch_redo_record(
 
         cost_record.updated_at = now
         cost_record.updated_by = current_user.id
+        db.add(cost_record)
         if fab.cost_of_stone_id is None:
             fab.cost_of_stone_id = cost_record.id
 
