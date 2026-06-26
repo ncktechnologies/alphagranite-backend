@@ -9,7 +9,7 @@ from collections import defaultdict
 from datetime import date, datetime, time, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, case, cast, func, literal_column, or_, select
@@ -4326,9 +4326,8 @@ async def get_owner_installation_template_dashboard_report(
     )
 
 
-@router.get("/reports/owner/installation-template-dashboard/pdf", response_model=SuccessResponse[dict])
+@router.get("/reports/owner/installation-template-dashboard/pdf")
 async def get_owner_installation_template_dashboard_pdf(
-    request: Request,
     from_date: Optional[date] = Query(None, description="Inclusive from date filter"),
     to_date: Optional[date] = Query(None, description="Inclusive to date filter"),
     search: Optional[str] = Query(None, description="Search by job name, job number, or FAB ID"),
@@ -4524,24 +4523,10 @@ async def get_owner_installation_template_dashboard_pdf(
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"installation_template_dashboard_{stamp}.pdf"
-
-    import os
-    uploads_dir = os.path.join("static", "uploads")
-    os.makedirs(uploads_dir, exist_ok=True)
-    file_path = os.path.join(uploads_dir, filename)
-    with open(file_path, "wb") as f:
-        f.write(buf.read())
-
-    base_url = str(request.base_url).rstrip("/")
-    full_url = f"{base_url}/static/uploads/{filename}"
-
-    return success_response(
-        {
-            "filename": filename,
-            "url": full_url,
-            "generated_at": datetime.now().isoformat(),
-        },
-        "PDF report generated successfully",
+    return StreamingResponse(
+        buf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 
 
