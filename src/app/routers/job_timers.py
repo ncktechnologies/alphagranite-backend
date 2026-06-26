@@ -508,6 +508,20 @@ async def get_installer_job_timer_state(
     if latest and latest.status == "running" and latest.current_run_start_at:
         run_time = (datetime.now() - latest.current_run_start_at).total_seconds()
         total_seconds += int(run_time)
+
+    latest_note = None
+    session_payload = None
+    if latest:
+        latest_event_result = await db.execute(
+            select(InstallerJobTimerEvent)
+            .where(InstallerJobTimerEvent.session_id == latest.id)
+            .order_by(InstallerJobTimerEvent.event_at.desc(), InstallerJobTimerEvent.id.desc())
+            .limit(1)
+        )
+        latest_event = latest_event_result.scalar_one_or_none()
+        latest_note = latest_event.note if latest_event else None
+        session_payload = _serialize_installer_job_timer_session(latest)
+        session_payload["note"] = latest_note
     
     total_hours = total_seconds / 3600.0
     
@@ -516,7 +530,8 @@ async def get_installer_job_timer_state(
             "job_id": job_id,
             "installer_id": installer_id,
             "fab_id": fab_id,
-            "session": _serialize_installer_job_timer_session(latest) if latest else None,
+            "session": session_payload,
+            "note": latest_note,
             "total_actual_seconds": int(total_seconds),
             "total_actual_hours": round(total_hours, 2),
         },
@@ -553,14 +568,27 @@ async def get_installer_job_timer_history(
         .order_by(InstallerJobTimerEvent.event_at)
     )
     events = events_result.scalars().all()
+
+    latest_note_by_session_id = {}
+    for event in events:
+        latest_note_by_session_id[event.session_id] = event.note
+
+    latest_note = events[-1].note if events else None
     
     return success_response(
         {
             "job_id": job_id,
             "installer_id": installer_id,
             "fab_id": fab_id,
-            "sessions": [_serialize_installer_job_timer_session(s) for s in sessions],
+            "sessions": [
+                {
+                    **_serialize_installer_job_timer_session(s),
+                    "note": latest_note_by_session_id.get(s.id),
+                }
+                for s in sessions
+            ],
             "events": [_serialize_installer_job_timer_event(e) for e in events],
+            "note": latest_note,
         },
         "Installer timer history retrieved"
     )
