@@ -9,7 +9,7 @@ from collections import defaultdict
 from datetime import date, datetime, time, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, case, cast, func, literal_column, or_, select
@@ -82,8 +82,8 @@ class DailyInstallCompletionPatchRequest(BaseModel):
 
 class InstallationTemplateDashboardPatchRequest(BaseModel):
     type: str = Field(..., description="'templater' or 'installer'")
-    fab_id: int
-    job_id: Optional[int] = None
+    job_id: int
+    fab_id: Optional[int] = None
     installer_id: Optional[int] = None
     activity_complete: Optional[bool] = Field(None, alias="Activity Complete")
     sqft_templated: Optional[float] = Field(None, alias="sqft templated")
@@ -287,6 +287,7 @@ async def patch_redo_record(
             patch.total_cost,
             patch.department,
             patch.person_name,
+            patch.reason,
         ]
     ):
         raise error_response("At least one field is required", 400)
@@ -327,6 +328,12 @@ async def patch_redo_record(
             if user is None:
                 raise error_response("Person not found", 400)
             fab.redo_requested_by = int(user.id)
+    if patch.reason is not None:
+        normalized_reason = patch.reason.strip()
+        if normalized_reason:
+            fab.notes = [normalized_reason]
+        else:
+            fab.notes = None
 
     cost_record: Optional[CostOfStone] = None
     if patch.cost_per_sqft is not None or patch.total_cost is not None:
@@ -353,6 +360,7 @@ async def patch_redo_record(
 
         if patch.cost_per_sqft is not None:
             cost_record.cost_per_sqft = f"{patch.cost_per_sqft:.2f}"
+            fab.cost_per_sqft = patch.cost_per_sqft
 
         total_cost_value: Optional[float] = None
         if patch.total_cost is not None:
@@ -367,6 +375,7 @@ async def patch_redo_record(
 
         cost_record.updated_at = now
         cost_record.updated_by = current_user.id
+        db.add(cost_record)
         if fab.cost_of_stone_id is None:
             fab.cost_of_stone_id = cost_record.id
 
@@ -3810,10 +3819,26 @@ async def update_owner_installation_template_dashboard(
     """Update fields for a specific templater or installer row in the dashboard."""
     _ = current_user
 
-    if request.type.lower() == "templater":
-        # Update Templating
-        templating_record = (await db.execute(select(Templating).where(Templating.fab_id == request.fab_id))).scalars().first()
-        if templating_record:
+    # Early validation of type parameter
+    valid_types = {"templater", "installer"}
+    request_type = request.type.lower().strip()
+    if request_type not in valid_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid type. Must be 'templater' or 'installer'",
+        )
+
+    if request_type == "templater":
+        # Update Templating records for all FABs under this job
+        fab_ids_query = select(Fab.id).where(Fab.job_id == request.job_id)
+        if request.fab_id is not None:
+            fab_ids_query = fab_ids_query.where(Fab.id == request.fab_id)
+        fab_ids = [row[0] for row in (await db.execute(fab_ids_query)).all()]
+
+        templating_records = (await db.execute(
+            select(Templating).where(Templating.fab_id.in_(fab_ids))
+        )).scalars().all()
+        for templating_record in templating_records:
             if request.activity_complete is not None:
                 templating_record.is_completed = request.activity_complete
             if request.reason is not None:
@@ -3826,27 +3851,33 @@ async def update_owner_installation_template_dashboard(
 
         # Update TemplaterJobTimerSession
         if request.sqft_templated is not None or request.sqft_not_templated is not None:
-            if request.job_id is not None:
-                query = select(TemplaterJobTimerSession).where(
-                    TemplaterJobTimerSession.job_id == request.job_id
-                )
-                if request.installer_id:
-                    query = query.where(TemplaterJobTimerSession.templater_id == request.installer_id)
-                query = query.order_by(TemplaterJobTimerSession.id.desc())
-                timer_session = (await db.execute(query)).scalars().first()
-                if timer_session:
-                    if request.sqft_templated is not None:
-                        timer_session.sqft_templated = request.sqft_templated
-                    if request.sqft_not_templated is not None:
-                        timer_session.sqft_not_templated = request.sqft_not_templated
-                    timer_session.updated_at = datetime.now()
-                    timer_session.updated_by = current_user.id
-                    db.add(timer_session)
+            query = select(TemplaterJobTimerSession).where(
+                TemplaterJobTimerSession.job_id == request.job_id
+            )
+            if request.installer_id:
+                query = query.where(TemplaterJobTimerSession.templater_id == request.installer_id)
+            query = query.order_by(TemplaterJobTimerSession.id.desc())
+            timer_session = (await db.execute(query)).scalars().first()
+            if timer_session:
+                if request.sqft_templated is not None:
+                    timer_session.sqft_templated = request.sqft_templated
+                if request.sqft_not_templated is not None:
+                    timer_session.sqft_not_templated = request.sqft_not_templated
+                timer_session.updated_at = datetime.now()
+                timer_session.updated_by = current_user.id
+                db.add(timer_session)
 
-    elif request.type.lower() == "installer":
-        # Update InstallCompletion
-        install_record = (await db.execute(select(InstallCompletion).where(InstallCompletion.fab_id == request.fab_id))).scalars().first()
-        if install_record:
+    else:  # request_type == "installer"
+        # Update InstallCompletion records for all FABs under this job
+        fab_ids_query = select(Fab.id).where(Fab.job_id == request.job_id)
+        if request.fab_id is not None:
+            fab_ids_query = fab_ids_query.where(Fab.id == request.fab_id)
+        fab_ids = [row[0] for row in (await db.execute(fab_ids_query)).all()]
+
+        install_records = (await db.execute(
+            select(InstallCompletion).where(InstallCompletion.fab_id.in_(fab_ids))
+        )).scalars().all()
+        for install_record in install_records:
             if request.activity_complete is not None:
                 install_record.is_completed = request.activity_complete
             if request.reason is not None:
@@ -3854,11 +3885,52 @@ async def update_owner_installation_template_dashboard(
             install_record.updated_at = datetime.now()
             install_record.updated_by = current_user.id
             db.add(install_record)
-    else:
-        return error_response(status.HTTP_400_BAD_REQUEST, "Invalid type. Must be 'templater' or 'installer'")
 
     await db.commit()
-    return success_response({}, "Dashboard record updated successfully")
+
+    # Fetch and return the updated record(s)
+    updated_data = {}
+    if request_type == "templater":
+        templating_records = (await db.execute(
+            select(Templating).join(Fab, Fab.id == Templating.fab_id).where(Fab.job_id == request.job_id)
+        )).scalars().all()
+        updated_data = {
+            "job_id": request.job_id,
+            "updated_count": len(templating_records),
+            "records": [
+                {
+                    "fab_id": r.fab_id,
+                    "is_completed": r.is_completed,
+                    "notes": r.notes,
+                    "duration": r.duration,
+                    "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+                    "updated_by": r.updated_by,
+                }
+                for r in templating_records
+            ],
+        }
+    else:  # request_type == "installer"
+        install_records = (await db.execute(
+            select(InstallCompletion).join(Fab, Fab.id == InstallCompletion.fab_id).where(Fab.job_id == request.job_id)
+        )).scalars().all()
+        updated_data = {
+            "job_id": request.job_id,
+            "updated_count": len(install_records),
+            "records": [
+                {
+                    "fab_id": r.fab_id,
+                    "is_completed": r.is_completed,
+                    "completion_notes": r.completion_notes,
+                    "completion_date": r.completion_date.isoformat() if r.completion_date else None,
+                    "total_sqft_installed": r.total_sqft_installed,
+                    "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+                    "updated_by": r.updated_by,
+                }
+                for r in install_records
+            ],
+        }
+
+    return success_response(updated_data, "Dashboard record updated successfully")
 
 
 @router.get("/reports/owner/installation-template-dashboard", response_model=SuccessResponse[dict])
@@ -4251,6 +4323,210 @@ async def get_owner_installation_template_dashboard_report(
             "rows": flat_rows,
         },
         "Owner installation and template dashboard report generated",
+    )
+
+
+@router.get("/reports/owner/installation-template-dashboard/pdf")
+async def get_owner_installation_template_dashboard_pdf(
+    from_date: Optional[date] = Query(None, description="Inclusive from date filter"),
+    to_date: Optional[date] = Query(None, description="Inclusive to date filter"),
+    search: Optional[str] = Query(None, description="Search by job name, job number, or FAB ID"),
+    fab_type: Optional[str] = Query(None, description="Optional FAB type filter"),
+    sales_person_id: Optional[int] = Query(None, gt=0, description="Optional sales person filter"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Download a PDF version of the installation and template dashboard report."""
+    import json as _json
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import letter, landscape
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable
+    from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+
+    # Reuse existing data-fetching logic
+    json_response = await get_owner_installation_template_dashboard_report(
+        from_date=from_date,
+        to_date=to_date,
+        search=search,
+        fab_type=fab_type,
+        sales_person_id=sales_person_id,
+        db=db,
+        current_user=current_user,
+    )
+    payload = _json.loads(json_response.body)
+    data = payload.get("data", {})
+
+    summary = data.get("summary", {})
+    groups = data.get("groups", [])
+    period = data.get("period", {})
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=landscape(letter),
+        leftMargin=0.5 * inch,
+        rightMargin=0.5 * inch,
+        topMargin=0.5 * inch,
+        bottomMargin=0.5 * inch,
+    )
+
+    styles = getSampleStyleSheet()
+    brand_blue = colors.HexColor("#1E3A5F")
+    brand_light = colors.HexColor("#E8EDF3")
+    green_ok = colors.HexColor("#2E7D32")
+    red_no = colors.HexColor("#C62828")
+    grey_mid = colors.HexColor("#6B7280")
+
+    title_style = ParagraphStyle("ReportTitle", parent=styles["Heading1"], fontSize=16, textColor=brand_blue, spaceAfter=4)
+    subtitle_style = ParagraphStyle("ReportSubtitle", parent=styles["Normal"], fontSize=9, textColor=grey_mid, spaceAfter=2)
+    group_header_style = ParagraphStyle("GroupHeader", parent=styles["Normal"], fontSize=10, textColor=brand_blue, fontName="Helvetica-Bold", spaceBefore=8, spaceAfter=3)
+    cell_style = ParagraphStyle("Cell", parent=styles["Normal"], fontSize=7, leading=9)
+    small_style = ParagraphStyle("Small", parent=styles["Normal"], fontSize=7, textColor=grey_mid)
+
+    story = []
+
+    # ── Title & period ──
+    period_from = period.get("from_date") or "All time"
+    period_to = period.get("to_date") or "All time"
+    period_label = f"{period_from} – {period_to}" if period.get("from_date") or period.get("to_date") else "All time"
+
+    story.append(Paragraph("Installation & Template Dashboard Report", title_style))
+    story.append(Paragraph(f"Period: {period_label}  |  Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", subtitle_style))
+
+    active_filters = []
+    if search:
+        active_filters.append(f"Search: {search}")
+    if fab_type:
+        active_filters.append(f"FAB Type: {fab_type}")
+    if sales_person_id:
+        active_filters.append(f"Sales Person ID: {sales_person_id}")
+    if active_filters:
+        story.append(Paragraph("Filters: " + "  |  ".join(active_filters), subtitle_style))
+
+    story.append(Spacer(1, 6))
+
+    # ── Summary bar ──
+    summary_data = [
+        ["Total Hours Templated", "Total Hours Installed", "Sqft Templated", "Sqft Not Templated", "Sqft Installed", "Sqft Not Installed", "Jobs"],
+        [
+            summary.get("total_hours_templated", "–"),
+            summary.get("total_hours_installed", "–"),
+            str(summary.get("sqft_templated", 0)),
+            str(summary.get("sqft_not_templated", 0)),
+            str(summary.get("sqft_installed", 0)),
+            str(summary.get("sqft_not_installed", 0)),
+            str(summary.get("row_count", 0)),
+        ],
+    ]
+    col_w = doc.width / len(summary_data[0])
+    summary_table = Table(summary_data, colWidths=[col_w] * len(summary_data[0]))
+    summary_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), brand_blue),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, 1), [brand_light]),
+        ("FONTNAME", (0, 1), (-1, 1), "Helvetica-Bold"),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.white),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(summary_table)
+    story.append(Spacer(1, 10))
+
+    # ── Per-group tables ──
+    row_headers = ["#", "Date", "Job #", "Job Name", "Account", "FAB Type", "Sqft ✓", "Sqft ✗", "Duration", "Complete", "Notes"]
+    col_widths = [
+        0.25 * inch,  # #
+        0.65 * inch,  # Date
+        0.65 * inch,  # Job #
+        1.4 * inch,   # Job Name
+        1.0 * inch,   # Account
+        0.7 * inch,   # FAB Type
+        0.55 * inch,  # Sqft ✓
+        0.55 * inch,  # Sqft ✗
+        0.55 * inch,  # Duration
+        0.55 * inch,  # Complete
+        1.7 * inch,   # Notes
+    ]
+
+    for group in groups:
+        department = group.get("department", "")
+        installer = group.get("installer", "Unknown")
+        hours_display = group.get("installer_hours_display", "0:00")
+        job_count = group.get("job_count", 0)
+        rows = group.get("rows", [])
+
+        dept_color = brand_blue if department == "Installer" else colors.HexColor("#4A6741")
+        story.append(Paragraph(
+            f"{department} — {installer}   |   Total Hours: {hours_display}   |   Jobs: {job_count}",
+            ParagraphStyle("GH", parent=group_header_style, textColor=dept_color),
+        ))
+
+        table_data = [row_headers]
+        for idx, r in enumerate(rows, start=1):
+            activity_date = (r.get("activity_date") or "")[:10]
+            complete = "Yes" if r.get("activity_complete") else "No"
+            notes = r.get("reason_if_not_complete") or ""
+            sqft_ok = r.get("sqft_templated" if department == "Templater" else "sq_ft_installed", 0)
+            sqft_no = r.get("sqft_not_templated" if department == "Templater" else "sq_ft_incomplete", 0)
+            table_data.append([
+                str(idx),
+                activity_date,
+                r.get("job_number") or "–",
+                Paragraph(r.get("job_name") or "–", cell_style),
+                Paragraph(r.get("account_name") or "–", cell_style),
+                r.get("fab_type") or "–",
+                str(sqft_ok),
+                str(sqft_no),
+                r.get("duration") or "–",
+                complete,
+                Paragraph(notes, cell_style),
+            ])
+
+        tbl = Table(table_data, colWidths=col_widths, repeatRows=1)
+        row_fills = []
+        for i in range(1, len(table_data)):
+            bg = colors.white if i % 2 == 0 else brand_light
+            row_fills.append(("BACKGROUND", (0, i), (-1, i), bg))
+
+        complete_col_idx = row_headers.index("Complete")
+        complete_style_cmds = []
+        for i, r in enumerate(rows, start=1):
+            txt_color = green_ok if r.get("activity_complete") else red_no
+            complete_style_cmds.append(("TEXTCOLOR", (complete_col_idx, i), (complete_col_idx, i), txt_color))
+
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), dept_color),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("ALIGN", (3, 1), (4, -1), "LEFT"),
+            ("ALIGN", (complete_col_idx, 1), (complete_col_idx, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#D1D5DB")),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            *row_fills,
+            *complete_style_cmds,
+        ]))
+        story.append(tbl)
+        story.append(Spacer(1, 6))
+
+    doc.build(story)
+    buf.seek(0)
+
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"installation_template_dashboard_{stamp}.pdf"
+    return StreamingResponse(
+        buf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 
 
