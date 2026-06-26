@@ -1055,17 +1055,15 @@ class RoleService:
             )
 
         # Guard: role can only be deleted when no employees are assigned.
-        user_role_count_result = await db.execute(
-            select(func.count(UserRole.id)).where(UserRole.role_id == role_id)
+        # Use the same assignment source as role member APIs (user_roles) so
+        # stale legacy users.role_id values do not block deletion.
+        assigned_count_result = await db.execute(
+            select(func.count(func.distinct(User.id)))
+            .select_from(User)
+            .join(UserRole, User.id == UserRole.user_id)
+            .where(UserRole.role_id == role_id)
         )
-        user_role_count = int(user_role_count_result.scalar() or 0)
-
-        direct_user_count_result = await db.execute(
-            select(func.count(User.id)).where(User.role_id == role_id)
-        )
-        direct_user_count = int(direct_user_count_result.scalar() or 0)
-
-        assigned_count = user_role_count + direct_user_count
+        assigned_count = int(assigned_count_result.scalar() or 0)
         if assigned_count > 0:
             raise error_response(
                 message=(
