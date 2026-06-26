@@ -82,8 +82,8 @@ class DailyInstallCompletionPatchRequest(BaseModel):
 
 class InstallationTemplateDashboardPatchRequest(BaseModel):
     type: str = Field(..., description="'templater' or 'installer'")
-    fab_id: int
-    job_id: Optional[int] = None
+    job_id: int
+    fab_id: Optional[int] = None
     installer_id: Optional[int] = None
     activity_complete: Optional[bool] = Field(None, alias="Activity Complete")
     sqft_templated: Optional[float] = Field(None, alias="sqft templated")
@@ -3828,9 +3828,16 @@ async def update_owner_installation_template_dashboard(
         )
 
     if request_type == "templater":
-        # Update Templating
-        templating_record = (await db.execute(select(Templating).where(Templating.fab_id == request.fab_id))).scalars().first()
-        if templating_record:
+        # Update Templating records for all FABs under this job
+        fab_ids_query = select(Fab.id).where(Fab.job_id == request.job_id)
+        if request.fab_id is not None:
+            fab_ids_query = fab_ids_query.where(Fab.id == request.fab_id)
+        fab_ids = [row[0] for row in (await db.execute(fab_ids_query)).all()]
+
+        templating_records = (await db.execute(
+            select(Templating).where(Templating.fab_id.in_(fab_ids))
+        )).scalars().all()
+        for templating_record in templating_records:
             if request.activity_complete is not None:
                 templating_record.is_completed = request.activity_complete
             if request.reason is not None:
@@ -3843,27 +3850,33 @@ async def update_owner_installation_template_dashboard(
 
         # Update TemplaterJobTimerSession
         if request.sqft_templated is not None or request.sqft_not_templated is not None:
-            if request.job_id is not None:
-                query = select(TemplaterJobTimerSession).where(
-                    TemplaterJobTimerSession.job_id == request.job_id
-                )
-                if request.installer_id:
-                    query = query.where(TemplaterJobTimerSession.templater_id == request.installer_id)
-                query = query.order_by(TemplaterJobTimerSession.id.desc())
-                timer_session = (await db.execute(query)).scalars().first()
-                if timer_session:
-                    if request.sqft_templated is not None:
-                        timer_session.sqft_templated = request.sqft_templated
-                    if request.sqft_not_templated is not None:
-                        timer_session.sqft_not_templated = request.sqft_not_templated
-                    timer_session.updated_at = datetime.now()
-                    timer_session.updated_by = current_user.id
-                    db.add(timer_session)
+            query = select(TemplaterJobTimerSession).where(
+                TemplaterJobTimerSession.job_id == request.job_id
+            )
+            if request.installer_id:
+                query = query.where(TemplaterJobTimerSession.templater_id == request.installer_id)
+            query = query.order_by(TemplaterJobTimerSession.id.desc())
+            timer_session = (await db.execute(query)).scalars().first()
+            if timer_session:
+                if request.sqft_templated is not None:
+                    timer_session.sqft_templated = request.sqft_templated
+                if request.sqft_not_templated is not None:
+                    timer_session.sqft_not_templated = request.sqft_not_templated
+                timer_session.updated_at = datetime.now()
+                timer_session.updated_by = current_user.id
+                db.add(timer_session)
 
     else:  # request_type == "installer"
-        # Update InstallCompletion
-        install_record = (await db.execute(select(InstallCompletion).where(InstallCompletion.fab_id == request.fab_id))).scalars().first()
-        if install_record:
+        # Update InstallCompletion records for all FABs under this job
+        fab_ids_query = select(Fab.id).where(Fab.job_id == request.job_id)
+        if request.fab_id is not None:
+            fab_ids_query = fab_ids_query.where(Fab.id == request.fab_id)
+        fab_ids = [row[0] for row in (await db.execute(fab_ids_query)).all()]
+
+        install_records = (await db.execute(
+            select(InstallCompletion).where(InstallCompletion.fab_id.in_(fab_ids))
+        )).scalars().all()
+        for install_record in install_records:
             if request.activity_complete is not None:
                 install_record.is_completed = request.activity_complete
             if request.reason is not None:
@@ -3877,28 +3890,44 @@ async def update_owner_installation_template_dashboard(
     # Fetch and return the updated record(s)
     updated_data = {}
     if request_type == "templater":
-        templating_record = (await db.execute(select(Templating).where(Templating.fab_id == request.fab_id))).scalars().first()
-        if templating_record:
-            updated_data = {
-                "fab_id": templating_record.fab_id,
-                "is_completed": templating_record.is_completed,
-                "notes": templating_record.notes,
-                "duration": templating_record.duration,
-                "updated_at": templating_record.updated_at.isoformat() if templating_record.updated_at else None,
-                "updated_by": templating_record.updated_by,
-            }
+        templating_records = (await db.execute(
+            select(Templating).join(Fab, Fab.id == Templating.fab_id).where(Fab.job_id == request.job_id)
+        )).scalars().all()
+        updated_data = {
+            "job_id": request.job_id,
+            "updated_count": len(templating_records),
+            "records": [
+                {
+                    "fab_id": r.fab_id,
+                    "is_completed": r.is_completed,
+                    "notes": r.notes,
+                    "duration": r.duration,
+                    "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+                    "updated_by": r.updated_by,
+                }
+                for r in templating_records
+            ],
+        }
     else:  # request_type == "installer"
-        install_record = (await db.execute(select(InstallCompletion).where(InstallCompletion.fab_id == request.fab_id))).scalars().first()
-        if install_record:
-            updated_data = {
-                "fab_id": install_record.fab_id,
-                "is_completed": install_record.is_completed,
-                "completion_notes": install_record.completion_notes,
-                "completion_date": install_record.completion_date.isoformat() if install_record.completion_date else None,
-                "total_sqft_installed": install_record.total_sqft_installed,
-                "updated_at": install_record.updated_at.isoformat() if install_record.updated_at else None,
-                "updated_by": install_record.updated_by,
-            }
+        install_records = (await db.execute(
+            select(InstallCompletion).join(Fab, Fab.id == InstallCompletion.fab_id).where(Fab.job_id == request.job_id)
+        )).scalars().all()
+        updated_data = {
+            "job_id": request.job_id,
+            "updated_count": len(install_records),
+            "records": [
+                {
+                    "fab_id": r.fab_id,
+                    "is_completed": r.is_completed,
+                    "completion_notes": r.completion_notes,
+                    "completion_date": r.completion_date.isoformat() if r.completion_date else None,
+                    "total_sqft_installed": r.total_sqft_installed,
+                    "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+                    "updated_by": r.updated_by,
+                }
+                for r in install_records
+            ],
+        }
 
     return success_response(updated_data, "Dashboard record updated successfully")
 
