@@ -4099,6 +4099,89 @@ async def get_owner_installation_template_dashboard_report(
 
     template_rows_db = (await db.execute(template_query)).all()
 
+    def _serialize_installer_timer_session(session: InstallerJobTimerSession) -> dict:
+        return {
+            "id": session.id,
+            "job_id": session.job_id,
+            "fab_id": session.fab_id,
+            "installer_id": session.installer_id,
+            "installer_role": session.installer_role,
+            "status": session.status,
+            "session_start_at": session.session_start_at.isoformat() if session.session_start_at else None,
+            "current_run_start_at": session.current_run_start_at.isoformat() if session.current_run_start_at else None,
+            "current_pause_start_at": session.current_pause_start_at.isoformat() if session.current_pause_start_at else None,
+            "stopped_at": session.stopped_at.isoformat() if session.stopped_at else None,
+            "total_work_seconds": int(session.total_work_seconds or 0),
+            "total_pause_seconds": int(session.total_pause_seconds or 0),
+            "sqft_installed": _to_float(session.sqft_installed),
+            "sqft_not_installed": _to_float(session.sqft_not_installed),
+            "created_at": session.created_at.isoformat() if session.created_at else None,
+            "updated_at": session.updated_at.isoformat() if session.updated_at else None,
+            "updated_by": session.updated_by,
+        }
+
+    def _serialize_templater_timer_session(session: TemplaterJobTimerSession) -> dict:
+        return {
+            "id": session.id,
+            "job_id": session.job_id,
+            "fab_id": session.fab_id,
+            "templater_id": session.templater_id,
+            "status": session.status,
+            "session_start_at": session.session_start_at.isoformat() if session.session_start_at else None,
+            "current_run_start_at": session.current_run_start_at.isoformat() if session.current_run_start_at else None,
+            "current_pause_start_at": session.current_pause_start_at.isoformat() if session.current_pause_start_at else None,
+            "stopped_at": session.stopped_at.isoformat() if session.stopped_at else None,
+            "total_work_seconds": int(session.total_work_seconds or 0),
+            "total_pause_seconds": int(session.total_pause_seconds or 0),
+            "sqft_templated": _to_float(session.sqft_templated),
+            "sqft_not_templated": _to_float(session.sqft_not_templated),
+            "created_at": session.created_at.isoformat() if session.created_at else None,
+            "updated_at": session.updated_at.isoformat() if session.updated_at else None,
+            "updated_by": session.updated_by,
+        }
+
+    installer_sessions_by_key: dict[tuple[Optional[int], Optional[int], Optional[int]], list[dict]] = defaultdict(list)
+    installer_sessions_by_job: dict[int, list[dict]] = defaultdict(list)
+    installer_job_ids = {row[3] for row in install_rows_db if row[3] is not None}
+    installer_ids = {row[0] for row in install_rows_db if row[0] is not None}
+    if installer_job_ids and installer_ids:
+        installer_sessions = (
+            await db.execute(
+                select(InstallerJobTimerSession)
+                .where(
+                    InstallerJobTimerSession.job_id.in_(installer_job_ids),
+                    InstallerJobTimerSession.installer_id.in_(installer_ids),
+                )
+                .order_by(InstallerJobTimerSession.session_start_at.desc(), InstallerJobTimerSession.id.desc())
+            )
+        ).scalars().all()
+        for session in installer_sessions:
+            serialized = _serialize_installer_timer_session(session)
+            key = (session.installer_id, session.job_id, session.fab_id)
+            installer_sessions_by_key[key].append(serialized)
+            installer_sessions_by_job[session.job_id].append(serialized)
+
+    templater_sessions_by_key: dict[tuple[Optional[int], Optional[int], Optional[int]], list[dict]] = defaultdict(list)
+    templater_sessions_by_job: dict[int, list[dict]] = defaultdict(list)
+    templater_job_ids = {row[3] for row in template_rows_db if row[3] is not None}
+    templater_ids = {row[0] for row in template_rows_db if row[0] is not None}
+    if templater_job_ids and templater_ids:
+        templater_sessions = (
+            await db.execute(
+                select(TemplaterJobTimerSession)
+                .where(
+                    TemplaterJobTimerSession.job_id.in_(templater_job_ids),
+                    TemplaterJobTimerSession.templater_id.in_(templater_ids),
+                )
+                .order_by(TemplaterJobTimerSession.session_start_at.desc(), TemplaterJobTimerSession.id.desc())
+            )
+        ).scalars().all()
+        for session in templater_sessions:
+            serialized = _serialize_templater_timer_session(session)
+            key = (session.templater_id, session.job_id, session.fab_id)
+            templater_sessions_by_key[key].append(serialized)
+            templater_sessions_by_job[session.job_id].append(serialized)
+
     def _get_group(department: str, installer_name: str, installer_id: Optional[int]) -> dict:
         group_key = (department, installer_name)
         group = grouped_rows_map.get(group_key)
@@ -4173,6 +4256,8 @@ async def get_owner_installation_template_dashboard_report(
                 "reason_if_not_complete": None if bool(is_completed) else (_notes_to_text(completion_notes) or "Not marked complete"),
                 "sales_person_id": row_sales_person_id,
                 "sales_person_name": sales_person_name,
+                "timer_sessions": installer_sessions_by_key.get((installer_id, job_id, fab_row_id), []),
+                "job_timer_sessions": installer_sessions_by_job.get(job_id, []),
             }
         )
         group["rows"].append(flat_rows[-1])
@@ -4245,6 +4330,8 @@ async def get_owner_installation_template_dashboard_report(
                 "reason_if_not_complete": None if bool(is_completed) else (_notes_to_text(notes) or "Not marked complete"),
                 "sales_person_id": row_sales_person_id,
                 "sales_person_name": sales_person_name,
+                "timer_sessions": templater_sessions_by_key.get((technician_id, job_id, fab_row_id), []),
+                "job_timer_sessions": templater_sessions_by_job.get(job_id, []),
             }
         )
         group["rows"].append(flat_rows[-1])

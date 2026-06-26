@@ -470,9 +470,12 @@ async def stop_installer_job_timer(
     )
     db.add(event)
     await db.commit()
+
+    response_data = _serialize_installer_job_timer_session(session)
+    response_data["note"] = event.note
     
     return success_response(
-        _serialize_installer_job_timer_session(session),
+        response_data,
         "Installer timer stopped"
     )
 

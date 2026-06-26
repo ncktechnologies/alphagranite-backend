@@ -1053,6 +1053,27 @@ class RoleService:
                 message=f"Role with ID {role_id} not found",
                 status_code=404
             )
+
+        # Guard: role can only be deleted when no employees are assigned.
+        user_role_count_result = await db.execute(
+            select(func.count(UserRole.id)).where(UserRole.role_id == role_id)
+        )
+        user_role_count = int(user_role_count_result.scalar() or 0)
+
+        direct_user_count_result = await db.execute(
+            select(func.count(User.id)).where(User.role_id == role_id)
+        )
+        direct_user_count = int(direct_user_count_result.scalar() or 0)
+
+        assigned_count = user_role_count + direct_user_count
+        if assigned_count > 0:
+            raise error_response(
+                message=(
+                    "Cannot delete role while employees are still assigned. "
+                    "Please unassign all employees from this role first."
+                ),
+                status_code=400,
+            )
         
         try:
             # Update status to deleted (3)
