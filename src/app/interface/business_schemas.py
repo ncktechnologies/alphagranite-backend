@@ -1071,6 +1071,7 @@ class ShopRevisionResponse(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime]
     updated_by: Optional[int]
+    file_ids: Optional[str] = None
 
 
 # Cost of Stone Schemas

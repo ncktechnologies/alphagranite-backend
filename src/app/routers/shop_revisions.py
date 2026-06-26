@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Form
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -11,6 +11,7 @@ from src.app.database.account import Account
 from src.app.database.business_job import BusinessJob
 from src.app.database.edge import Edge
 from src.app.database.fab import Fab
+from src.app.database.file import File as FileModel
 from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness
 from src.app.database.stone_type import StoneType
@@ -24,8 +25,9 @@ from src.app.interface.business_schemas import (
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.service.background import send_notification
+from src.app.service.file import FileService
 from src.app.utils.config import SUPPORT_EMAIL
-from src.app.utils.helpers import error_response, success_response
+from src.app.utils.helpers import error_response, success_response, utc_now
 
 
 router = APIRouter(
@@ -47,7 +49,42 @@ def _serialize_shop_revision(revision: ShopRevision) -> dict:
         "created_at": revision.created_at.isoformat() if revision.created_at else None,
         "updated_at": revision.updated_at.isoformat() if revision.updated_at else None,
         "updated_by": revision.updated_by,
+        "file_ids": revision.file_ids,
     }
+
+
+def _parse_file_ids(file_ids: Optional[str]) -> List[int]:
+    if not file_ids:
+        return []
+    ids: List[int] = []
+    for raw in file_ids.split(","):
+        value = raw.strip()
+        if not value:
+            continue
+        if value.isdigit():
+            ids.append(int(value))
+    return ids
+
+
+async def _get_serialized_files(
+    db: AsyncSession,
+    request: Request,
+    file_ids: Optional[str],
+) -> List[dict]:
+    parsed_ids = _parse_file_ids(file_ids)
+    if not parsed_ids:
+        return []
+
+    files_result = await db.execute(select(FileModel).where(FileModel.id.in_(parsed_ids)))
+    file_map = {f.id: f for f in files_result.scalars().all() if f.id is not None}
+    base_url = FileService.get_base_url(request)
+
+    ordered_files: List[dict] = []
+    for file_id in parsed_ids:
+        file_record = file_map.get(file_id)
+        if file_record is not None:
+            ordered_files.append(FileService._serialize_file(file_record, base_url))
+    return ordered_files
 
 
 def _serialize_shop_revision_row(
@@ -207,8 +244,10 @@ async def get_shop_revisions_count(
 
 
 @router.get("/fab/{fab_id}", response_model=SuccessResponse[List[dict]])
+@router.get("/fabs/{fab_id}", response_model=SuccessResponse[List[dict]])
 async def get_shop_revisions_by_fab(
     fab_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -234,7 +273,9 @@ async def get_shop_revisions_by_fab(
 
     data = []
     for row in rows:
-        data.append(_serialize_shop_revision_row(row[0], row[1], row[2], row[3], row[4]))
+        row_data = _serialize_shop_revision_row(row[0], row[1], row[2], row[3], row[4])
+        row_data["files"] = await _get_serialized_files(db, request, row[0].file_ids)
+        data.append(row_data)
 
     return success_response(data, "Shop revisions retrieved successfully")
 
@@ -305,6 +346,7 @@ async def get_fabs_with_pending_shop_revisions(
                 "created_at": revision.created_at.isoformat() if revision.created_at else None,
                 "updated_at": revision.updated_at.isoformat() if revision.updated_at else None,
                 "updated_by": revision.updated_by,
+                "file_ids": revision.file_ids,
             }
 
     data = []
@@ -369,3 +411,38 @@ async def complete_shop_revision(
     await db.refresh(revision)
 
     return success_response(_serialize_shop_revision(revision), "Shop revision completed successfully")
+
+
+@router.post("/{shop_revision_id}/add-file", response_model=SuccessResponse[None])
+async def add_file_to_shop_revision(
+    shop_revision_id: int,
+    file_id: int,
+    file_design: Optional[str] = Form(None, description="Design name or description for the file"),
+    stage_name: Optional[str] = Form(None, description="Stage name associated with the file"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Add file to shop revision."""
+    result = await db.execute(select(ShopRevision).where(ShopRevision.id == shop_revision_id))
+    shop_revision = result.scalar_one_or_none()
+
+    if not shop_revision:
+        raise error_response("Shop revision not found", 404)
+
+    if shop_revision.file_ids:
+        file_ids_list = shop_revision.file_ids.split(",")
+        if str(file_id) not in file_ids_list:
+            file_ids_list.append(str(file_id))
+            shop_revision.file_ids = ",".join(file_ids_list)
+    else:
+        shop_revision.file_ids = str(file_id)
+
+    shop_revision.updated_at = utc_now()
+    shop_revision.updated_by = current_user.id
+
+    await db.commit()
+
+    return success_response(
+        {"file_id": file_id, "file_design": file_design, "stage_name": stage_name},
+        "File added to shop revision successfully",
+    )

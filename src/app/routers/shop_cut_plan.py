@@ -805,6 +805,12 @@ async def _recalculate_shop_plan_work_percentage(
     total_actual_seconds = max(0, stored_seconds + in_progress_seconds)
     total_actual_hours = total_actual_seconds / 3600.0
 
+    # Keep manual percentage edits visible when no timer data exists yet.
+    # This allows operator PATCH updates to be reflected in GET /shop/plans.
+    if total_actual_seconds == 0 and plan.work_percentage is not None:
+        manual_percentage = max(0, min(100, int(plan.work_percentage)))
+        return manual_percentage, round(total_actual_hours, 4), total_actual_seconds
+
     estimated_hours = float(plan.estimated_hours or 0)
     if estimated_hours <= 0:
         work_percentage = 0
