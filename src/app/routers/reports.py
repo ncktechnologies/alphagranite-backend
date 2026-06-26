@@ -360,6 +360,7 @@ async def patch_redo_record(
 
         if patch.cost_per_sqft is not None:
             cost_record.cost_per_sqft = f"{patch.cost_per_sqft:.2f}"
+            fab.cost_per_sqft = patch.cost_per_sqft
 
         total_cost_value: Optional[float] = None
         if patch.total_cost is not None:
