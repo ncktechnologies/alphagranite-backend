@@ -805,6 +805,12 @@ async def _recalculate_shop_plan_work_percentage(
     total_actual_seconds = max(0, stored_seconds + in_progress_seconds)
     total_actual_hours = total_actual_seconds / 3600.0
 
+    # Keep manual percentage edits visible when no timer data exists yet.
+    # This allows operator PATCH updates to be reflected in GET /shop/plans.
+    if total_actual_seconds == 0 and plan.work_percentage is not None:
+        manual_percentage = max(0, min(100, int(plan.work_percentage)))
+        return manual_percentage, round(total_actual_hours, 4), total_actual_seconds
+
     estimated_hours = float(plan.estimated_hours or 0)
     if estimated_hours <= 0:
         work_percentage = 0
@@ -1192,6 +1198,13 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
             plan=plan,
             as_of=datetime.now().replace(second=0, microsecond=0),
         )
+        # Calendar view should reflect the persisted plan progress updated by
+        # operator task PATCH immediately, while still exposing timer totals.
+        display_work_percentage = (
+            int(plan.work_percentage)
+            if plan.work_percentage is not None
+            else int(work_percentage)
+        )
 
         # Fetch related data
         ws_result = await db.execute(select(WorkStation).where(WorkStation.id == plan.workstation_id))
@@ -1265,7 +1278,7 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
             "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
             "actual_start_date": plan.actual_start_date.isoformat() if plan.actual_start_date else None,
             "actual_end_date": plan.actual_end_date.isoformat() if plan.actual_end_date else None,
-            "work_percentage": work_percentage,
+            "work_percentage": display_work_percentage,
             "notes": plan.notes,
             "created_at": plan.created_at.isoformat(),
             "updated_at": plan.updated_at.isoformat() if plan.updated_at else None

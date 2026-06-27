@@ -340,6 +340,7 @@ class ShopRevision(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.now, index=True)
     updated_at: Optional[datetime] = Field(default=None)
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    file_ids: Optional[str] = Field(default=None, description="Comma-separated file IDs")
 
 # --- Cost of Stone ---
 class CostOfStone(SQLModel, table=True):

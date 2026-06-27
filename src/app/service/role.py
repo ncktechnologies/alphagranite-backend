@@ -4,7 +4,7 @@ from sqlalchemy.orm import joinedload
 from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from typing import List, Optional, Dict, Any
-from sqlalchemy import select, func, and_, or_
+from sqlalchemy import select, func, and_, or_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.database.role import Role
@@ -1053,10 +1053,60 @@ class RoleService:
                 message=f"Role with ID {role_id} not found",
                 status_code=404
             )
+
+        # Guard: block deletion only when ACTIVE employees are still assigned.
+        active_assigned_count_result = await db.execute(
+            select(func.count(func.distinct(User.id)))
+            .select_from(User)
+            .join(UserRole, User.id == UserRole.user_id)
+            .where(
+                UserRole.role_id == role_id,
+                User.status == 1,
+            )
+        )
+        active_assigned_count = int(active_assigned_count_result.scalar() or 0)
+        if active_assigned_count > 0:
+            raise error_response(
+                message=(
+                    "Cannot delete role while active employees are still assigned. "
+                    "Please unassign all employees from this role first."
+                ),
+                status_code=400,
+            )
         
         try:
+            # Cleanup any stale member links before marking role as deleted.
+            await db.execute(
+                delete(UserRole).where(UserRole.role_id == role_id)
+            )
+
+            # Cleanup role permissions and remove orphaned permissions that are
+            # no longer linked to any role.
+            role_permission_ids_result = await db.execute(
+                select(RolePermission.permission_id).where(RolePermission.role_id == role_id)
+            )
+            permission_ids = [pid for pid in role_permission_ids_result.scalars().all() if pid is not None]
+
+            await db.execute(
+                delete(RolePermission).where(RolePermission.role_id == role_id)
+            )
+
+            if permission_ids:
+                referenced_permission_ids_result = await db.execute(
+                    select(func.distinct(RolePermission.permission_id)).where(
+                        RolePermission.permission_id.in_(permission_ids)
+                    )
+                )
+                still_referenced = set(
+                    pid for pid in referenced_permission_ids_result.scalars().all() if pid is not None
+                )
+                orphan_permission_ids = [pid for pid in permission_ids if pid not in still_referenced]
+                if orphan_permission_ids:
+                    await db.execute(
+                        delete(Permission).where(Permission.id.in_(orphan_permission_ids))
+                    )
+
             # Update status to deleted (3)
-            old_status = role.status
             role.status = 3  # 3 = Deleted
             role.updated_at = utc_now()
             
