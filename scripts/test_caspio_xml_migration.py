@@ -430,13 +430,21 @@ async def migrate_fab_status(db, run_id, rows, cfg, dry_run, stats):
           stone_thickness_id, edge_id, total_sqft, no_of_pieces,
           status_id, created_by, created_at,
           revised, shop_date_schedule, installation_date,
-          draft_completed, sct_completed, final_programming_complete, template_needed, drafting_needed
+          draft_completed, sct_completed, final_programming_complete,
+          template_needed, drafting_needed, slab_smith_cust_needed,
+          slab_smith_ag_needed, sct_needed, final_programming_needed,
+          template_received, template_review_complete, cad_review_complete,
+          slab_smith_used, fp_not_needed
         ) VALUES (
           :job_id, :fab_type, :sales_person_id, :stone_type_id, :stone_color_id,
           :stone_thickness_id, :edge_id, :total_sqft, :no_of_pieces,
           :status_id, :created_by, NOW(),
           :revised, :shop_date_schedule, :installation_date,
-          :draft_completed, :sct_completed, :final_programming_complete, false, false
+          :draft_completed, :sct_completed, :final_programming_complete,
+          false, false, false, 
+          false, false, false, 
+          false, false, false, 
+          false, false
         )
         RETURNING id
         """), {
