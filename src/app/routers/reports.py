@@ -3961,6 +3961,11 @@ async def update_owner_installation_template_dashboard(
         templating_records = (await db.execute(
             select(Templating).join(Fab, Fab.id == Templating.fab_id).where(Fab.job_id == request.job_id)
         )).scalars().all()
+        templating_notes_by_fab_id = {
+            int(r.fab_id): r.notes
+            for r in templating_records
+            if r.fab_id is not None
+        }
         updated_data = {
             "job_id": request.job_id,
             "updated_count": len(templating_records),
@@ -3968,7 +3973,6 @@ async def update_owner_installation_template_dashboard(
                 {
                     "fab_id": r.fab_id,
                     "is_completed": r.is_completed,
-                    "notes": r.notes,
                     "duration": r.duration,
                     "updated_at": r.updated_at.isoformat() if r.updated_at else None,
                     "updated_by": r.updated_by,
@@ -3985,6 +3989,7 @@ async def update_owner_installation_template_dashboard(
                 "total_work_seconds": int(updated_timer_session.total_work_seconds or 0),
                 "sqft_templated": updated_timer_session.sqft_templated,
                 "sqft_not_templated": updated_timer_session.sqft_not_templated,
+                "notes": templating_notes_by_fab_id.get(int(updated_timer_session.fab_id)) if updated_timer_session.fab_id is not None else None,
                 "updated_at": updated_timer_session.updated_at.isoformat() if updated_timer_session.updated_at else None,
                 "updated_by": updated_timer_session.updated_by,
             }
@@ -3992,6 +3997,11 @@ async def update_owner_installation_template_dashboard(
         install_records = (await db.execute(
             select(InstallCompletion).join(Fab, Fab.id == InstallCompletion.fab_id).where(Fab.job_id == request.job_id)
         )).scalars().all()
+        install_notes_by_fab_id = {
+            int(r.fab_id): r.completion_notes
+            for r in install_records
+            if r.fab_id is not None
+        }
         updated_data = {
             "job_id": request.job_id,
             "updated_count": len(install_records),
@@ -3999,7 +4009,6 @@ async def update_owner_installation_template_dashboard(
                 {
                     "fab_id": r.fab_id,
                     "is_completed": r.is_completed,
-                    "completion_notes": r.completion_notes,
                     "completion_date": r.completion_date.isoformat() if r.completion_date else None,
                     "total_sqft_installed": r.total_sqft_installed,
                     "updated_at": r.updated_at.isoformat() if r.updated_at else None,
@@ -4017,6 +4026,7 @@ async def update_owner_installation_template_dashboard(
                 "total_work_seconds": int(updated_timer_session.total_work_seconds or 0),
                 "sqft_installed": updated_timer_session.sqft_installed,
                 "sqft_not_installed": updated_timer_session.sqft_not_installed,
+                "completion_notes": install_notes_by_fab_id.get(int(updated_timer_session.fab_id)) if updated_timer_session.fab_id is not None else None,
                 "updated_at": updated_timer_session.updated_at.isoformat() if updated_timer_session.updated_at else None,
                 "updated_by": updated_timer_session.updated_by,
             }
