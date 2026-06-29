@@ -24,7 +24,9 @@ from src.app.database.edge import Edge
 from src.app.database.fab import Fab
 from src.app.database.installer_rate_history import InstallerRateHistory
 from src.app.database.service_level_setting import ServiceLevelSetting
+from src.app.database.installer_job_timer_event import InstallerJobTimerEvent
 from src.app.database.installer_job_timer_session import InstallerJobTimerSession
+from src.app.database.templater_job_timer_event import TemplaterJobTimerEvent
 from src.app.database.templater_job_timer_session import TemplaterJobTimerSession
 from src.app.database.shop_cut_plan import ShopCutPlan
 from src.app.database.stone_color import StoneColor
@@ -4244,8 +4246,38 @@ async def get_owner_installation_template_dashboard_report(
                 .order_by(InstallerJobTimerSession.session_start_at.desc(), InstallerJobTimerSession.id.desc())
             )
         ).scalars().all()
+        latest_installer_note_by_session_id: dict[int, Optional[str]] = {}
+        installer_session_ids = [s.id for s in installer_sessions if s.id is not None]
+        if installer_session_ids:
+            installer_event_ranked = (
+                select(
+                    InstallerJobTimerEvent.session_id.label("session_id"),
+                    InstallerJobTimerEvent.note.label("note"),
+                    func.row_number().over(
+                        partition_by=InstallerJobTimerEvent.session_id,
+                        order_by=(InstallerJobTimerEvent.event_at.desc(), InstallerJobTimerEvent.id.desc()),
+                    ).label("rn"),
+                )
+                .where(
+                    InstallerJobTimerEvent.session_id.in_(installer_session_ids),
+                    InstallerJobTimerEvent.note.isnot(None),
+                    func.trim(cast(InstallerJobTimerEvent.note, String)) != "",
+                )
+                .subquery("installer_event_ranked")
+            )
+            installer_latest_note_rows = (
+                await db.execute(
+                    select(installer_event_ranked.c.session_id, installer_event_ranked.c.note)
+                    .where(installer_event_ranked.c.rn == 1)
+                )
+            ).all()
+            latest_installer_note_by_session_id = {
+                int(row[0]): row[1] for row in installer_latest_note_rows if row[0] is not None
+            }
+
         for session in installer_sessions:
             serialized = _serialize_installer_timer_session(session)
+            serialized["note"] = latest_installer_note_by_session_id.get(session.id) if session.id is not None else None
             key = (session.installer_id, session.job_id, session.fab_id)
             installer_sessions_by_key[key].append(serialized)
             installer_sessions_by_job[session.job_id].append(serialized)
@@ -4265,8 +4297,38 @@ async def get_owner_installation_template_dashboard_report(
                 .order_by(TemplaterJobTimerSession.session_start_at.desc(), TemplaterJobTimerSession.id.desc())
             )
         ).scalars().all()
+        latest_templater_note_by_session_id: dict[int, Optional[str]] = {}
+        templater_session_ids = [s.id for s in templater_sessions if s.id is not None]
+        if templater_session_ids:
+            templater_event_ranked = (
+                select(
+                    TemplaterJobTimerEvent.session_id.label("session_id"),
+                    TemplaterJobTimerEvent.note.label("note"),
+                    func.row_number().over(
+                        partition_by=TemplaterJobTimerEvent.session_id,
+                        order_by=(TemplaterJobTimerEvent.event_at.desc(), TemplaterJobTimerEvent.id.desc()),
+                    ).label("rn"),
+                )
+                .where(
+                    TemplaterJobTimerEvent.session_id.in_(templater_session_ids),
+                    TemplaterJobTimerEvent.note.isnot(None),
+                    func.trim(cast(TemplaterJobTimerEvent.note, String)) != "",
+                )
+                .subquery("templater_event_ranked")
+            )
+            templater_latest_note_rows = (
+                await db.execute(
+                    select(templater_event_ranked.c.session_id, templater_event_ranked.c.note)
+                    .where(templater_event_ranked.c.rn == 1)
+                )
+            ).all()
+            latest_templater_note_by_session_id = {
+                int(row[0]): row[1] for row in templater_latest_note_rows if row[0] is not None
+            }
+
         for session in templater_sessions:
             serialized = _serialize_templater_timer_session(session)
+            serialized["note"] = latest_templater_note_by_session_id.get(session.id) if session.id is not None else None
             key = (session.templater_id, session.job_id, session.fab_id)
             templater_sessions_by_key[key].append(serialized)
             templater_sessions_by_job[session.job_id].append(serialized)
