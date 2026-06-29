@@ -332,9 +332,9 @@ async def get_or_create_business_job(
 
     rs = await db.execute(text("""
     INSERT INTO business_jobs (
-      name, job_number, account_id, status_id, created_by, created_at, sq_ft
+      name, job_number, account_id, status_id, created_by, created_at, sq_ft, need_to_invoice
     ) VALUES (
-      :name, :job_number, :account_id, :status_id, :created_by, NOW(), :sq_ft
+      :name, :job_number, :account_id, :status_id, :created_by, NOW(), :sq_ft, false
     )
     RETURNING id
     """), {
