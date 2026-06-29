@@ -329,9 +329,12 @@ async def pause_installer_job_timer(
     )
     db.add(event)
     await db.commit()
+
+    response_data = _serialize_installer_job_timer_session(session)
+    response_data["note"] = event.note
     
     return success_response(
-        _serialize_installer_job_timer_session(session),
+        response_data,
         "Installer timer paused"
     )
 
@@ -740,9 +743,12 @@ async def pause_templater_job_timer(
     )
     db.add(event)
     await db.commit()
+
+    response_data = _serialize_templater_job_timer_session(session)
+    response_data["note"] = event.note
     
     return success_response(
-        _serialize_templater_job_timer_session(session),
+        response_data,
         "Templater timer paused"
     )
 
@@ -869,9 +875,12 @@ async def stop_templater_job_timer(
     )
     db.add(event)
     await db.commit()
+
+    response_data = _serialize_templater_job_timer_session(session)
+    response_data["note"] = event.note
     
     return success_response(
-        _serialize_templater_job_timer_session(session),
+        response_data,
         "Templater timer stopped"
     )
 
@@ -905,6 +914,20 @@ async def get_templater_job_timer_state(
         run_time = (datetime.now() - latest.current_run_start_at).total_seconds()
         total_seconds += int(run_time)
     
+    latest_note = None
+    session_payload = None
+    if latest:
+        latest_event_result = await db.execute(
+            select(TemplaterJobTimerEvent)
+            .where(TemplaterJobTimerEvent.session_id == latest.id)
+            .order_by(TemplaterJobTimerEvent.event_at.desc(), TemplaterJobTimerEvent.id.desc())
+            .limit(1)
+        )
+        latest_event = latest_event_result.scalar_one_or_none()
+        latest_note = latest_event.note if latest_event else None
+        session_payload = _serialize_templater_job_timer_session(latest)
+        session_payload["note"] = latest_note
+
     total_hours = total_seconds / 3600.0
     
     return success_response(
@@ -912,7 +935,8 @@ async def get_templater_job_timer_state(
             "job_id": job_id,
             "templater_id": templater_id,
             "fab_id": fab_id,
-            "session": _serialize_templater_job_timer_session(latest) if latest else None,
+            "session": session_payload,
+            "note": latest_note,
             "total_actual_seconds": int(total_seconds),
             "total_actual_hours": round(total_hours, 2),
         },
