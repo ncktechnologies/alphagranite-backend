@@ -809,7 +809,7 @@ def parse_args():
     parser.add_argument("--default-stone-color-id", type=int, required=True)
     parser.add_argument("--default-stone-thickness-id", type=int, required=True)
     parser.add_argument("--default-edge-id", type=int, required=True)
-    parser.add_argument("--default-workstation-id", type=int, required=True)
+    parser.add_argument("--default-workstation-id", type=int, required=False)
     parser.add_argument("--default-planning-section-id", type=int, required=True)
 
     return parser.parse_args()
