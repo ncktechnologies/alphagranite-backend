@@ -414,6 +414,7 @@ async def complete_shop_revision(
 
 
 @router.post("/{shop_revision_id}/add-file", response_model=SuccessResponse[None])
+@router.post("/{shop_revision_id}/files", response_model=SuccessResponse[None])
 async def add_file_to_shop_revision(
     shop_revision_id: int,
     file_id: int,

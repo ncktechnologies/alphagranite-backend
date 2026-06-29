@@ -1,6 +1,6 @@
 from typing import Optional, List
 from datetime import datetime, date
-from pydantic import AliasChoices, BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 from decimal import Decimal
 from typing import List, Optional
 from datetime import datetime
@@ -1245,15 +1245,31 @@ class SalesCTApprove(BaseModel):
 # Cut List Schemas
 class CutListScheduleUpdate(BaseModel):
     """Schema for scheduling cut list shop date"""
-    shop_date_schedule: datetime = Field(..., description="Scheduled shop date")
+    shop_date_schedule: Optional[datetime] = Field(None, description="Scheduled shop date")
     installation_date: Optional[datetime] = Field(None, description="Optional installation date")
-    no_of_pieces: int = Field(..., ge=0, description="Number of pieces")
-    total_sqft: Optional[float] = Field(None, gt=0, description="Total square feet")
-    wj_linft: float = Field(..., ge=0, description="Waterjet linear feet")
-    edging_linft: float = Field(..., ge=0, description="Edging linear feet")
-    cnc_linft: float = Field(..., ge=0, description="CNC linear feet")
-    miter_linft: float = Field(..., ge=0, description="Miter linear feet")
+    no_of_pieces: Optional[int] = Field(None, ge=0, description="Number of pieces")
+    total_sqft: Optional[float] = Field(None, ge=0, description="Total square feet")
+    wj_linft: Optional[float] = Field(None, ge=0, description="Waterjet linear feet")
+    edging_linft: Optional[float] = Field(None, ge=0, description="Edging linear feet")
+    cnc_linft: Optional[float] = Field(None, ge=0, description="CNC linear feet")
+    miter_linft: Optional[float] = Field(None, ge=0, description="Miter linear feet")
     revision_complete: Optional[bool] = Field(None, description="Mark revision as complete")
+
+    @model_validator(mode="after")
+    def validate_required_fields(self):
+        required_fields = [
+            "shop_date_schedule",
+            "no_of_pieces",
+            "total_sqft",
+            "wj_linft",
+            "edging_linft",
+            "cnc_linft",
+            "miter_linft",
+        ]
+        for field_name in required_fields:
+            if getattr(self, field_name) is None:
+                raise ValueError(f"{field_name} required")
+        return self
 
 
 class CutListUpdate(BaseModel):

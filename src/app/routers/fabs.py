@@ -2088,6 +2088,109 @@ async def get_fab(
     install_scheduling_map = await _batch_load_install_scheduling_responses(db, [fab_id])
     fab_dict["install_details"] = install_scheduling_map.get(fab_id)
     fab_dict["has_pending_shop_revision"] = (await _batch_load_pending_shop_revision_flags(db, [fab_id])).get(fab_id, False)
+
+    # Attach full shop revision history (with files) to FAB detail payload.
+    from src.app.database.file import File
+    from sqlalchemy.orm import aliased
+
+    RequesterUser = aliased(User)
+    AssigneeUser = aliased(User)
+    UploaderUser = aliased(User)
+
+    shop_revision_rows = (
+        await db.execute(
+            select(
+                ShopRevision,
+                RequesterUser.first_name.label("requester_first_name"),
+                RequesterUser.last_name.label("requester_last_name"),
+                AssigneeUser.first_name.label("assignee_first_name"),
+                AssigneeUser.last_name.label("assignee_last_name"),
+            )
+            .where(ShopRevision.fab_id == fab_id)
+            .join(RequesterUser, ShopRevision.requested_by == RequesterUser.id, isouter=True)
+            .join(AssigneeUser, ShopRevision.assigned_to == AssigneeUser.id, isouter=True)
+            .order_by(ShopRevision.created_at.desc(), ShopRevision.id.desc())
+        )
+    ).all()
+
+    all_file_ids = set()
+    for revision_row in shop_revision_rows:
+        revision = revision_row[0]
+        if revision.file_ids:
+            all_file_ids.update(
+                int(fid.strip())
+                for fid in revision.file_ids.split(",")
+                if fid.strip().isdigit()
+            )
+
+    files_by_id = {}
+    if all_file_ids:
+        file_rows = (
+            await db.execute(
+                select(File, UploaderUser.first_name, UploaderUser.last_name)
+                .join(UploaderUser, File.uploaded_by == UploaderUser.id, isouter=True)
+                .where(File.id.in_(all_file_ids))
+            )
+        ).all()
+        for file_row in file_rows:
+            file = file_row[0]
+            uploader_first = file_row[1]
+            uploader_last = file_row[2]
+            files_by_id[file.id] = {
+                "id": file.id,
+                "name": file.name,
+                "file_url": f"{BASE_URL}/api/v1/files/{file.id}/view",
+                "file_type": file.file_type,
+                "file_size": file.file_size,
+                "stage": file.stage,
+                "file_design": file.file_design,
+                "stage_name": file.stage_name,
+                "uploaded_by": file.uploaded_by,
+                "uploaded_by_name": f"{uploader_first} {uploader_last}" if uploader_first else None,
+                "created_by": file.uploaded_by,
+                "created_by_name": f"{uploader_first} {uploader_last}" if uploader_first else None,
+                "created_at": file.created_at.isoformat() if file.created_at else None,
+            }
+
+    shop_revisions = []
+    for revision_row in shop_revision_rows:
+        revision = revision_row[0]
+        requester_first = revision_row[1]
+        requester_last = revision_row[2]
+        assignee_first = revision_row[3]
+        assignee_last = revision_row[4]
+
+        revision_files = []
+        if revision.file_ids:
+            ordered_file_ids = [
+                int(fid.strip())
+                for fid in revision.file_ids.split(",")
+                if fid.strip().isdigit()
+            ]
+            revision_files = [files_by_id[file_id] for file_id in ordered_file_ids if file_id in files_by_id]
+
+        shop_revisions.append(
+            {
+                "id": revision.id,
+                "fab_id": revision.fab_id,
+                "revision_note": revision.revision_note,
+                "revision_feedback": revision.revision_feedback,
+                "requested_by": revision.requested_by,
+                "requested_by_name": f"{requester_first} {requester_last}".strip() if requester_first else None,
+                "assigned_to": revision.assigned_to,
+                "assigned_to_name": f"{assignee_first} {assignee_last}".strip() if assignee_first else None,
+                "revision_completed": revision.revision_completed,
+                "completed_at": revision.completed_at.isoformat() if revision.completed_at else None,
+                "created_at": revision.created_at.isoformat() if revision.created_at else None,
+                "updated_at": revision.updated_at.isoformat() if revision.updated_at else None,
+                "updated_by": revision.updated_by,
+                "file_ids": revision.file_ids,
+                "files": revision_files,
+            }
+        )
+
+    fab_dict["shop_revisions"] = shop_revisions
+    fab_dict["latest_shop_revision"] = shop_revisions[0] if shop_revisions else None
     
     # Determine success message based on stage
     message = "Fab fetched successfully"
