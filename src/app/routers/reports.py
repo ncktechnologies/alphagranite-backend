@@ -91,6 +91,7 @@ class InstallationTemplateDashboardPatchRequest(BaseModel):
     sqft_not_installed: Optional[float] = Field(None, alias="sqft not installed")
     sqft_templated: Optional[float] = Field(None, alias="sqft templated")
     sqft_not_templated: Optional[float] = Field(None, alias="sqft not templated")
+    total_work_seconds: Optional[int] = Field(None, alias="total work seconds")
     reason: Optional[str] = None
     duration: Optional[int] = None
 
@@ -3855,11 +3856,15 @@ async def update_owner_installation_template_dashboard(
             db.add(templating_record)
 
         # Update TemplaterJobTimerSession by explicit session ID
-        if request.sqft_templated is not None or request.sqft_not_templated is not None:
+        if (
+            request.sqft_templated is not None
+            or request.sqft_not_templated is not None
+            or request.total_work_seconds is not None
+        ):
             if request.timer_session_id is None:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="timer_session_id is required when updating templater timer session fields",
+                    detail="timer_session_id is required when updating templater timer session fields (sqft_templated, sqft_not_templated, total_work_seconds)",
                 )
 
             query = select(TemplaterJobTimerSession).where(
@@ -3876,6 +3881,8 @@ async def update_owner_installation_template_dashboard(
                     timer_session.sqft_templated = request.sqft_templated
                 if request.sqft_not_templated is not None:
                     timer_session.sqft_not_templated = request.sqft_not_templated
+                if request.total_work_seconds is not None:
+                    timer_session.total_work_seconds = request.total_work_seconds
                 timer_session.updated_at = datetime.now()
                 timer_session.updated_by = current_user.id
                 db.add(timer_session)
@@ -3906,11 +3913,15 @@ async def update_owner_installation_template_dashboard(
             db.add(install_record)
 
         # Update InstallerJobTimerSession by explicit session ID
-        if request.sqft_installed is not None or request.sqft_not_installed is not None:
+        if (
+            request.sqft_installed is not None
+            or request.sqft_not_installed is not None
+            or request.total_work_seconds is not None
+        ):
             if request.timer_session_id is None:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="timer_session_id is required when updating installer timer session fields",
+                    detail="timer_session_id is required when updating installer timer session fields (sqft_installed, sqft_not_installed, total_work_seconds)",
                 )
 
             query = select(InstallerJobTimerSession).where(
@@ -3928,6 +3939,8 @@ async def update_owner_installation_template_dashboard(
                     timer_session.sqft_installed = request.sqft_installed
                 if request.sqft_not_installed is not None:
                     timer_session.sqft_not_installed = request.sqft_not_installed
+                if request.total_work_seconds is not None:
+                    timer_session.total_work_seconds = request.total_work_seconds
                 timer_session.updated_at = datetime.now()
                 timer_session.updated_by = current_user.id
                 db.add(timer_session)
