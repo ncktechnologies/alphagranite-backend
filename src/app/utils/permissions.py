@@ -55,8 +55,8 @@ def PermissionChecker(resource: str, action: str):
                 detail=f"Resource '{resource}' not found"
             )
 
-        # Default baseline: any role-assigned employee can read Employees.
-        if action_menu.code == "employees" and action == "read":
+        # Default baseline: any role-assigned employee can read Employees and Accounts.
+        if action_menu.code in {"employees", "accounts"} and action == "read":
             return current_user
 
         # Check direct permissions for this resource across all user's roles
@@ -156,8 +156,8 @@ async def has_permission(
     if user.is_super_admin:
         return True
 
-    # Default baseline: any role-assigned employee can read Employees.
-    if permission_type == "read" and str(action_menu_name).strip().lower() in {"employees", "employee"}:
+    # Default baseline: any role-assigned employee can read Employees and Accounts.
+    if permission_type == "read" and str(action_menu_name).strip().lower() in {"employees", "employee", "accounts", "account"}:
         role_result = await db.execute(select(UserRole.role_id).where(UserRole.user_id == user_id))
         return bool(role_result.first())
     
