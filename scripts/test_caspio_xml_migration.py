@@ -14,11 +14,18 @@ import asyncio
 import hashlib
 import json
 import os
+import sys
 import uuid
 from collections import defaultdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 import xml.etree.ElementTree as ET
+
+# Make script runnable from either project root or scripts/ directory.
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 from sqlalchemy import text
 from src.app.utils.config import SessionLocal
