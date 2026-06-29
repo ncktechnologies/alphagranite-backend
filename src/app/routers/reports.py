@@ -85,7 +85,10 @@ class InstallationTemplateDashboardPatchRequest(BaseModel):
     job_id: int
     fab_id: Optional[int] = None
     installer_id: Optional[int] = None
+    timer_session_id: Optional[int] = Field(None, gt=0, description="Target timer session ID to update")
     activity_complete: Optional[bool] = Field(None, alias="Activity Complete")
+    sqft_installed: Optional[float] = Field(None, alias="sqft installed")
+    sqft_not_installed: Optional[float] = Field(None, alias="sqft not installed")
     sqft_templated: Optional[float] = Field(None, alias="sqft templated")
     sqft_not_templated: Optional[float] = Field(None, alias="sqft not templated")
     reason: Optional[str] = None
@@ -3828,6 +3831,8 @@ async def update_owner_installation_template_dashboard(
             detail="Invalid type. Must be 'templater' or 'installer'",
         )
 
+    updated_timer_session = None
+
     if request_type == "templater":
         # Update Templating records for all FABs under this job
         fab_ids_query = select(Fab.id).where(Fab.job_id == request.job_id)
@@ -3849,14 +3854,22 @@ async def update_owner_installation_template_dashboard(
             templating_record.updated_by = current_user.id
             db.add(templating_record)
 
-        # Update TemplaterJobTimerSession
+        # Update TemplaterJobTimerSession by explicit session ID
         if request.sqft_templated is not None or request.sqft_not_templated is not None:
+            if request.timer_session_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="timer_session_id is required when updating templater timer session fields",
+                )
+
             query = select(TemplaterJobTimerSession).where(
-                TemplaterJobTimerSession.job_id == request.job_id
+                TemplaterJobTimerSession.id == request.timer_session_id,
+                TemplaterJobTimerSession.job_id == request.job_id,
             )
             if request.installer_id:
                 query = query.where(TemplaterJobTimerSession.templater_id == request.installer_id)
-            query = query.order_by(TemplaterJobTimerSession.id.desc())
+            if request.fab_id is not None:
+                query = query.where(TemplaterJobTimerSession.fab_id == request.fab_id)
             timer_session = (await db.execute(query)).scalars().first()
             if timer_session:
                 if request.sqft_templated is not None:
@@ -3866,6 +3879,12 @@ async def update_owner_installation_template_dashboard(
                 timer_session.updated_at = datetime.now()
                 timer_session.updated_by = current_user.id
                 db.add(timer_session)
+                updated_timer_session = timer_session
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Templater timer session not found for the provided timer_session_id",
+                )
 
     else:  # request_type == "installer"
         # Update InstallCompletion records for all FABs under this job
@@ -3885,6 +3904,39 @@ async def update_owner_installation_template_dashboard(
             install_record.updated_at = datetime.now()
             install_record.updated_by = current_user.id
             db.add(install_record)
+
+        # Update InstallerJobTimerSession by explicit session ID
+        if request.sqft_installed is not None or request.sqft_not_installed is not None:
+            if request.timer_session_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="timer_session_id is required when updating installer timer session fields",
+                )
+
+            query = select(InstallerJobTimerSession).where(
+                InstallerJobTimerSession.id == request.timer_session_id,
+                InstallerJobTimerSession.job_id == request.job_id,
+            )
+            if request.installer_id:
+                query = query.where(InstallerJobTimerSession.installer_id == request.installer_id)
+            if request.fab_id is not None:
+                query = query.where(InstallerJobTimerSession.fab_id == request.fab_id)
+
+            timer_session = (await db.execute(query)).scalars().first()
+            if timer_session:
+                if request.sqft_installed is not None:
+                    timer_session.sqft_installed = request.sqft_installed
+                if request.sqft_not_installed is not None:
+                    timer_session.sqft_not_installed = request.sqft_not_installed
+                timer_session.updated_at = datetime.now()
+                timer_session.updated_by = current_user.id
+                db.add(timer_session)
+                updated_timer_session = timer_session
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Installer timer session not found for the provided timer_session_id",
+                )
 
     await db.commit()
 
@@ -3909,6 +3961,17 @@ async def update_owner_installation_template_dashboard(
                 for r in templating_records
             ],
         }
+        if updated_timer_session is not None:
+            updated_data["updated_timer_session"] = {
+                "id": updated_timer_session.id,
+                "job_id": updated_timer_session.job_id,
+                "fab_id": updated_timer_session.fab_id,
+                "templater_id": updated_timer_session.templater_id,
+                "sqft_templated": updated_timer_session.sqft_templated,
+                "sqft_not_templated": updated_timer_session.sqft_not_templated,
+                "updated_at": updated_timer_session.updated_at.isoformat() if updated_timer_session.updated_at else None,
+                "updated_by": updated_timer_session.updated_by,
+            }
     else:  # request_type == "installer"
         install_records = (await db.execute(
             select(InstallCompletion).join(Fab, Fab.id == InstallCompletion.fab_id).where(Fab.job_id == request.job_id)
@@ -3929,6 +3992,17 @@ async def update_owner_installation_template_dashboard(
                 for r in install_records
             ],
         }
+        if updated_timer_session is not None:
+            updated_data["updated_timer_session"] = {
+                "id": updated_timer_session.id,
+                "job_id": updated_timer_session.job_id,
+                "fab_id": updated_timer_session.fab_id,
+                "installer_id": updated_timer_session.installer_id,
+                "sqft_installed": updated_timer_session.sqft_installed,
+                "sqft_not_installed": updated_timer_session.sqft_not_installed,
+                "updated_at": updated_timer_session.updated_at.isoformat() if updated_timer_session.updated_at else None,
+                "updated_by": updated_timer_session.updated_by,
+            }
 
     return success_response(updated_data, "Dashboard record updated successfully")
 
