@@ -220,8 +220,43 @@ async def _exists(db, query: str, params: Dict[str, Any]) -> bool:
     return rs.first() is not None
 
 
+async def _table_exists(db, table_name: str) -> bool:
+    rs = await db.execute(
+        text("SELECT to_regclass(:table_name)"),
+        {"table_name": table_name},
+    )
+    return rs.scalar_one_or_none() is not None
+
+
 async def run_preflight_checks(db, cfg: Dict[str, int]) -> List[str]:
     errors: List[str] = []
+
+    required_tables = [
+        "users",
+        "status",
+        "stone_types",
+        "stone_colors",
+        "stone_thickness",
+        "edges",
+        "work_stations",
+        "planning_sections",
+    ]
+
+    missing_tables: List[str] = []
+    for table_name in required_tables:
+        if not await _table_exists(db, table_name):
+            missing_tables.append(table_name)
+
+    if missing_tables:
+        errors.append(
+            "Database schema is incomplete. Missing table(s): "
+            + ", ".join(missing_tables)
+        )
+        errors.append(
+            "Run schema setup/migrations first (e.g., scripts/auto_migrate.py or your deployment migration step), "
+            "and verify DATABASE_URL points to the intended app database."
+        )
+        return errors
 
     if not await _exists(db, "SELECT 1 FROM users WHERE id=:id", {"id": cfg["user_id"]}):
         errors.append(f"default-user-id {cfg['user_id']} not found in users")
@@ -702,7 +737,14 @@ async def run_migration(args):
     stats: Dict[str, int] = defaultdict(int)
 
     async with SessionLocal() as db:
-        preflight_errors = await run_preflight_checks(db, cfg)
+        try:
+            preflight_errors = await run_preflight_checks(db, cfg)
+        except Exception as exc:
+            print("Preflight check could not query the database.")
+            print(f"Reason: {exc}")
+            print("Verify DATABASE_URL and ensure schema migrations have been applied.")
+            await db.rollback()
+            return
 
         if preflight_errors:
             print("Preflight check failed:")
