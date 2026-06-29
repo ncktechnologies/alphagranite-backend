@@ -144,7 +144,7 @@ async def ensure_key_map_table(db) -> None:
       run_id UUID NOT NULL,
       source_system VARCHAR(50) NOT NULL DEFAULT 'CASPIO',
       source_table VARCHAR(128) NOT NULL,
-      source_pk VARCHAR(256) NOT NULL,
+      source_pk TEXT NOT NULL,
       source_natural_key VARCHAR(512),
       target_table VARCHAR(128) NOT NULL,
       target_pk BIGINT,
