@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Form
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Form, UploadFile, File as FastAPIFile
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -413,36 +413,112 @@ async def complete_shop_revision(
     return success_response(_serialize_shop_revision(revision), "Shop revision completed successfully")
 
 
-@router.post("/{shop_revision_id}/add-file", response_model=SuccessResponse[None])
+@router.post(
+    "/{shop_revision_id}/add-file",
+    response_model=SuccessResponse[dict],
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["files"],
+                        "properties": {
+                            "files": {
+                                "type": "array",
+                                "items": {"type": "string", "format": "binary"},
+                            },
+                            "stage": {"type": "string"},
+                            "file_design": {"type": "string"},
+                            "stage_name": {"type": "string"},
+                        },
+                    }
+                }
+            },
+            "required": True,
+        }
+    },
+)
+@router.post(
+    "/{shop_revision_id}/files",
+    response_model=SuccessResponse[dict],
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["files"],
+                        "properties": {
+                            "files": {
+                                "type": "array",
+                                "items": {"type": "string", "format": "binary"},
+                            },
+                            "stage": {"type": "string"},
+                            "file_design": {"type": "string"},
+                            "stage_name": {"type": "string"},
+                        },
+                    }
+                }
+            },
+            "required": True,
+        }
+    },
+)
 async def add_file_to_shop_revision(
     shop_revision_id: int,
-    file_id: int,
+    request: Request,
+    files: List[UploadFile] = FastAPIFile(...),
+    stage: Optional[str] = Form(None),
     file_design: Optional[str] = Form(None, description="Design name or description for the file"),
     stage_name: Optional[str] = Form(None, description="Stage name associated with the file"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Add file to shop revision."""
+    """Upload files and attach them to a shop revision."""
     result = await db.execute(select(ShopRevision).where(ShopRevision.id == shop_revision_id))
     shop_revision = result.scalar_one_or_none()
 
     if not shop_revision:
         raise error_response("Shop revision not found", 404)
 
-    if shop_revision.file_ids:
-        file_ids_list = shop_revision.file_ids.split(",")
-        if str(file_id) not in file_ids_list:
-            file_ids_list.append(str(file_id))
-            shop_revision.file_ids = ",".join(file_ids_list)
-    else:
-        shop_revision.file_ids = str(file_id)
+    uploaded_file_ids: List[int] = []
+    uploaded_files_info: List[dict] = []
+
+    for upload in files:
+        uploaded_file = await FileService.upload_file(
+            db=db,
+            file=upload,
+            user_id=current_user.id,
+            directory="uploads",
+            file_type=upload.content_type,
+            file_design=file_design,
+            stage_name=stage_name or stage,
+            fab_id=shop_revision.fab_id,
+            request=request,
+        )
+        uploaded_file_ids.append(uploaded_file["id"])
+        uploaded_files_info.append(uploaded_file)
+
+    existing_file_ids = shop_revision.file_ids.split(",") if shop_revision.file_ids else []
+    existing_file_ids.extend([str(file_id) for file_id in uploaded_file_ids])
+    shop_revision.file_ids = ",".join(existing_file_ids)
 
     shop_revision.updated_at = utc_now()
     shop_revision.updated_by = current_user.id
+    db.add(shop_revision)
 
     await db.commit()
+    await db.refresh(shop_revision)
 
     return success_response(
-        {"file_id": file_id, "file_design": file_design, "stage_name": stage_name},
-        "File added to shop revision successfully",
+        {
+            "file_ids": uploaded_file_ids,
+            "files": uploaded_files_info,
+            "total_files": len(existing_file_ids),
+            "stage": stage,
+            "file_design": file_design,
+            "stage_name": stage_name,
+        },
+        "Files uploaded successfully",
     )

@@ -4,7 +4,7 @@ from sqlalchemy.orm import joinedload
 from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from typing import List, Optional, Dict, Any
-from sqlalchemy import select, func, and_, or_, delete
+from sqlalchemy import select, func, and_, or_, delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.database.role import Role
@@ -1030,7 +1030,7 @@ class RoleService:
         current_user_id: int
     ):
         """
-        Delete a role (set status to deleted)
+        Delete a role (hard delete)
         
         Args:
             db: Database session
@@ -1075,9 +1075,16 @@ class RoleService:
             )
         
         try:
-            # Cleanup any stale member links before marking role as deleted.
+            # Cleanup any stale member links before deleting the role row.
             await db.execute(
                 delete(UserRole).where(UserRole.role_id == role_id)
+            )
+
+            # Clear legacy direct role pointers on users.
+            await db.execute(
+                update(User)
+                .where(User.role_id == role_id)
+                .values(role_id=None)
             )
 
             # Cleanup role permissions and remove orphaned permissions that are
@@ -1106,13 +1113,9 @@ class RoleService:
                         delete(Permission).where(Permission.id.in_(orphan_permission_ids))
                     )
 
-            # Update status to deleted (3)
-            role.status = 3  # 3 = Deleted
-            role.updated_at = utc_now()
-            
-            db.add(role)
+            # Hard-delete the role row.
+            await db.delete(role)
             await db.commit()
-            await db.refresh(role)
             
             # Save audit trail
             await save_audit_trail(
