@@ -134,6 +134,9 @@ def _active_shop_cut_plan_visibility_filter():
     """Visibility for current_stage=shop listing.
 
     Rules:
+        - Only include FABs where shop_est_completion_date is NULL.
+            Once shop_est_completion_date is set, FAB should not appear in
+            current_stage=shop listing.
     - Include FABs in current_stage=shop while any shop plan is incomplete (<100),
       or when there are no shop plans yet.
     - Also include FABs still in current_stage=cut_list when cutlist_complete=true.
@@ -172,6 +175,7 @@ def _active_shop_cut_plan_visibility_filter():
     any_stage_with_incomplete_shop_plans = any_incomplete_shop_plan_exists
 
     return and_(
+        Fab.shop_est_completion_date.is_(None),
         or_(
             shop_stage_visibility,
             cut_list_ready_for_shop_visibility,
