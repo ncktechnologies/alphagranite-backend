@@ -102,7 +102,6 @@ async def create_employee(
         data=data,
         current_user_id=current_user.id,
         profile_image_id=profile_image_id,
-        hcp_employee_id=hcp_employee_id,
         background_tasks=background_tasks
     )
     # Diagnostic log: show what the service returned before enrichment
