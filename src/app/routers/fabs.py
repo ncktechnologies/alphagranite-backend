@@ -5490,6 +5490,9 @@ async def get_fabs_cost_of_stone_queue(
     limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
     search: Optional[str] = Query(None, description="Search value"),
     type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, fab_info"),
+    date_filter: Optional[str] = Query(None, description="Predefined date filter: today, this_week, last_week, this_month, last_month, next_week, next_month"),
+    sct_completed_start: Optional[date] = Query(None, description="Filter by sct_completed_date on or after this date (YYYY-MM-DD)"),
+    sct_completed_end: Optional[date] = Query(None, description="Filter by sct_completed_date on or before this date (YYYY-MM-DD)"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -5542,6 +5545,14 @@ async def get_fabs_cost_of_stone_queue(
                 func.upper(sa.func.trim(Fab.fab_type)).notin_(["RESURFACE", "PUNCHOUT-AG", "PUNCHOUT-BILLABLE"]),
             ),
         )
+    )
+
+    base_query = _apply_date_field_filter(
+        base_query,
+        Fab.sct_completed_date,
+        date_filter,
+        sct_completed_start,
+        sct_completed_end,
     )
 
     search_filter = None
