@@ -269,6 +269,53 @@ async def get_install_scheduling_by_fab(
     )
 
 
+@router.patch("/install-scheduling/fab/{fab_id}/unmark", response_model=SuccessResponse[InstallSchedulingResponse])
+async def unmark_install_scheduling(
+    fab_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Unmark (uncheck) install scheduling for a fab by reverting is_completed to False."""
+
+    result = await db.execute(select(InstallScheduling).where(InstallScheduling.fab_id == fab_id))
+    install_scheduling = result.scalar_one_or_none()
+
+    if not install_scheduling:
+        raise error_response("Install Scheduling not found for this fab", 404)
+
+    if not install_scheduling.is_completed:
+        raise error_response("Install Scheduling is not marked as completed", 400)
+
+    install_scheduling.is_completed = False
+    install_scheduling.updated_at = datetime.now()
+    install_scheduling.updated_by = current_user.id
+
+    # Revert the FAB stage back to install_scheduling
+    fab = (await db.execute(select(Fab).where(Fab.id == fab_id))).scalar_one_or_none()
+    if fab:
+        fab.updated_at = datetime.now()
+        fab.updated_by = current_user.id
+
+    await db.commit()
+    await db.refresh(install_scheduling)
+
+    installer_name, extra_crew_1_name, extra_crew_2_name, extra_crew_3_name = await _resolve_install_crew_names(
+        db,
+        install_scheduling.installer_id,
+        install_scheduling.extra_crew_1_id,
+        install_scheduling.extra_crew_2_id,
+        install_scheduling.extra_crew_3_id,
+    )
+
+    response_data = install_scheduling.model_dump()
+    response_data["installer_name"] = installer_name
+    response_data["extra_crew_1_name"] = extra_crew_1_name
+    response_data["extra_crew_2_name"] = extra_crew_2_name
+    response_data["extra_crew_3_name"] = extra_crew_3_name
+
+    return success_response(response_data, "Install Scheduling unmarked successfully")
+
+
 @router.patch("/install-completion/fab/{fab_id}/unmark", response_model=SuccessResponse[InstallCompletionResponse])
 async def unmark_install_completion(
     fab_id: int,
@@ -289,6 +336,14 @@ async def unmark_install_completion(
     install_completion.is_completed = False
     install_completion.updated_at = datetime.now()
     install_completion.updated_by = current_user.id
+
+    # Revert the FAB stage back to install_completion
+    fab = (await db.execute(select(Fab).where(Fab.id == fab_id))).scalar_one_or_none()
+    if fab:
+        fab.current_stage = "install_completion"
+        fab.next_stage = None  # It's the last stage
+        fab.updated_at = datetime.now()
+        fab.updated_by = current_user.id
 
     await db.commit()
     await db.refresh(install_completion)

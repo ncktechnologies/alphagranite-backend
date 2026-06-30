@@ -2193,6 +2193,9 @@ async def get_fab(
     fab_dict["latest_shop_revision"] = shop_revisions[0] if shop_revisions else None
     
     # Determine success message based on stage
+    # Add operator files
+    fab_dict["operator_files"] = await _get_operator_files_for_fab(db, fab_id)
+
     message = "Fab fetched successfully"
     if fab_dict.get("current_stage") == "templating" and fab_dict.get("updated_at") is None:
         # Just created (no updates yet)
@@ -3934,6 +3937,42 @@ def _convert_fab_row_to_dict(row: tuple) -> dict:
     return fab_dict
 
 
+async def _get_operator_files_for_fab(db: AsyncSession, fab_id: int) -> List[dict]:
+    """Get all files uploaded by operators for a given FAB."""
+    from src.app.database.file import File
+    from sqlalchemy.orm import aliased
+
+    UploaderUser = aliased(User)
+
+    file_rows = (
+        await db.execute(
+            select(File, UploaderUser.first_name, UploaderUser.last_name)
+            .join(UploaderUser, File.uploaded_by == UploaderUser.id, isouter=True)
+            .where(File.fab_id == fab_id, File.file_type == "qa")
+            .order_by(File.created_at.desc(), File.id.desc())
+        )
+    ).all()
+
+    operator_files = []
+    for file_row in file_rows:
+        file, uploader_first, uploader_last = file_row
+        operator_files.append(
+            {
+                "id": file.id,
+                "name": file.name,
+                "file_url": f"{BASE_URL}/api/v1/files/{file.id}/view",
+                "file_type": file.file_type,
+                "file_size": file.file_size,
+                "stage_name": file.stage_name,
+                "uploaded_by": file.uploaded_by,
+                "uploaded_by_name": f"{uploader_first} {uploader_last}".strip() if uploader_first else None,
+                "created_at": file.created_at.isoformat() if file.created_at else None,
+            }
+        )
+
+    return operator_files
+
+
 async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) -> None:
     """Batch load and attach notes, draft, sales CT, and slabsmith data to fab dictionaries."""
     fab_ids = [fab["id"] for fab in fab_dicts]
@@ -5451,6 +5490,9 @@ async def get_fabs_cost_of_stone_queue(
     limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
     search: Optional[str] = Query(None, description="Search value"),
     type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, fab_info"),
+    date_filter: Optional[str] = Query(None, description="Predefined date filter: today, this_week, last_week, this_month, last_month, next_week, next_month"),
+    sct_completed_start: Optional[date] = Query(None, description="Filter by sct_completed_date on or after this date (YYYY-MM-DD)"),
+    sct_completed_end: Optional[date] = Query(None, description="Filter by sct_completed_date on or before this date (YYYY-MM-DD)"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -5503,6 +5545,14 @@ async def get_fabs_cost_of_stone_queue(
                 func.upper(sa.func.trim(Fab.fab_type)).notin_(["RESURFACE", "PUNCHOUT-AG", "PUNCHOUT-BILLABLE"]),
             ),
         )
+    )
+
+    base_query = _apply_date_field_filter(
+        base_query,
+        Fab.sct_completed_date,
+        date_filter,
+        sct_completed_start,
+        sct_completed_end,
     )
 
     search_filter = None
