@@ -293,8 +293,6 @@ async def unmark_install_scheduling(
     # Revert the FAB stage back to install_scheduling
     fab = (await db.execute(select(Fab).where(Fab.id == fab_id))).scalar_one_or_none()
     if fab:
-        fab.current_stage = "install_scheduling"
-        fab.next_stage = "install_completion"
         fab.updated_at = datetime.now()
         fab.updated_by = current_user.id
 
