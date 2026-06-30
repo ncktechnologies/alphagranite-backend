@@ -36,6 +36,9 @@ class User(SQLModel, table=True):
     is_first_login: bool = Field(default=True)
     role_id: Optional[int] = Field(default=None)
     email_notifications_enabled: bool = Field(default=True)
+
+    #Hill Country Payroll Employee ID
+    hcp_employee_id: Optional[str] = Field(default=None, max_length=255)
     
     # Relationship to Department
     department_rel: Optional["Department"] = Relationship(back_populates="users")
