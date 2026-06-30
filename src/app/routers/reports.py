@@ -4818,11 +4818,17 @@ async def get_owner_daily_completion_report(
     """Daily completion rollup by stage (Template, Draft, SCT, Final, Resurface, Cut, Shop Fab)."""
     _ = current_user
 
-    today = date.today()
-    effective_to = to_date or from_date or today
-    effective_from = from_date or to_date or (effective_to - timedelta(days=6))
-    if effective_from > effective_to:
-        effective_from, effective_to = effective_to, effective_from
+    # Corrected date range logic
+    if from_date and to_date:
+        effective_from, effective_to = (from_date, to_date) if from_date <= to_date else (to_date, from_date)
+    elif from_date:
+        effective_from, effective_to = from_date, date.today()
+    elif to_date:
+        effective_from, effective_to = date.min, to_date
+    else:
+        # Default to the last 7 days if no dates are provided
+        effective_to = date.today()
+        effective_from = effective_to - timedelta(days=6)
 
     def _date_key(value) -> Optional[str]:
         if value is None:
