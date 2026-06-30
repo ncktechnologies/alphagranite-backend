@@ -19,6 +19,7 @@ class EmployeeCreate(BaseModel):
     home_address: Optional[str] = Field(None)
     profile_image_id: Optional[int] = Field(None)
     role_id: Optional[int] = Field(None)
+    hcp_employee_id: Optional[str] = Field(None, max_length=255)
 
 class EmployeeResponse(BaseModel):
     """Schema for employee response (represents a user record from the users table)"""
