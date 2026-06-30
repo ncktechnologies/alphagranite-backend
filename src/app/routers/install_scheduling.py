@@ -339,6 +339,14 @@ async def unmark_install_completion(
     install_completion.updated_at = datetime.now()
     install_completion.updated_by = current_user.id
 
+    # Revert the FAB stage back to install_completion
+    fab = (await db.execute(select(Fab).where(Fab.id == fab_id))).scalar_one_or_none()
+    if fab:
+        fab.current_stage = "install_completion"
+        fab.next_stage = None  # It's the last stage
+        fab.updated_at = datetime.now()
+        fab.updated_by = current_user.id
+
     await db.commit()
     await db.refresh(install_completion)
 
