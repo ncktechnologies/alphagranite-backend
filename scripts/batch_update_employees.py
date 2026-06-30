@@ -22,8 +22,6 @@ def get_existing_employees():
             sys.exit(1)
             
         res_json = response.json()
-        
-        # Correctly step into the double nested wrapper: res_json["data"]["data"]
         if isinstance(res_json, dict) and "data" in res_json:
             inner_data = res_json["data"]
             if isinstance(inner_data, dict) and "data" in inner_data:
@@ -37,19 +35,28 @@ def get_existing_employees():
 
 
 def find_matching_employee(db_employees, file_email, file_first, file_last):
-    """Finds a matching employee in the database by email and name validation."""
+    """Finds a matching employee in the database by email and precise name checking."""
     file_email_clean = file_email.strip().lower()
     file_first_clean = file_first.strip().lower()
+    file_last_clean = file_last.strip().lower()
+
+    # Shared team emails list
+    shared_emails = [
+        "odyssey@alphagraniteaustin.com", 
+        "install@alphagraniteaustin.com", 
+        "templates@alphagraniteaustin.com", 
+        "workshop@alphagraniteaustin.com"
+    ]
 
     for emp in db_employees:
         db_email = str(emp.get("email", "")).strip().lower()
         db_first = str(emp.get("first_name", "")).strip().lower()
+        db_last = str(emp.get("last_name", "")).strip().lower()
 
-        # Match exactly on email
         if db_email == file_email_clean:
-            # Handle shared team emails (like odyssey@...) safely by checking the first name match
-            if file_email_clean in ["odyssey@alphagraniteaustin.com", "install@alphagraniteaustin.com", "templates@alphagraniteaustin.com", "workshop@alphagraniteaustin.com"]:
-                if file_first_clean in db_first or db_first in file_first_clean:
+            if file_email_clean in shared_emails:
+                # Require precise first name match for shared team accounts
+                if file_first_clean == db_first or file_first_clean in db_first:
                     return emp["id"]
             else:
                 return emp["id"]
@@ -57,12 +64,10 @@ def find_matching_employee(db_employees, file_email, file_first, file_last):
 
 
 def update_employee_ids():
-    # 1. Fetch the raw employee array list
     db_employees = get_existing_employees()
     print(f"Successfully cached {len(db_employees)} system records.")
     
     try:
-        # Read excel and drop the header decorative row
         df = pd.read_excel(EXCEL_FILE_PATH, sheet_name="report", skiprows=1)
 
         success_count = 0
@@ -76,7 +81,6 @@ def update_employee_ids():
             last_name = str(row.get("Last Name", "")).strip()
             email = str(row.get("Emails", "")).strip()
             
-            # Format and clean employee IDs from excel safely
             raw_hcp_id = row.get("Employee Id", "")
             if pd.isna(raw_hcp_id):
                 continue
@@ -89,7 +93,6 @@ def update_employee_ids():
             if not first_name or first_name == "nan" or not email or email == "nan":
                 continue
 
-            # 2. Match utilizing Email + Name correlation fallback checks
             system_id = find_matching_employee(db_employees, email, first_name, last_name)
 
             if not system_id:
@@ -97,15 +100,15 @@ def update_employee_ids():
                 match_failed_count += 1
                 continue
 
+            # CRITICAL: We pass ONLY hcp_employee_id to prevent hitting unsubmitted route fallbacks like 'None'
             payload = {
                 "hcp_employee_id": hcp_id
             }
 
             update_url = f"{BASE_URL}/{system_id}"
-            print(f"🔄 Updating {first_name} {last_name} (System ID: {system_id}) with HCP ID: {hcp_id}... ", end="")
+            print(f"🔄 Updating {first_name} {last_name} (System ID: {system_id}) with correct HCP ID: {hcp_id}... ", end="")
 
-            # Fire PATCH route
-            response = requests.patch(update_url, headers=HEADERS, data=payload)
+            response = requests.put(update_url, headers=HEADERS, data=payload)
 
             if response.status_code in [200, 204]:
                 print("✅ Success!")
