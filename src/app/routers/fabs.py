@@ -2193,6 +2193,9 @@ async def get_fab(
     fab_dict["latest_shop_revision"] = shop_revisions[0] if shop_revisions else None
     
     # Determine success message based on stage
+    # Add operator files
+    fab_dict["operator_files"] = await _get_operator_files_for_fab(db, fab_id)
+
     message = "Fab fetched successfully"
     if fab_dict.get("current_stage") == "templating" and fab_dict.get("updated_at") is None:
         # Just created (no updates yet)
@@ -3932,6 +3935,42 @@ def _convert_fab_row_to_dict(row: tuple) -> dict:
     _add_total_cut_lnft(fab_dict)
 
     return fab_dict
+
+
+async def _get_operator_files_for_fab(db: AsyncSession, fab_id: int) -> List[dict]:
+    """Get all files uploaded by operators for a given FAB."""
+    from src.app.database.file import File
+    from sqlalchemy.orm import aliased
+
+    UploaderUser = aliased(User)
+
+    file_rows = (
+        await db.execute(
+            select(File, UploaderUser.first_name, UploaderUser.last_name)
+            .join(UploaderUser, File.uploaded_by == UploaderUser.id, isouter=True)
+            .where(File.fab_id == fab_id, File.file_type == "qa")
+            .order_by(File.created_at.desc(), File.id.desc())
+        )
+    ).all()
+
+    operator_files = []
+    for file_row in file_rows:
+        file, uploader_first, uploader_last = file_row
+        operator_files.append(
+            {
+                "id": file.id,
+                "name": file.name,
+                "file_url": f"{BASE_URL}/api/v1/files/{file.id}/view",
+                "file_type": file.file_type,
+                "file_size": file.file_size,
+                "stage_name": file.stage_name,
+                "uploaded_by": file.uploaded_by,
+                "uploaded_by_name": f"{uploader_first} {uploader_last}".strip() if uploader_first else None,
+                "created_at": file.created_at.isoformat() if file.created_at else None,
+            }
+        )
+
+    return operator_files
 
 
 async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) -> None:
