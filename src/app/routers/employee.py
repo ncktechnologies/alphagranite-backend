@@ -35,6 +35,7 @@ async def create_employee(
     gender: str = Form(None),
     role_id: Optional[int] = Form(None),
     profile_image: UploadFile = File(None),
+    hcp_employee_id: Optional[str] = Form(None),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -88,7 +89,8 @@ async def create_employee(
         gender=gender if gender and gender != "string" else None,
         home_address=None,
         profile_image_id=profile_image_id,
-        role_id=role_id
+        role_id=role_id,
+        hcp_employee_id=hcp_employee_id
     )
     
     print(f"[CREATE ROUTER] EmployeeCreate data object created with profile_image_id: {data.profile_image_id}")
@@ -100,6 +102,7 @@ async def create_employee(
         data=data,
         current_user_id=current_user.id,
         profile_image_id=profile_image_id,
+        hcp_employee_id=hcp_employee_id,
         background_tasks=background_tasks
     )
     # Diagnostic log: show what the service returned before enrichment
@@ -170,6 +173,7 @@ async def update_employee(
     gender: Optional[str] = Form(None),
     home_address: Optional[str] = Form(None),
     role_id: Optional[str] = Form(None),
+    hcp_employee_id: Optional[str] = Form(None),
     profile_image: UploadFile = File(None),
     current_user: User = Depends(PermissionChecker("employees", "update")),
     db: Session = Depends(get_db)
@@ -215,6 +219,8 @@ async def update_employee(
         update_dict["phone_number"] = phone_number
     if dep_id is not None:
         update_dict["department_id"] = dep_id
+    if hcp_employee_id not in (None, "", "null"):
+        update_dict["hcp_employee_id"] = hcp_employee_id
     if gender not in (None, "", "null"):
         update_dict["gender"] = gender
     if home_address not in (None, "", "null"):  # ← This is the key fix!

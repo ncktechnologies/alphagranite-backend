@@ -94,6 +94,7 @@ class EmployeeService:
                 home_address=data.home_address,
                 profile_image_id=final_profile_image_id,
                 role_id=data.role_id,
+                hcp_employee_id=data.hcp_employee_id,
                 status=1,
                 is_super_admin=False,
                 is_first_login=True,
@@ -180,6 +181,7 @@ class EmployeeService:
         
         # Use profile_image_id from data object if present, otherwise use parameter
         final_profile_image_id = data.profile_image_id if hasattr(data, 'profile_image_id') and data.profile_image_id is not None else profile_image_id
+        final_hcp_employee_id = data.hcp_employee_id if hasattr(data, 'hcp_employee_id') and data.hcp_employee_id is not None else None
         
         result = await db.execute(select(User).where(User.id == employee_id))
         employee = result.scalars().first()
@@ -248,6 +250,11 @@ class EmployeeService:
         if final_profile_image_id is not None:
             employee.profile_image_id = final_profile_image_id
             logger.info(f"[UPDATE] Setting profile_image_id to {final_profile_image_id}")
+        
+        # Update hcp_employee_id if provided (use final_hcp_employee_id which prioritizes data object)
+        if final_hcp_employee_id is not None:
+            employee.hcp_employee_id = final_hcp_employee_id
+            logger.info(f"[UPDATE] Setting hcp_employee_id to {final_hcp_employee_id}")
         
         employee.updated_at = datetime.now()
         
