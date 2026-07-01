@@ -17,6 +17,7 @@ from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import error_response, success_response
 from sqlalchemy.exc import IntegrityError
+from src.app.service.background import save_audit_event
 
 
 router = APIRouter()
@@ -62,6 +63,24 @@ async def create_account(
         )
         
         db.add(account)
+        await db.flush()
+
+        await save_audit_event(
+            db=db,
+            operation="CREATE",
+            resource_type="account",
+            user_id=current_user.id,
+            message=f"Created account {account.name} (ID: {account.id})",
+            record_id=account.id,
+            new_values={
+                "name": account.name,
+                "account_number": account.account_number,
+                "status_id": account.status_id,
+            },
+            activity_table_name="accounts",
+            auto_commit=False,
+        )
+
         await db.commit()
         await db.refresh(account)
     
@@ -176,11 +195,26 @@ async def update_account(
     
     # Update fields
     update_data = account_data.model_dump(exclude_unset=True)
+    old_values = {field: getattr(account, field) for field in update_data.keys()}
     for field, value in update_data.items():
         setattr(account, field, value)
     
     account.updated_at = datetime.now()
     account.updated_by = current_user.id
+
+    await save_audit_event(
+        db=db,
+        operation="UPDATE",
+        resource_type="account",
+        user_id=current_user.id,
+        message=f"Updated account {account.name} (ID: {account.id})",
+        record_id=account.id,
+        changed_fields=list(update_data.keys()),
+        old_values=old_values,
+        new_values={field: getattr(account, field) for field in update_data.keys()},
+        activity_table_name="accounts",
+        auto_commit=False,
+    )
     
     await db.commit()
     await db.refresh(account)
@@ -214,6 +248,24 @@ async def delete_account(
 
     # Permanently delete the account record instead of marking status.
     # Use `await db.delete(...)` with AsyncSession and commit the change.
+    deleted_snapshot = {
+        "id": account.id,
+        "name": account.name,
+        "account_number": account.account_number,
+    }
+
+    await save_audit_event(
+        db=db,
+        operation="DELETE",
+        resource_type="account",
+        user_id=current_user.id,
+        message=f"Deleted account {account.name} (ID: {account.id})",
+        record_id=account.id,
+        old_values=deleted_snapshot,
+        activity_table_name="accounts",
+        auto_commit=False,
+    )
+
     await db.delete(account)
     await db.commit()
 

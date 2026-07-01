@@ -33,6 +33,7 @@ from src.app.interface.response_wrappers import SuccessResponse
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.utils.helpers import error_response, success_response
 from src.app.utils.timer_guards import assert_no_active_timer_session
+from src.app.service.background import save_audit_event
 
 router = APIRouter(
     prefix="/job-timers",
@@ -41,6 +42,32 @@ router = APIRouter(
 
 INSTALLER_ROLE_LEAD = "lead"
 INSTALLER_ROLE_EXTRA_CREW = "extra_crew"
+
+
+async def _audit_timer_action(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    resource_type: str,
+    session_id: int,
+    action: str,
+    message: str,
+    old_values: Optional[dict] = None,
+    new_values: Optional[dict] = None,
+) -> None:
+    await save_audit_event(
+        db=db,
+        operation="TIMER_ACTION",
+        resource_type=resource_type,
+        user_id=user_id,
+        message=message,
+        record_id=session_id,
+        changed_fields=["status"] if old_values and new_values and old_values.get("status") != new_values.get("status") else None,
+        old_values=old_values,
+        new_values=new_values,
+        activity_table_name=resource_type,
+        auto_commit=False,
+    )
 
 
 async def _get_fab_and_job_id(db: AsyncSession, fab_id: int) -> tuple[Fab, int]:
@@ -249,7 +276,7 @@ async def start_installer_job_timer(
     )
     
     db.add(new_session)
-    await db.commit()
+    await db.flush()
     await db.refresh(new_session)
     
     # Create event
@@ -263,6 +290,18 @@ async def start_installer_job_timer(
         note=payload.note if payload else None,
     )
     db.add(event)
+
+    await _audit_timer_action(
+        db,
+        user_id=current_user.id,
+        resource_type="installer_job_timer",
+        session_id=new_session.id,
+        action="start",
+        message=f"Installer timer started for job {job_id} session {new_session.id}",
+        old_values={"status": None},
+        new_values={"status": "running", "job_id": job_id, "fab_id": fab_id},
+    )
+
     await db.commit()
     
     return success_response(
@@ -299,6 +338,7 @@ async def pause_installer_job_timer(
     
     now = datetime.now()
     
+    old_status = session.status
     # Calculate time for current run segment
     if session.current_run_start_at:
         run_time = (now - session.current_run_start_at).total_seconds()
@@ -328,6 +368,18 @@ async def pause_installer_job_timer(
         note=payload.note if payload else None,
     )
     db.add(event)
+
+    await _audit_timer_action(
+        db,
+        user_id=current_user.id,
+        resource_type="installer_job_timer",
+        session_id=session.id,
+        action="pause",
+        message=f"Installer timer paused for job {job_id} session {session.id}",
+        old_values={"status": old_status},
+        new_values={"status": session.status, "job_id": job_id, "fab_id": session.fab_id},
+    )
+
     await db.commit()
 
     response_data = _serialize_installer_job_timer_session(session)
@@ -367,6 +419,7 @@ async def resume_installer_job_timer(
     
     now = datetime.now()
     
+    old_status = session.status
     # Calculate pause time
     if session.current_pause_start_at:
         pause_time = (now - session.current_pause_start_at).total_seconds()
@@ -396,6 +449,18 @@ async def resume_installer_job_timer(
         note=payload.note if payload else None,
     )
     db.add(event)
+
+    await _audit_timer_action(
+        db,
+        user_id=current_user.id,
+        resource_type="installer_job_timer",
+        session_id=session.id,
+        action="resume",
+        message=f"Installer timer resumed for job {job_id} session {session.id}",
+        old_values={"status": old_status},
+        new_values={"status": session.status, "job_id": job_id, "fab_id": session.fab_id},
+    )
+
     await db.commit()
     
     return success_response(
@@ -438,6 +503,7 @@ async def stop_installer_job_timer(
     
     now = datetime.now()
     
+    old_status = session.status
     # Calculate remaining time
     if session.current_run_start_at:
         run_time = (now - session.current_run_start_at).total_seconds()
@@ -472,6 +538,18 @@ async def stop_installer_job_timer(
         note=payload.note if payload else None,
     )
     db.add(event)
+
+    await _audit_timer_action(
+        db,
+        user_id=current_user.id,
+        resource_type="installer_job_timer",
+        session_id=session.id,
+        action="stop",
+        message=f"Installer timer stopped for job {job_id} session {session.id}",
+        old_values={"status": old_status},
+        new_values={"status": session.status, "job_id": job_id, "fab_id": session.fab_id},
+    )
+
     await db.commit()
 
     response_data = _serialize_installer_job_timer_session(session)
@@ -666,7 +744,7 @@ async def start_templater_job_timer(
     )
     
     db.add(new_session)
-    await db.commit()
+    await db.flush()
     await db.refresh(new_session)
     
     # Create event
@@ -680,6 +758,18 @@ async def start_templater_job_timer(
         note=payload.note if payload else None,
     )
     db.add(event)
+
+    await _audit_timer_action(
+        db,
+        user_id=current_user.id,
+        resource_type="templater_job_timer",
+        session_id=new_session.id,
+        action="start",
+        message=f"Templater timer started for job {job_id} session {new_session.id}",
+        old_values={"status": None},
+        new_values={"status": "running", "job_id": job_id, "fab_id": fab_id},
+    )
+
     await db.commit()
     
     return success_response(
@@ -713,6 +803,7 @@ async def pause_templater_job_timer(
     
     now = datetime.now()
     
+    old_status = session.status
     # Calculate time for current run segment
     if session.current_run_start_at:
         run_time = (now - session.current_run_start_at).total_seconds()
@@ -742,6 +833,18 @@ async def pause_templater_job_timer(
         note=payload.note if payload else None,
     )
     db.add(event)
+
+    await _audit_timer_action(
+        db,
+        user_id=current_user.id,
+        resource_type="templater_job_timer",
+        session_id=session.id,
+        action="pause",
+        message=f"Templater timer paused for job {job_id} session {session.id}",
+        old_values={"status": old_status},
+        new_values={"status": session.status, "job_id": job_id, "fab_id": session.fab_id},
+    )
+
     await db.commit()
 
     response_data = _serialize_templater_job_timer_session(session)
@@ -778,6 +881,7 @@ async def resume_templater_job_timer(
     
     now = datetime.now()
     
+    old_status = session.status
     # Calculate pause time
     if session.current_pause_start_at:
         pause_time = (now - session.current_pause_start_at).total_seconds()
@@ -807,6 +911,18 @@ async def resume_templater_job_timer(
         note=payload.note if payload else None,
     )
     db.add(event)
+
+    await _audit_timer_action(
+        db,
+        user_id=current_user.id,
+        resource_type="templater_job_timer",
+        session_id=session.id,
+        action="resume",
+        message=f"Templater timer resumed for job {job_id} session {session.id}",
+        old_values={"status": old_status},
+        new_values={"status": session.status, "job_id": job_id, "fab_id": session.fab_id},
+    )
+
     await db.commit()
     
     return success_response(
@@ -840,6 +956,7 @@ async def stop_templater_job_timer(
     
     now = datetime.now()
     
+    old_status = session.status
     # Calculate remaining time
     if session.current_run_start_at:
         run_time = (now - session.current_run_start_at).total_seconds()
@@ -874,6 +991,18 @@ async def stop_templater_job_timer(
         note=payload.note if payload else None,
     )
     db.add(event)
+
+    await _audit_timer_action(
+        db,
+        user_id=current_user.id,
+        resource_type="templater_job_timer",
+        session_id=session.id,
+        action="stop",
+        message=f"Templater timer stopped for job {job_id} session {session.id}",
+        old_values={"status": old_status},
+        new_values={"status": session.status, "job_id": job_id, "fab_id": session.fab_id},
+    )
+
     await db.commit()
 
     response_data = _serialize_templater_job_timer_session(session)

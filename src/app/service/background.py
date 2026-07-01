@@ -2,7 +2,7 @@ import os
 import logging
 import smtplib
 import asyncio
-from typing import Optional
+from typing import Optional, Any
 from typing import Sequence
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -113,19 +113,75 @@ async def save_audit_trail(
     ip_address: Optional[str] = None,
     browser: Optional[str] = None,
 ):
-    async with SessionLocal() as session:
+    return await save_audit_event(
+        db=db,
+        operation=activity,
+        resource_type=None,
+        user_id=user_id,
+        message=message,
+        record_id=activity_trace_id,
+        device_id=device_id,
+        ip_address=ip_address,
+        browser=browser,
+    )
+
+
+async def save_audit_event(
+    db: Optional[AsyncSession],
+    operation: str,
+    resource_type: Optional[str],
+    user_id: int,
+    message: str,
+    record_id: Optional[int] = None,
+    changed_fields: Optional[list[str]] = None,
+    old_values: Optional[dict[str, Any]] = None,
+    new_values: Optional[dict[str, Any]] = None,
+    request_path: Optional[str] = None,
+    request_method: Optional[str] = None,
+    response_status_code: Optional[int] = None,
+    device_id: Optional[str] = None,
+    ip_address: Optional[str] = None,
+    browser: Optional[str] = None,
+    activity_table_name: Optional[str] = None,
+    auto_commit: bool = True,
+):
+    """Write a standardized audit event.
+
+    If db is provided, writes and commits using that session for compatibility
+    with existing call sites. If db is None, creates an internal session.
+    """
+
+    async def _write(session: AsyncSession) -> dict[str, Any]:
         audit = AuditTrail(
             activity_message=message,
+            operation=(operation or "unknown")[:50],
             user_id=user_id,
-            record_id=activity_trace_id,
+            resource_type=(resource_type[:100] if resource_type else None),
+            activity_table_name=(activity_table_name[:255] if activity_table_name else None),
+            record_id=record_id,
+            changed_fields=changed_fields,
+            old_values=old_values,
+            new_values=new_values,
+            request_path=(request_path[:500] if request_path else None),
+            request_method=(request_method[:10] if request_method else None),
+            response_status_code=response_status_code,
             device_id=device_id,
             ip_address=ip_address,
             browser=browser,
         )
         session.add(audit)
-        await session.commit()
-        await session.refresh(audit)
+        if auto_commit:
+            await session.commit()
+            await session.refresh(audit)
+        else:
+            await session.flush()
         return {"audit_id": audit.id, "message": "Audit trail saved."}
+
+    if db is not None:
+        return await _write(db)
+
+    async with SessionLocal() as session:
+        return await _write(session)
 
 
 async def send_notification(

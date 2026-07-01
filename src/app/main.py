@@ -1,5 +1,6 @@
 from src.app.middleware.jwt_auth import JWTAuthMiddleware
 from src.app.middleware.request_logger import RequestLoggerMiddleware
+from src.app.middleware.audit_middleware import log_platform_audit_event
 
 
 
@@ -142,6 +143,17 @@ async def some_auth_middleware(request: Request, call_next):
     
     # For other routes, apply the JWT authentication middleware
     return await call_next(request)
+
+
+@app.middleware("http")
+async def platform_audit_middleware(request: Request, call_next):
+    response = await call_next(request)
+    try:
+        await log_platform_audit_event(request, response)
+    except Exception:
+        # Keep the business response path resilient if audit logging fails.
+        pass
+    return response
 
 
 def custom_openapi():
