@@ -47,11 +47,13 @@ async def create_install_completion(
     if existing.scalar_one_or_none():
         raise error_response("Install Completion already exists for this fab", 400)
     
+    resolved_install_date = install_data.install_date or install_data.completion_date
+
     # Create install completion
     install_completion = InstallCompletion(
         fab_id=install_data.fab_id,
         installer_id=install_data.installer_id,
-        install_date=install_data.install_date,
+        install_date=resolved_install_date,
         completion_date=install_data.completion_date,
         total_sqft_installed=install_data.total_sqft_installed,
         customer_signature=install_data.customer_signature,
