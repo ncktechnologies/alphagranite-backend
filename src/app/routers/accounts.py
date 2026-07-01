@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import List, Optional
+import logging
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func
@@ -21,6 +22,7 @@ from src.app.service.background import save_audit_event
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post("/accounts", response_model=SuccessResponse[AccountResponse], status_code=201)
@@ -84,9 +86,24 @@ async def create_account(
         await db.commit()
         await db.refresh(account)
     
-    except IntegrityError:
+    except IntegrityError as e:
         await db.rollback()
-        raise error_response("Missing required fields or invalid values", 422)
+        error_text = str(getattr(e, "orig", e)).lower()
+        logger.exception("Account create integrity error: %s", error_text)
+
+        if "accounts_name_key" in error_text or ("name" in error_text and "unique" in error_text):
+            raise error_response("Account name already exists", 409)
+
+        if "accounts_account_number_key" in error_text or ("account_number" in error_text and "unique" in error_text):
+            raise error_response("Account number already exists", 409)
+
+        if "foreign key" in error_text and "status" in error_text:
+            raise error_response("Default status is not configured. Please seed status values.", 400)
+
+        if "foreign key" in error_text and "created_by" in error_text:
+            raise error_response("Authenticated user is invalid for account creation.", 400)
+
+        raise error_response("Could not create account due to a data conflict", 400)
     
     # Add total_jobs count (new account has 0 jobs)
     account_dict = account.__dict__.copy()
@@ -216,8 +233,21 @@ async def update_account(
         auto_commit=False,
     )
     
-    await db.commit()
-    await db.refresh(account)
+    try:
+        await db.commit()
+        await db.refresh(account)
+    except IntegrityError as e:
+        await db.rollback()
+        error_text = str(getattr(e, "orig", e)).lower()
+        logger.exception("Account update integrity error: %s", error_text)
+
+        if "accounts_name_key" in error_text or ("name" in error_text and "unique" in error_text):
+            raise error_response("Account name already exists", 409)
+
+        if "accounts_account_number_key" in error_text or ("account_number" in error_text and "unique" in error_text):
+            raise error_response("Account number already exists", 409)
+
+        raise error_response("Could not update account due to a data conflict", 400)
     
     # Add total_jobs count
     job_count_result = await db.execute(
