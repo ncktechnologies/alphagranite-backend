@@ -2,8 +2,11 @@ import os
 import logging
 import smtplib
 import asyncio
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Optional, Any
 from typing import Sequence
+from uuid import UUID
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
@@ -22,6 +25,30 @@ logger = logging.getLogger("notification_service")
 # hardcoded credentials and duplicate engine creation which caused
 # authentication errors when the values diverged from the environment.
 # `SessionLocal` is imported from `src.app.utils.config` above.
+
+
+def _to_json_safe(value: Any) -> Any:
+    """Recursively convert values into JSON-serializable primitives."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+
+    if isinstance(value, Decimal):
+        # Preserve precision while remaining JSON-serializable.
+        return str(value)
+
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+
+    if isinstance(value, UUID):
+        return str(value)
+
+    if isinstance(value, dict):
+        return {str(k): _to_json_safe(v) for k, v in value.items()}
+
+    if isinstance(value, (list, tuple, set)):
+        return [_to_json_safe(v) for v in value]
+
+    return str(value)
 
 
 def _smtp_config() -> tuple[str, int, str, str, str, bool]:
@@ -152,6 +179,10 @@ async def save_audit_event(
     """
 
     async def _write(session: AsyncSession) -> dict[str, Any]:
+        safe_changed_fields = _to_json_safe(changed_fields)
+        safe_old_values = _to_json_safe(old_values)
+        safe_new_values = _to_json_safe(new_values)
+
         audit = AuditTrail(
             activity_message=message,
             operation=(operation or "unknown")[:50],
@@ -159,9 +190,9 @@ async def save_audit_event(
             resource_type=(resource_type[:100] if resource_type else None),
             activity_table_name=(activity_table_name[:255] if activity_table_name else None),
             record_id=record_id,
-            changed_fields=changed_fields,
-            old_values=old_values,
-            new_values=new_values,
+            changed_fields=safe_changed_fields,
+            old_values=safe_old_values,
+            new_values=safe_new_values,
             request_path=(request_path[:500] if request_path else None),
             request_method=(request_method[:10] if request_method else None),
             response_status_code=response_status_code,
