@@ -315,25 +315,6 @@ class EmployeeService:
                 activity_trace_id=employee.id
             )
             
-            admin_email_body = f"""
-            Employee status changed:
-            
-            Employee: {employee.first_name} {employee.last_name} ({employee.username})
-            Status changed from {old_status_name} to {new_status_name}
-            """
-            
-            result = await db.execute(select(User).where(User.is_super_admin == True))
-            super_admins = result.scalars().all()
-            
-            for admin in super_admins:
-                await send_notification(
-                    db=db,
-                    email=admin.email,
-                    title="Employee Status Change",
-                    body=admin_email_body,
-                    user_id=current_user_id
-                )
-            
             return employee
             
         except IntegrityError as e:
