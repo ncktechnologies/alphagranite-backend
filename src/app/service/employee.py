@@ -94,6 +94,7 @@ class EmployeeService:
                 home_address=data.home_address,
                 profile_image_id=final_profile_image_id,
                 role_id=data.role_id,
+                hcp_employee_id=data.hcp_employee_id,
                 status=1,
                 is_super_admin=False,
                 is_first_login=True,
@@ -180,6 +181,7 @@ class EmployeeService:
         
         # Use profile_image_id from data object if present, otherwise use parameter
         final_profile_image_id = data.profile_image_id if hasattr(data, 'profile_image_id') and data.profile_image_id is not None else profile_image_id
+        final_hcp_employee_id = data.hcp_employee_id if hasattr(data, 'hcp_employee_id') and data.hcp_employee_id is not None else None
         
         result = await db.execute(select(User).where(User.id == employee_id))
         employee = result.scalars().first()
@@ -249,6 +251,11 @@ class EmployeeService:
             employee.profile_image_id = final_profile_image_id
             logger.info(f"[UPDATE] Setting profile_image_id to {final_profile_image_id}")
         
+        # Update hcp_employee_id if provided (use final_hcp_employee_id which prioritizes data object)
+        if final_hcp_employee_id is not None:
+            employee.hcp_employee_id = final_hcp_employee_id
+            logger.info(f"[UPDATE] Setting hcp_employee_id to {final_hcp_employee_id}")
+        
         employee.updated_at = datetime.now()
         
         logger.info(f"[UPDATE] home_address before commit: '{employee.home_address}'")
@@ -307,25 +314,6 @@ class EmployeeService:
                 message=f"Changed status of employee {employee.username} (ID: {employee.id}) from {old_status_name} to {new_status_name}",
                 activity_trace_id=employee.id
             )
-            
-            admin_email_body = f"""
-            Employee status changed:
-            
-            Employee: {employee.first_name} {employee.last_name} ({employee.username})
-            Status changed from {old_status_name} to {new_status_name}
-            """
-            
-            result = await db.execute(select(User).where(User.is_super_admin == True))
-            super_admins = result.scalars().all()
-            
-            for admin in super_admins:
-                await send_notification(
-                    db=db,
-                    email=admin.email,
-                    title="Employee Status Change",
-                    body=admin_email_body,
-                    user_id=current_user_id
-                )
             
             return employee
             

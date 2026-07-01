@@ -1164,7 +1164,7 @@ class InstallSchedulingResponse(BaseModel):
 class InstallCompletionCreate(BaseModel):
     fab_id: int = Field(..., gt=0)
     installer_id: int = Field(..., gt=0)
-    install_date: datetime
+    install_date: Optional[datetime] = None
     completion_date: datetime
     total_sqft_installed: Optional[str] = None
     customer_signature: Optional[str] = None

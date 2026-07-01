@@ -11,7 +11,7 @@ from typing import Any
 from typing import Optional
 
 from openpyxl import Workbook
-from sqlalchemy import Numeric
+from sqlalchemy import Numeric, case, null
 from sqlalchemy import cast
 from sqlalchemy import func
 from sqlalchemy import select
@@ -145,6 +145,14 @@ def _rows_to_xlsx_bytes(detail_rows: list[dict], summary_rows: list[dict]) -> by
     return out.read()
 
 
+def safe_cast_numeric(column):
+    """Safely cast a column to numeric, returning null if not a valid number."""
+    return case(
+        (column.op("~")(r"^(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$"), cast(column, Numeric)),
+        else_=null(),
+    )
+
+
 async def _build_report_rows(year: int, month: int) -> tuple[list[dict], list[dict]]:
     start_dt, end_dt = _month_bounds(year, month)
 
@@ -152,7 +160,7 @@ async def _build_report_rows(year: int, month: int) -> tuple[list[dict], list[di
         cut_sqft_subq = (
             select(
                 CutList.fab_id.label("fab_id"),
-                func.max(cast(CutList.total_sqft, Numeric)).label("cut_sqft"),
+                func.max(safe_cast_numeric(CutList.total_sqft)).label("cut_sqft"),
             )
             .group_by(CutList.fab_id)
             .subquery()
@@ -161,7 +169,7 @@ async def _build_report_rows(year: int, month: int) -> tuple[list[dict], list[di
         completed_sqft_subq = (
             select(
                 InstallCompletion.fab_id.label("fab_id"),
-                func.sum(cast(InstallCompletion.total_sqft_installed, Numeric)).label("completed_sqft"),
+                func.sum(safe_cast_numeric(InstallCompletion.total_sqft_installed)).label("completed_sqft"),
             )
             .group_by(InstallCompletion.fab_id)
             .subquery()
