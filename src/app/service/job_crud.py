@@ -14,6 +14,7 @@ from src.app.database.account import Account
 from src.app.database.user import User
 from src.app.interface.business_schemas import JobCreate, JobUpdate
 from src.app.utils.helpers import utc_now
+from src.app.service.background import save_audit_event
 
 async def create_job(
     db: AsyncSession,
@@ -79,6 +80,25 @@ async def create_job(
     )
     
     db.add(job)
+    await db.flush()
+
+    await save_audit_event(
+        db=db,
+        operation="CREATE",
+        resource_type="job",
+        user_id=user_id,
+        message=f"Created job {job.name} (ID: {job.id})",
+        record_id=job.id,
+        new_values={
+            "name": job.name,
+            "job_number": job.job_number,
+            "account_id": job.account_id,
+            "status_id": job.status_id,
+        },
+        activity_table_name="business_jobs",
+        auto_commit=False,
+    )
+
     await db.commit()
     await db.refresh(job)
     
@@ -352,11 +372,26 @@ async def update_job(
     
     # Update fields
     update_data = job_data.model_dump(exclude_unset=True)
+    old_values = {field: getattr(job, field) for field in update_data.keys()}
     for field, value in update_data.items():
         setattr(job, field, value)
     
     job.updated_at = datetime.now()
     job.updated_by = user_id
+
+    await save_audit_event(
+        db=db,
+        operation="UPDATE",
+        resource_type="job",
+        user_id=user_id,
+        message=f"Updated job {job.name} (ID: {job.id})",
+        record_id=job.id,
+        changed_fields=list(update_data.keys()),
+        old_values=old_values,
+        new_values={field: getattr(job, field) for field in update_data.keys()},
+        activity_table_name="business_jobs",
+        auto_commit=False,
+    )
     
     await db.commit()
     await db.refresh(job)
@@ -429,9 +464,28 @@ async def delete_job(
         raise HTTPException(status_code=404, detail="Job not found")
     
     # Soft delete by setting status to deleted (status_id 3)
+    old_values = {
+        "status_id": job.status_id,
+        "job_number": job.job_number,
+        "name": job.name,
+    }
     job.status_id = 3  # Deleted status
     job.updated_at = datetime.now()
     job.updated_by = user_id
+
+    await save_audit_event(
+        db=db,
+        operation="DELETE",
+        resource_type="job",
+        user_id=user_id,
+        message=f"Soft deleted job {job.name} (ID: {job.id})",
+        record_id=job.id,
+        changed_fields=["status_id"],
+        old_values=old_values,
+        new_values={"status_id": job.status_id},
+        activity_table_name="business_jobs",
+        auto_commit=False,
+    )
     
     await db.commit()
 

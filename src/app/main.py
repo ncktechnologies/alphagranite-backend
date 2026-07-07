@@ -1,5 +1,6 @@
 from src.app.middleware.jwt_auth import JWTAuthMiddleware
 from src.app.middleware.request_logger import RequestLoggerMiddleware
+from src.app.middleware.audit_middleware import log_platform_audit_event
 
 
 
@@ -59,6 +60,7 @@ from src.app.routers import job_fab_listing
 from src.app.routers import cnc
 from src.app.routers import mcp
 from src.app.routers import reports
+from src.app.routers import audit_trails
 from src.app.service.monthly_end_of_month_status_report import start_monthly_status_report_scheduler
 from src.app.service.monthly_end_of_month_status_report import stop_monthly_status_report_scheduler
 
@@ -142,6 +144,17 @@ async def some_auth_middleware(request: Request, call_next):
     
     # For other routes, apply the JWT authentication middleware
     return await call_next(request)
+
+
+@app.middleware("http")
+async def platform_audit_middleware(request: Request, call_next):
+    response = await call_next(request)
+    try:
+        await log_platform_audit_event(request, response)
+    except Exception:
+        # Keep the business response path resilient if audit logging fails.
+        pass
+    return response
 
 
 def custom_openapi():
@@ -296,6 +309,7 @@ app.include_router(job_fab_listing.router, prefix="/api/v1", tags=["Job Fab List
 app.include_router(cnc.router, prefix="/api/v1", tags=["CNC Drafting"])
 app.include_router(reports.router, prefix="/api/v1", tags=["Reports"])
 app.include_router(mcp.router, prefix="/api/v1", tags=["MCP"])
+app.include_router(audit_trails.router, prefix="/api/v1", tags=["Audit Trails"])
 
 
 
