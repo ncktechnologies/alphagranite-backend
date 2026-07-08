@@ -3311,20 +3311,30 @@ async def toggle_fab_hold(
     }
     available_status_ids = [value_id for value_id, _ in status_rows if value_id is not None]
 
-    active_status_id = slug_to_value.get("active")
-    if active_status_id is None:
-        active_status_id = 1 if 1 in available_status_ids else (available_status_ids[0] if available_status_ids else None)
+    # Compatibility rule: dashboard expects on-hold FABs to have status_id = 1.
+    hold_status_id = 1 if 1 in available_status_ids else None
 
-    hold_status_id = None
+    # If 1 does not exist in this environment, try hold-like slugs.
+    if hold_status_id is None:
+        for hold_slug in ["on_hold", "on-hold", "paused", "suspended", "inactive", "archived", "pending"]:
+            if hold_slug in slug_to_value:
+                hold_status_id = slug_to_value[hold_slug]
+                break
+
+    # Determine release/active status as a valid status different from hold.
+    active_status_id = slug_to_value.get("active")
+    if active_status_id == hold_status_id:
+        active_status_id = None
+    if active_status_id is None:
+        active_status_id = next((sid for sid in available_status_ids if sid != hold_status_id), None)
+
+    # Final fallback for hold when slugs were not found.
     for hold_slug in ["on_hold", "on-hold", "paused", "suspended", "inactive", "archived", "pending"]:
-        if hold_slug in slug_to_value:
+        if hold_status_id is None and hold_slug in slug_to_value:
             hold_status_id = slug_to_value[hold_slug]
             break
     if hold_status_id is None:
-        hold_status_id = 2 if 2 in available_status_ids else next(
-            (sid for sid in available_status_ids if sid != active_status_id),
-            active_status_id,
-        )
+        hold_status_id = 2 if 2 in available_status_ids else (available_status_ids[0] if available_status_ids else None)
 
     if active_status_id is None or hold_status_id is None:
         return error_response("No valid status values configured. Please seed the status table.", 500)

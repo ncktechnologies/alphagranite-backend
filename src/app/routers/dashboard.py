@@ -184,7 +184,7 @@ async def get_dashboard(
         .join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)\
         .where(
             and_(
-                Fab.status_id == 2,  # On-hold/inactive status
+                Fab.status_id == 1,  # On-hold status (frontend convention)
                 *date_filter
             )
         )\
