@@ -3290,7 +3290,7 @@ async def toggle_fab_hold(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Toggle FAB hold status by changing status_id (0=on hold, 1=active)"""
+    """Toggle FAB hold status using valid status.value_id values."""
     fab_result = await db.execute(
         select(Fab).where(Fab.id == fab_id)
     )
@@ -3298,9 +3298,38 @@ async def toggle_fab_hold(
     
     if not fab:
         return error_response("FAB not found", 404)
+
+    # Resolve status IDs from table to avoid FK violations when value_id=0
+    # is not present in the status table.
+    status_result = await db.execute(select(Status.value_id, Status.slug))
+    status_rows = status_result.all()
+
+    slug_to_value = {
+        (slug or "").strip().lower(): value_id
+        for value_id, slug in status_rows
+        if value_id is not None
+    }
+    available_status_ids = [value_id for value_id, _ in status_rows if value_id is not None]
+
+    active_status_id = slug_to_value.get("active")
+    if active_status_id is None:
+        active_status_id = 1 if 1 in available_status_ids else (available_status_ids[0] if available_status_ids else None)
+
+    hold_status_id = None
+    for hold_slug in ["on_hold", "on-hold", "paused", "suspended", "inactive", "archived", "pending"]:
+        if hold_slug in slug_to_value:
+            hold_status_id = slug_to_value[hold_slug]
+            break
+    if hold_status_id is None:
+        hold_status_id = 2 if 2 in available_status_ids else next(
+            (sid for sid in available_status_ids if sid != active_status_id),
+            active_status_id,
+        )
+
+    if active_status_id is None or hold_status_id is None:
+        return error_response("No valid status values configured. Please seed the status table.", 500)
     
-    # Set status_id: 0 for on hold, 1 for active
-    fab.status_id = 0 if on_hold else 1
+    fab.status_id = hold_status_id if on_hold else active_status_id
     fab.updated_by = current_user.id
     await db.commit()
     
