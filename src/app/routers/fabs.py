@@ -3299,8 +3299,8 @@ async def toggle_fab_hold(
     if not fab:
         return error_response("FAB not found", 404)
 
-    # Resolve status IDs from table to avoid FK violations when value_id=0
-    # is not present in the status table.
+    # Resolve status IDs from table and enforce the intended convention:
+    # on_hold -> status_id 0, release -> active status id.
     status_result = await db.execute(select(Status.value_id, Status.slug))
     status_rows = status_result.all()
 
@@ -3311,15 +3311,7 @@ async def toggle_fab_hold(
     }
     available_status_ids = [value_id for value_id, _ in status_rows if value_id is not None]
 
-    # Compatibility rule: dashboard expects on-hold FABs to have status_id = 1.
-    hold_status_id = 1 if 1 in available_status_ids else None
-
-    # If 1 does not exist in this environment, try hold-like slugs.
-    if hold_status_id is None:
-        for hold_slug in ["on_hold", "on-hold", "paused", "suspended", "inactive", "archived", "pending"]:
-            if hold_slug in slug_to_value:
-                hold_status_id = slug_to_value[hold_slug]
-                break
+    hold_status_id = 0 if 0 in available_status_ids else None
 
     # Determine release/active status as a valid status different from hold.
     active_status_id = slug_to_value.get("active")
@@ -3328,16 +3320,10 @@ async def toggle_fab_hold(
     if active_status_id is None:
         active_status_id = next((sid for sid in available_status_ids if sid != hold_status_id), None)
 
-    # Final fallback for hold when slugs were not found.
-    for hold_slug in ["on_hold", "on-hold", "paused", "suspended", "inactive", "archived", "pending"]:
-        if hold_status_id is None and hold_slug in slug_to_value:
-            hold_status_id = slug_to_value[hold_slug]
-            break
     if hold_status_id is None:
-        hold_status_id = 2 if 2 in available_status_ids else (available_status_ids[0] if available_status_ids else None)
-
-    if active_status_id is None or hold_status_id is None:
-        return error_response("No valid status values configured. Please seed the status table.", 500)
+        return error_response("Status value_id=0 (on hold) is not configured. Please seed/update status table.", 500)
+    if active_status_id is None:
+        return error_response("No valid active status is configured for release from hold.", 500)
     
     fab.status_id = hold_status_id if on_hold else active_status_id
     fab.updated_by = current_user.id
