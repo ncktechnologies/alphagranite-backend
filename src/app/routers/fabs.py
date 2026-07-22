@@ -646,8 +646,10 @@ async def get_fab_notes(db: AsyncSession, fab_id: int) -> List[dict]:
         FabNotes,
         CreatorUser.first_name.label("creator_first_name"),
         CreatorUser.last_name.label("creator_last_name"),
+        CreatorUser.profile_image_id.label("creator_profile_image_id"),
         UpdaterUser.first_name.label("updater_first_name"),
-        UpdaterUser.last_name.label("updater_last_name")
+        UpdaterUser.last_name.label("updater_last_name"),
+        UpdaterUser.profile_image_id.label("updater_profile_image_id")
     ).where(FabNotes.fab_id == fab_id)
     
     query = query.join(CreatorUser, FabNotes.created_by == CreatorUser.id, isouter=True)
@@ -662,8 +664,20 @@ async def get_fab_notes(db: AsyncSession, fab_id: int) -> List[dict]:
         fab_note = row[0]
         creator_first = row[1]
         creator_last = row[2]
-        updater_first = row[3]
-        updater_last = row[4]
+        creator_profile_image_id = row[3]
+        updater_first = row[4]
+        updater_last = row[5]
+        updater_profile_image_id = row[6]
+        creator_profile_image_url = (
+            f"{BASE_URL}/api/v1/files/{creator_profile_image_id}/view"
+            if creator_profile_image_id
+            else None
+        )
+        updater_profile_image_url = (
+            f"{BASE_URL}/api/v1/files/{updater_profile_image_id}/view"
+            if updater_profile_image_id
+            else None
+        )
         
         note_dict = {
             "id": fab_note.id,
@@ -672,10 +686,14 @@ async def get_fab_notes(db: AsyncSession, fab_id: int) -> List[dict]:
             "note": fab_note.note,
             "created_by": fab_note.created_by,
             "created_by_name": f"{creator_first} {creator_last}" if creator_first else None,
+            "created_by_profile_image_id": creator_profile_image_id,
+            "created_by_profile_image_url": creator_profile_image_url,
             "created_at": fab_note.created_at.isoformat() if fab_note.created_at else None,
             "updated_at": fab_note.updated_at.isoformat() if fab_note.updated_at else None,
             "updated_by": fab_note.updated_by,
-            "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
+            "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None,
+            "updated_by_profile_image_id": updater_profile_image_id,
+            "updated_by_profile_image_url": updater_profile_image_url,
         }
         notes.append(note_dict)
     
@@ -4081,8 +4099,10 @@ async def _batch_load_fab_notes(db: AsyncSession, fab_ids: List[int]) -> dict:
         FabNotes,
         CreatorUser.first_name.label("creator_first_name"),
         CreatorUser.last_name.label("creator_last_name"),
+        CreatorUser.profile_image_id.label("creator_profile_image_id"),
         UpdaterUser.first_name.label("updater_first_name"),
-        UpdaterUser.last_name.label("updater_last_name")
+        UpdaterUser.last_name.label("updater_last_name"),
+        UpdaterUser.profile_image_id.label("updater_profile_image_id")
     ).where(FabNotes.fab_id.in_(fab_ids))\
      .join(CreatorUser, FabNotes.created_by == CreatorUser.id, isouter=True)\
      .join(UpdaterUser, FabNotes.updated_by == UpdaterUser.id, isouter=True)\
@@ -4095,7 +4115,19 @@ async def _batch_load_fab_notes(db: AsyncSession, fab_ids: List[int]) -> dict:
     for row in rows:
         note = row[0]
         creator_first, creator_last = row[1], row[2]
-        updater_first, updater_last = row[3], row[4]
+        creator_profile_image_id = row[3]
+        updater_first, updater_last = row[4], row[5]
+        updater_profile_image_id = row[6]
+        creator_profile_image_url = (
+            f"{BASE_URL}/api/v1/files/{creator_profile_image_id}/view"
+            if creator_profile_image_id
+            else None
+        )
+        updater_profile_image_url = (
+            f"{BASE_URL}/api/v1/files/{updater_profile_image_id}/view"
+            if updater_profile_image_id
+            else None
+        )
         
         if note.fab_id not in notes_by_fab:
             notes_by_fab[note.fab_id] = []
@@ -4108,10 +4140,14 @@ async def _batch_load_fab_notes(db: AsyncSession, fab_ids: List[int]) -> dict:
                 "note": note.note,
                 "created_by": note.created_by,
                 "created_by_name": f"{creator_first} {creator_last}" if creator_first else None,
+                "created_by_profile_image_id": creator_profile_image_id,
+                "created_by_profile_image_url": creator_profile_image_url,
                 "created_at": note.created_at.isoformat() if note.created_at else None,
                 "updated_at": note.updated_at.isoformat() if note.updated_at else None,
                 "updated_by": note.updated_by,
-                "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
+                "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None,
+                "updated_by_profile_image_id": updater_profile_image_id,
+                "updated_by_profile_image_url": updater_profile_image_url,
             })
     
     return notes_by_fab
