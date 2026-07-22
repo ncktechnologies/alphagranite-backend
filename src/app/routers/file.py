@@ -55,7 +55,7 @@ def _build_content_disposition(disposition: str, filename: str) -> str:
                 "multipart/form-data": {
                     "schema": {
                         "type": "object",
-                        "required": ["file", "file_design", "stage_name"],
+                        "required": ["file"],
                         "properties": {
                             "file": {"type": "string", "format": "binary"},
                             "file_type": {"type": "string"},
@@ -75,8 +75,8 @@ async def upload_file(
     request: Request,
     file: UploadFile = File(...),
     file_type: str = Form(None),
-    file_design: str = Form(...),
-    stage_name: str = Form(...),
+    file_design: str = Form(None),
+    stage_name: str = Form(None),
     job_id: int = Form(None),    # add this
     directory: str = Form("uploads"),
     db: AsyncSession = Depends(get_db),
