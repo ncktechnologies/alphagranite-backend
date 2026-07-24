@@ -411,8 +411,8 @@ async def get_employees(
     role_id: Optional[int] = Query(None, description="Filter by role ID"),
     email: Optional[str] = Query(None, description="Filter by exact email address"),
     phone: Optional[str] = Query(None, description="Filter by phone number"),
-    sort_by: Optional[str] = Query("id", description="Field to sort by (id, first_name, last_name, email, created_at)"),
-    sort_order: Optional[str] = Query("asc", description="Sort order (asc, desc)"),
+    sort_by: Optional[str] = Query("created_at", description="Field to sort by (id, first_name, last_name, email, created_at)"),
+    sort_order: Optional[str] = Query("desc", description="Sort order (asc, desc)"),
     current_user: User = Depends(PermissionChecker("employees", "read")),
     db: Session = Depends(get_db)
 ):
