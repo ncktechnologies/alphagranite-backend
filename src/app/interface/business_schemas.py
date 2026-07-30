@@ -1259,7 +1259,7 @@ class CutListScheduleUpdate(BaseModel):
     def validate_required_fields(self):
         required_fields = [
             "shop_date_schedule",
-            "no_of_pieces",
+            # "no_of_pieces",
             "total_sqft",
             "wj_linft",
             "edging_linft",
