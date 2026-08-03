@@ -333,6 +333,12 @@ class RoleService:
     
         # Handle members update
         if user_ids is not None:
+            existing_member_rows = await db.execute(
+                select(UserRole.user_id).where(UserRole.role_id == role_id)
+            )
+            existing_member_ids = {row[0] for row in existing_member_rows.all()}
+            new_member_ids = set(user_ids)
+
             # Delete existing user_role assignments
             await db.execute(
                 delete(UserRole).where(UserRole.role_id == role_id)
@@ -341,7 +347,6 @@ class RoleService:
             # Create new user_role records
             for user_id in user_ids:
                 # Verify user exists
-                from src.app.database.user import User
                 user_result = await db.execute(
                     select(User).where(User.id == user_id)
                 )
@@ -354,6 +359,30 @@ class RoleService:
                     created_at=utc_now()
                 )
                 db.add(user_role)
+
+            # Keep users.role_id in sync for employee APIs that read direct role_id.
+            if new_member_ids:
+                await db.execute(
+                    update(User)
+                    .where(User.id.in_(new_member_ids))
+                    .values(role_id=role_id, updated_at=utc_now())
+                )
+
+            removed_member_ids = existing_member_ids - new_member_ids
+            for removed_user_id in removed_member_ids:
+                fallback_role_result = await db.execute(
+                    select(UserRole.role_id)
+                    .where(UserRole.user_id == removed_user_id)
+                    .order_by(UserRole.id.desc())
+                    .limit(1)
+                )
+                fallback_role_id = fallback_role_result.scalar_one_or_none()
+
+                await db.execute(
+                    update(User)
+                    .where(User.id == removed_user_id)
+                    .values(role_id=fallback_role_id, updated_at=utc_now())
+                )
     
         await db.commit()
         await db.refresh(role)
