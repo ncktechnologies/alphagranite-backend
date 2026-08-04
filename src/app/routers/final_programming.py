@@ -8,7 +8,7 @@ from src.app.database import get_db
 from src.app.database.fab import Fab
 from src.app.database.fab_notes import FabNotes
 from src.app.database.user import User
-from src.app.interface.generated_schemas import FinalProgramming
+from src.app.interface.generated_schemas import FinalProgramming, DraftingSession
 from src.app.interface.business_schemas import (
     FinalProgrammingCreate,
     FinalProgrammingUpdate,
@@ -239,8 +239,30 @@ async def manage_programming_session(
     
     session_key = f"{fab_id}_{current_user.id}"
     action = session_data.action.lower()
+
+    async def get_open_drafting_session_ids() -> list[int]:
+        open_drafting_result = await db.execute(
+            select(DraftingSession.id)
+            .where(
+                DraftingSession.fab_id == fab_id,
+                DraftingSession.status.in_(["drafting", "paused"]),
+            )
+        )
+        return [row[0] for row in open_drafting_result.all()]
     
     if action == "start":
+        # Block final programming start while this FAB still has open drafting timers.
+        open_drafting_session_ids = await get_open_drafting_session_ids()
+
+        if open_drafting_session_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Cannot start final programming session because this FAB has open drafting timers "
+                    f"(statuses: drafting/paused). Open drafting session IDs: {open_drafting_session_ids}"
+                ),
+            )
+
         # Prevent starting if any running timer exists across all session types
         if not getattr(current_user, "is_super_admin", False):
             await assert_no_active_timer_session(db, current_user.id)
@@ -318,6 +340,16 @@ async def manage_programming_session(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Session is not paused"
+            )
+
+        open_drafting_session_ids = await get_open_drafting_session_ids()
+        if open_drafting_session_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Cannot resume final programming session because this FAB has open drafting timers "
+                    f"(statuses: drafting/paused). Open drafting session IDs: {open_drafting_session_ids}"
+                ),
             )
 
         if not getattr(current_user, "is_super_admin", False):
