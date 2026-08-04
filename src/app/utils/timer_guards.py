@@ -32,7 +32,7 @@ from src.app.interface.generated_schemas import ShopRevision
 def _is_blocking_timer_status(status_column):
     return or_(
         status_column.is_(None),
-        status_column.not_in(["completed", "paused"]),
+        status_column.not_in(["completed", "paused", "stopped"]),
     )
 
 
