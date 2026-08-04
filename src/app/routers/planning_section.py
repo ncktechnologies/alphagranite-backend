@@ -15,6 +15,30 @@ from src.app.database.user import User
 
 router = APIRouter()
 
+PLANNING_SECTION_ACTIVE_ORDER = {
+    "CUT": 0,
+    "WATERJET": 1,
+    "WJ": 1,
+    "EDGING": 2,
+    "CNC": 3,
+    "MITER": 4,
+    "HANDWORK/TOUCHUP": 5,
+    "HANDWORK":5,
+    "TOUCHUP":5,
+    "TOUCH-UP":5,
+    "HANDWORKTOUCHUP": 5,
+    "RESURFACING": 6,
+}
+
+
+def _planning_section_sort_key(section: PlanningSectionSchema):
+    normalized_name = (section.plan_name or "").strip().upper().replace(" ", "")
+    return (
+        PLANNING_SECTION_ACTIVE_ORDER.get(normalized_name, 999),
+        (section.plan_name or "").upper(),
+        section.id or 0,
+    )
+
 
 class PlanningSectionCreateRequest(BaseModel):
     plan_name: str
@@ -128,7 +152,7 @@ async def get_active_planning_sections(db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(PlanningSectionSchema).where(PlanningSectionSchema.is_active.is_(True))
     )
-    sections = result.scalars().all()
+    sections = sorted(result.scalars().all(), key=_planning_section_sort_key)
     return success_response(sections, "Active planning sections retrieved successfully")
 
 

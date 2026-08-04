@@ -333,11 +333,30 @@ class RoleService:
     
         # Handle members update
         if user_ids is not None:
+            new_member_ids = set(user_ids)
+
+            # Enforce one-role-per-user: reject users already assigned to another role.
+            conflicting_member_rows = await db.execute(
+                select(UserRole.user_id, UserRole.role_id)
+                .where(
+                    UserRole.user_id.in_(new_member_ids),
+                    UserRole.role_id != role_id,
+                )
+            )
+            conflicting_members = conflicting_member_rows.all()
+            if conflicting_members:
+                conflict_details = ", ".join(
+                    [f"user {user_id} (role {assigned_role_id})" for user_id, assigned_role_id in conflicting_members]
+                )
+                raise ValueError(
+                    "Cannot assign users who already have another role: "
+                    f"{conflict_details}."
+                )
+
             existing_member_rows = await db.execute(
                 select(UserRole.user_id).where(UserRole.role_id == role_id)
             )
             existing_member_ids = {row[0] for row in existing_member_rows.all()}
-            new_member_ids = set(user_ids)
 
             # Delete existing user_role assignments
             await db.execute(
@@ -345,7 +364,7 @@ class RoleService:
             )
             
             # Create new user_role records
-            for user_id in user_ids:
+            for user_id in new_member_ids:
                 # Verify user exists
                 user_result = await db.execute(
                     select(User).where(User.id == user_id)
