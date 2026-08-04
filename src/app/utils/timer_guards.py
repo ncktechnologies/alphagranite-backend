@@ -29,6 +29,13 @@ from src.app.database.templater_job_timer_session import TemplaterJobTimerSessio
 from src.app.interface.generated_schemas import ShopRevision
 
 
+def _is_blocking_timer_status(status_column):
+    return or_(
+        status_column.is_(None),
+        status_column.not_in(["completed", "paused"]),
+    )
+
+
 def _format_reference_ids(label: str, values: list[int]) -> str:
     unique_values = sorted({value for value in values if value is not None})
     if not unique_values:
@@ -91,7 +98,7 @@ async def assert_no_active_timer_session(db: AsyncSession, user_id: int) -> None
             select(DraftingSession.fab_id, DraftingSession.status)
             .where(
                 DraftingSession.drafter_id == user_id,
-                or_(DraftingSession.status != "completed", DraftingSession.status.is_(None)),
+                _is_blocking_timer_status(DraftingSession.status),
             )
         )
     ).all()
@@ -104,7 +111,7 @@ async def assert_no_active_timer_session(db: AsyncSession, user_id: int) -> None
             select(CNCDraftingSession.fab_id, CNCDraftingSession.status)
             .where(
                 CNCDraftingSession.drafter_id == user_id,
-                or_(CNCDraftingSession.status != "completed", CNCDraftingSession.status.is_(None)),
+                _is_blocking_timer_status(CNCDraftingSession.status),
             )
         )
     ).all()
@@ -117,7 +124,7 @@ async def assert_no_active_timer_session(db: AsyncSession, user_id: int) -> None
             select(FinalProgrammingSession.fab_id, FinalProgrammingSession.status)
             .where(
                 FinalProgrammingSession.user_id == user_id,
-                or_(FinalProgrammingSession.status != "completed", FinalProgrammingSession.status.is_(None)),
+                _is_blocking_timer_status(FinalProgrammingSession.status),
             )
         )
     ).all()
@@ -130,7 +137,7 @@ async def assert_no_active_timer_session(db: AsyncSession, user_id: int) -> None
             select(SlabSmithSession.fab_id, SlabSmithSession.status)
             .where(
                 SlabSmithSession.user_id == user_id,
-                or_(SlabSmithSession.status != "completed", SlabSmithSession.status.is_(None)),
+                _is_blocking_timer_status(SlabSmithSession.status),
             )
         )
     ).all()
@@ -143,7 +150,7 @@ async def assert_no_active_timer_session(db: AsyncSession, user_id: int) -> None
             select(OperatorJobTimerSession.job_id, OperatorJobTimerSession.fab_id, OperatorJobTimerSession.status)
             .where(
                 OperatorJobTimerSession.operator_id == user_id,
-                or_(OperatorJobTimerSession.status != "completed", OperatorJobTimerSession.status.is_(None)),
+                _is_blocking_timer_status(OperatorJobTimerSession.status),
             )
         )
     ).all()
@@ -159,7 +166,7 @@ async def assert_no_active_timer_session(db: AsyncSession, user_id: int) -> None
             select(ShopCutPlanTimerSession.shop_cut_plan_id, ShopCutPlanTimerSession.status)
             .where(
                 ShopCutPlanTimerSession.operator_id == user_id,
-                or_(ShopCutPlanTimerSession.status != "completed", ShopCutPlanTimerSession.status.is_(None)),
+                _is_blocking_timer_status(ShopCutPlanTimerSession.status),
             )
         )
     ).all()
@@ -172,7 +179,7 @@ async def assert_no_active_timer_session(db: AsyncSession, user_id: int) -> None
             select(InstallerJobTimerSession.job_id, InstallerJobTimerSession.fab_id, InstallerJobTimerSession.status)
             .where(
                 InstallerJobTimerSession.installer_id == user_id,
-                or_(InstallerJobTimerSession.status != "completed", InstallerJobTimerSession.status.is_(None)),
+                _is_blocking_timer_status(InstallerJobTimerSession.status),
             )
         )
     ).all()
@@ -188,7 +195,7 @@ async def assert_no_active_timer_session(db: AsyncSession, user_id: int) -> None
             select(TemplaterJobTimerSession.job_id, TemplaterJobTimerSession.fab_id, TemplaterJobTimerSession.status)
             .where(
                 TemplaterJobTimerSession.templater_id == user_id,
-                or_(TemplaterJobTimerSession.status != "completed", TemplaterJobTimerSession.status.is_(None)),
+                _is_blocking_timer_status(TemplaterJobTimerSession.status),
             )
         )
     ).all()
