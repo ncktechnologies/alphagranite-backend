@@ -7,8 +7,9 @@ from typing import Optional
 from src.app.database import get_db
 from src.app.database.fab import Fab
 from src.app.database.fab_notes import FabNotes
+from src.app.database.final_programming import FinalProgrammingSession, FinalProgrammingSessionNote
 from src.app.database.user import User
-from src.app.interface.generated_schemas import FinalProgramming, DraftingSession
+from src.app.interface.generated_schemas import FinalProgramming
 from src.app.interface.business_schemas import (
     FinalProgrammingCreate,
     FinalProgrammingUpdate,
@@ -24,10 +25,6 @@ router = APIRouter(
     prefix="/final-programming",
     tags=["Final Programming"]
 )
-
-
-# In-memory storage for session tracking (in production, use database table)
-programming_sessions = {}
 
 
 def _final_programming_response_data(final_programming: FinalProgramming) -> dict:
@@ -237,60 +234,56 @@ async def manage_programming_session(
             detail=f"FAB with ID {fab_id} not found"
         )
     
-    session_key = f"{fab_id}_{current_user.id}"
     action = session_data.action.lower()
+    now = datetime.now()
 
-    async def get_user_open_drafting_sessions() -> list[tuple[int, int]]:
-        open_drafting_result = await db.execute(
-            select(DraftingSession.id, DraftingSession.fab_id)
-            .where(
-                DraftingSession.drafter_id == current_user.id,
-                DraftingSession.status.in_(["drafting", "paused"]),
-            )
+    active_session_result = await db.execute(
+        select(FinalProgrammingSession)
+        .where(
+            FinalProgrammingSession.fab_id == fab_id,
+            FinalProgrammingSession.user_id == current_user.id,
+            FinalProgrammingSession.status.in_(["active", "paused"]),
         )
-        return [(row[0], row[1]) for row in open_drafting_result.all()]
+        .order_by(FinalProgrammingSession.created_at.desc())
+        .limit(1)
+    )
+    active_session = active_session_result.scalar_one_or_none()
 
-    def build_open_drafting_message(action_name: str, open_sessions: list[tuple[int, int]]) -> str:
-        fab_ids = sorted({fab_id for _, fab_id in open_sessions if fab_id is not None})
-        base_message = (
-            f"Cannot {action_name} final programming yet. "
-            "You still have open Drafting timer(s). "
-            "Please end those Drafting timer(s) first."
-        )
-
-        if not fab_ids:
-            return base_message
-
-        fab_list = ", ".join(str(fab_id) for fab_id in fab_ids)
-        return (
-            f"Cannot {action_name} final programming yet. "
-            f"You still have open Drafting timer(s) on FAB(s): {fab_list}. "
-            "Please end those Drafting timer(s) first."
-        )
+    session = None
     
     if action == "start":
-        # Block final programming start while this user still has open drafting timers.
-        open_drafting_sessions = await get_user_open_drafting_sessions()
-
-        if open_drafting_sessions:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=build_open_drafting_message("start", open_drafting_sessions),
-            )
-
         # Prevent starting if any running timer exists across all session types
         if not getattr(current_user, "is_super_admin", False):
             await assert_no_active_timer_session(db, current_user.id)
 
-        # Start new session
-        programming_sessions[session_key] = {
-            "fab_id": fab_id,
-            "user_id": current_user.id,
-            "start_time": datetime.now(),
-            "paused_at": None,
-            "total_paused_minutes": 0,
-            "status": "active"
-        }
+        if active_session:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="You already have an open Final Programming session for this FAB. End it first before starting a new one."
+            )
+
+        session = FinalProgrammingSession(
+            fab_id=fab_id,
+            user_id=current_user.id,
+            status="active",
+            session_start_time=now,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(session)
+        await db.flush()
+
+        db.add(
+            FinalProgrammingSessionNote(
+                session_id=session.id,
+                fab_id=fab_id,
+                user_id=current_user.id,
+                action="start",
+                timestamp=now,
+                note=session_data.notes,
+                created_at=now,
+            )
+        )
         
         # Add note
         note_text = f"Final programming session started by {current_user.first_name} {current_user.last_name}"
@@ -310,21 +303,34 @@ async def manage_programming_session(
     
     elif action == "pause":
         # Pause session
-        if session_key not in programming_sessions:
+        if not active_session:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No active session found to pause"
             )
-        
-        session = programming_sessions[session_key]
-        if session["status"] != "active":
+
+        if active_session.status != "active":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Session is not active"
             )
-        
-        session["paused_at"] = datetime.now()
-        session["status"] = "paused"
+
+        active_session.status = "paused"
+        active_session.current_pause_start_time = now
+        active_session.updated_at = now
+        session = active_session
+
+        db.add(
+            FinalProgrammingSessionNote(
+                session_id=session.id,
+                fab_id=fab_id,
+                user_id=current_user.id,
+                action="pause",
+                timestamp=now,
+                note=session_data.notes,
+                created_at=now,
+            )
+        )
         
         # Add note
         note_text = "Final programming session paused"
@@ -344,36 +350,41 @@ async def manage_programming_session(
     
     elif action == "resume":
         # Resume session
-        if session_key not in programming_sessions:
+        if not active_session:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No session found to resume"
             )
-        
-        session = programming_sessions[session_key]
-        if session["status"] != "paused":
+
+        if active_session.status != "paused":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Session is not paused"
             )
 
-        open_drafting_sessions = await get_user_open_drafting_sessions()
-        if open_drafting_sessions:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=build_open_drafting_message("resume", open_drafting_sessions),
-            )
-
         if not getattr(current_user, "is_super_admin", False):
             await assert_no_active_timer_session(db, current_user.id)
 
-        # Calculate paused time
-        if session["paused_at"]:
-            paused_minutes = (datetime.now() - session["paused_at"]).total_seconds() / 60
-            session["total_paused_minutes"] += paused_minutes
-        
-        session["paused_at"] = None
-        session["status"] = "active"
+        if active_session.current_pause_start_time:
+            paused_seconds = int((now - active_session.current_pause_start_time).total_seconds())
+            active_session.total_pause_duration += max(paused_seconds, 0)
+
+        active_session.current_pause_start_time = None
+        active_session.status = "active"
+        active_session.updated_at = now
+        session = active_session
+
+        db.add(
+            FinalProgrammingSessionNote(
+                session_id=session.id,
+                fab_id=fab_id,
+                user_id=current_user.id,
+                action="resume",
+                timestamp=now,
+                note=session_data.notes,
+                created_at=now,
+            )
+        )
         
         # Add note
         note_text = "Final programming session resumed"
@@ -393,23 +404,44 @@ async def manage_programming_session(
     
     elif action == "end":
         # End session
-        if session_key not in programming_sessions:
+        if not active_session:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No session found to end"
             )
-        
-        session = programming_sessions[session_key]
-        
-        # Calculate total time
-        end_time = datetime.now()
-        total_minutes = (end_time - session["start_time"]).total_seconds() / 60
-        total_minutes -= session["total_paused_minutes"]
+
+        if active_session.current_pause_start_time:
+            paused_seconds = int((now - active_session.current_pause_start_time).total_seconds())
+            active_session.total_pause_duration += max(paused_seconds, 0)
+            active_session.current_pause_start_time = None
+
+        total_seconds = int((now - active_session.session_start_time).total_seconds())
+        total_spent_seconds = max(total_seconds - active_session.total_pause_duration, 0)
+
+        active_session.total_time_spent = total_spent_seconds
+        active_session.status = "completed"
+        active_session.session_end_time = now
+        active_session.updated_at = now
+        session = active_session
+
+        total_minutes = total_spent_seconds / 60
         
         # Store WJ time in FAB
         fab.wj_time_minutes = int(total_minutes)
-        fab.updated_at = datetime.now()
+        fab.updated_at = now
         fab.updated_by = current_user.id
+
+        db.add(
+            FinalProgrammingSessionNote(
+                session_id=session.id,
+                fab_id=fab_id,
+                user_id=current_user.id,
+                action="end",
+                timestamp=now,
+                note=session_data.notes,
+                created_at=now,
+            )
+        )
         
         # Add note
         note_text = f"Final programming session ended. Total time: {int(total_minutes)} minutes"
@@ -424,9 +456,6 @@ async def manage_programming_session(
             created_at=datetime.now()
         )
         db.add(fab_note)
-        
-        # Remove session
-        del programming_sessions[session_key]
         
         message = f"Final programming session ended. Total time: {int(total_minutes)} minutes"
     
@@ -444,7 +473,7 @@ async def manage_programming_session(
         "data": {
             "fab_id": fab_id,
             "action": action,
-            "session_active": session_key in programming_sessions
+            "session_active": session is not None and session.status in ["active", "paused"]
         }
     }
 
@@ -610,14 +639,25 @@ async def complete_final_programming(
 @router.get("/{fab_id}/session-status", response_model=dict)
 async def get_session_status(
     fab_id: int,
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
     Final Programming: Get current session status
     """
-    session_key = f"{fab_id}_{current_user.id}"
-    
-    if session_key not in programming_sessions:
+    session_result = await db.execute(
+        select(FinalProgrammingSession)
+        .where(
+            FinalProgrammingSession.fab_id == fab_id,
+            FinalProgrammingSession.user_id == current_user.id,
+            FinalProgrammingSession.status.in_(["active", "paused"]),
+        )
+        .order_by(FinalProgrammingSession.created_at.desc())
+        .limit(1)
+    )
+    session = session_result.scalar_one_or_none()
+
+    if not session:
         return {
             "success": True,
             "message": "No active session",
@@ -627,16 +667,15 @@ async def get_session_status(
             }
         }
     
-    session = programming_sessions[session_key]
-    
     # Calculate current duration in seconds (but keep variable name for backward compatibility)
     current_time = datetime.now()
-    if session["status"] == "active":
-        duration_minutes = (current_time - session["start_time"]).total_seconds()
-        duration_minutes -= (session["total_paused_minutes"] * 60)
+    if session.status == "active":
+        duration_seconds = int((current_time - session.session_start_time).total_seconds()) - session.total_pause_duration
     else:  # paused
-        duration_minutes = (session["paused_at"] - session["start_time"]).total_seconds()
-        duration_minutes -= (session["total_paused_minutes"] * 60)
+        pause_anchor = session.current_pause_start_time or current_time
+        duration_seconds = int((pause_anchor - session.session_start_time).total_seconds()) - session.total_pause_duration
+
+    duration_minutes = max(duration_seconds, 0)
     
     return {
         "success": True,
@@ -644,9 +683,9 @@ async def get_session_status(
         "data": {
             "fab_id": fab_id,
             "has_active_session": True,
-            "status": session["status"],
-            "start_time": session["start_time"].isoformat(),
-            "paused_at": session["paused_at"].isoformat() if session["paused_at"] else None,
+            "status": session.status,
+            "start_time": session.session_start_time.isoformat(),
+            "paused_at": session.current_pause_start_time.isoformat() if session.current_pause_start_time else None,
             "duration_minutes": int(duration_minutes)
         }
     }

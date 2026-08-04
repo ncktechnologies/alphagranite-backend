@@ -438,6 +438,70 @@ class DraftingSessionNote(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.now)
 
 
+# --- SlabSmith Sessions ---
+class SlabSmithSession(SQLModel, table=True):
+    __tablename__ = "slab_smith_sessions"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    fab_id: int = Field(index=True)
+    user_id: int = Field()
+    status: str = Field(default="active")  # active, paused, completed
+
+    session_start_time: datetime = Field()
+    session_end_time: Optional[datetime] = Field(default=None)
+    current_pause_start_time: Optional[datetime] = Field(default=None)
+    total_pause_duration: int = Field(default=0)  # in seconds
+    total_time_spent: int = Field(default=0)  # in seconds
+
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: Optional[datetime] = Field(default=None)
+
+
+class SlabSmithSessionNote(SQLModel, table=True):
+    __tablename__ = "slab_smith_session_notes"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: int = Field(index=True)
+    fab_id: int = Field(index=True)
+    user_id: int = Field()
+    action: str = Field()  # start, pause, resume, end
+    timestamp: datetime = Field()
+    note: Optional[str] = Field(default=None)
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
+# --- Final Programming Sessions ---
+class FinalProgrammingSession(SQLModel, table=True):
+    __tablename__ = "final_programming_sessions"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    fab_id: int = Field(index=True)
+    user_id: int = Field()
+    status: str = Field(default="active")  # active, paused, completed
+
+    session_start_time: datetime = Field()
+    session_end_time: Optional[datetime] = Field(default=None)
+    current_pause_start_time: Optional[datetime] = Field(default=None)
+    total_pause_duration: int = Field(default=0)  # in seconds
+    total_time_spent: int = Field(default=0)  # in seconds
+
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: Optional[datetime] = Field(default=None)
+
+
+class FinalProgrammingSessionNote(SQLModel, table=True):
+    __tablename__ = "final_programming_session_notes"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: int = Field(index=True)
+    fab_id: int = Field(index=True)
+    user_id: int = Field()
+    action: str = Field()  # start, pause, resume, end
+    timestamp: datetime = Field()
+    note: Optional[str] = Field(default=None)
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
 # --- CNC Drafting ---
 class CNCDrafting(SQLModel, table=True):
     __tablename__ = "cnc_draftings"
