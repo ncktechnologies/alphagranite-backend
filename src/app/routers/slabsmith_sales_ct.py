@@ -98,13 +98,15 @@ async def update_slabsmith(
     slabsmith_id: int,
     slabsmith_data: SlabSmithUpdate = Body(
         ...,
-        example={
-            "drafter_id": 12,
-            "end_date": "2026-04-15T14:30:00",
-            "total_sqft_completed": "150.5",
-            "is_completed": False,
-            "status_id": 1,
-        },
+        examples=[
+            {
+                "drafter_id": 12,
+                "end_date": "2026-04-15T14:30:00",
+                "total_sqft_completed": "150.5",
+                "is_completed": False,
+                "status_id": 1,
+            }
+        ],
     ),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
