@@ -1,6 +1,7 @@
 from datetime import datetime, date, timedelta
 from typing import List, Optional
 from decimal import Decimal
+import logging
 import sqlalchemy as sa
 from sqlalchemy.future import select
 from sqlalchemy import func, or_, and_
@@ -42,6 +43,7 @@ from src.app.utils.helpers import utc_now
 
 
 router = APIRouter()
+logger = logging.getLogger("fabs_router")
 
 # Define the fab workflow stages in order (based on client workflow)
 FAB_STAGES = [
@@ -3320,13 +3322,29 @@ async def toggle_fab_hold(
     current_user: User = Depends(get_current_user)
 ):
     """Toggle FAB hold status using valid status.value_id values."""
+    logger.info(
+        "[FAB HOLD] Request received fab_id=%s on_hold=%s user_id=%s",
+        fab_id,
+        on_hold,
+        getattr(current_user, "id", None),
+    )
+
     fab_result = await db.execute(
         select(Fab).where(Fab.id == fab_id)
     )
     fab = fab_result.scalar_one_or_none()
     
     if not fab:
+        logger.warning("[FAB HOLD] FAB not found for fab_id=%s", fab_id)
         return error_response("FAB not found", 404)
+
+    logger.info(
+        "[FAB HOLD] Current fab state fab_id=%s status_id=%s current_stage=%s next_stage=%s",
+        fab.id,
+        fab.status_id,
+        fab.current_stage,
+        fab.next_stage,
+    )
 
     # Resolve status IDs from table and enforce the intended convention:
     # on_hold -> status_id 0, release -> active status id.
@@ -3349,14 +3367,61 @@ async def toggle_fab_hold(
     if active_status_id is None:
         active_status_id = next((sid for sid in available_status_ids if sid != hold_status_id), None)
 
+    logger.info(
+        "[FAB HOLD] Resolved statuses fab_id=%s status_rows=%s slug_to_value=%s hold_status_id=%s active_status_id=%s",
+        fab.id,
+        [(value_id, slug) for value_id, slug in status_rows],
+        slug_to_value,
+        hold_status_id,
+        active_status_id,
+    )
+
     if hold_status_id is None:
+        logger.error(
+            "[FAB HOLD] Hold status missing for fab_id=%s available_status_ids=%s",
+            fab.id,
+            available_status_ids,
+        )
         return error_response("Status value_id=0 (on hold) is not configured. Please seed/update status table.", 500)
     if active_status_id is None:
+        logger.error(
+            "[FAB HOLD] Active status could not be resolved for fab_id=%s slug_to_value=%s available_status_ids=%s",
+            fab.id,
+            slug_to_value,
+            available_status_ids,
+        )
         return error_response("No valid active status is configured for release from hold.", 500)
     
+    previous_status_id = fab.status_id
     fab.status_id = hold_status_id if on_hold else active_status_id
     fab.updated_by = current_user.id
-    await db.commit()
+
+    logger.info(
+        "[FAB HOLD] Updating fab_id=%s from status_id=%s to status_id=%s",
+        fab.id,
+        previous_status_id,
+        fab.status_id,
+    )
+
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception(
+            "[FAB HOLD] Commit failed fab_id=%s target_status_id=%s on_hold=%s current_user_id=%s",
+            fab.id,
+            fab.status_id,
+            on_hold,
+            getattr(current_user, "id", None),
+        )
+        raise
+
+    logger.info(
+        "[FAB HOLD] Update committed fab_id=%s new_status_id=%s on_hold=%s",
+        fab.id,
+        fab.status_id,
+        on_hold,
+    )
     
     return success_response(
         {"fab_id": fab_id, "on_hold": on_hold, "status_id": fab.status_id},
