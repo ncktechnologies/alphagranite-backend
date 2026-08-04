@@ -240,26 +240,26 @@ async def manage_programming_session(
     session_key = f"{fab_id}_{current_user.id}"
     action = session_data.action.lower()
 
-    async def get_open_drafting_session_ids() -> list[int]:
+    async def get_user_open_drafting_sessions() -> list[tuple[int, int]]:
         open_drafting_result = await db.execute(
-            select(DraftingSession.id)
+            select(DraftingSession.id, DraftingSession.fab_id)
             .where(
-                DraftingSession.fab_id == fab_id,
+                DraftingSession.drafter_id == current_user.id,
                 DraftingSession.status.in_(["drafting", "paused"]),
             )
         )
-        return [row[0] for row in open_drafting_result.all()]
+        return [(row[0], row[1]) for row in open_drafting_result.all()]
     
     if action == "start":
-        # Block final programming start while this FAB still has open drafting timers.
-        open_drafting_session_ids = await get_open_drafting_session_ids()
+        # Block final programming start while this user still has open drafting timers.
+        open_drafting_sessions = await get_user_open_drafting_sessions()
 
-        if open_drafting_session_ids:
+        if open_drafting_sessions:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
-                    "Cannot start final programming session because this FAB has open drafting timers "
-                    f"(statuses: drafting/paused). Open drafting session IDs: {open_drafting_session_ids}"
+                    "Cannot start final programming session because this user has open drafting timers "
+                    f"(statuses: drafting/paused). Open drafting sessions (session_id, fab_id): {open_drafting_sessions}"
                 ),
             )
 
@@ -342,13 +342,13 @@ async def manage_programming_session(
                 detail="Session is not paused"
             )
 
-        open_drafting_session_ids = await get_open_drafting_session_ids()
-        if open_drafting_session_ids:
+        open_drafting_sessions = await get_user_open_drafting_sessions()
+        if open_drafting_sessions:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
-                    "Cannot resume final programming session because this FAB has open drafting timers "
-                    f"(statuses: drafting/paused). Open drafting session IDs: {open_drafting_session_ids}"
+                    "Cannot resume final programming session because this user has open drafting timers "
+                    f"(statuses: drafting/paused). Open drafting sessions (session_id, fab_id): {open_drafting_sessions}"
                 ),
             )
 
