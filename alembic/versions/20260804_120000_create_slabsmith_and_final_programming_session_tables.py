@@ -1,7 +1,7 @@
 """create slabsmith and final programming session tables
 
 Revision ID: 20260804_120000
-Revises: notes_to_json_array, 2026042301, add_templating_fields, 20260401_120000, 2025_02_16_0000, add_fab_tracking_fields, 561270688422
+Revises: 20260701_130000
 Create Date: 2026-08-04 12:00:00
 """
 
@@ -10,15 +10,7 @@ import sqlalchemy as sa
 
 
 revision = "20260804_120000"
-down_revision = (
-    "notes_to_json_array",
-    "2026042301",
-    "add_templating_fields",
-    "20260401_120000",
-    "2025_02_16_0000",
-    "add_fab_tracking_fields",
-    "561270688422",
-)
+down_revision = "20260701_130000"
 branch_labels = None
 depends_on = None
 
