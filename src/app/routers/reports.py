@@ -1163,7 +1163,7 @@ async def get_owner_weekly_installer_labor_cost_report(
     year: int = Query(..., ge=2000, le=2100),
     month: int = Query(..., ge=1, le=12),
     total_employees: int = Query(40, ge=0, description="Display header value for total employees"),
-    overhead_per_week: float = Query(38512.69, ge=0, description="Default overhead amount per week"),
+    overhead_per_week: float = Query(18512.69, ge=0, description="Default overhead amount per week"),
     week_ending_weekday: int = Query(4, ge=0, le=6, description="Week ending day: Monday=0 ... Sunday=6"),
     payroll_overrides_json: Optional[str] = Query(
         None,

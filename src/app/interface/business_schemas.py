@@ -1256,19 +1256,22 @@ class CutListScheduleUpdate(BaseModel):
     revision_complete: Optional[bool] = Field(None, description="Mark revision as complete")
 
     @model_validator(mode="after")
-    def validate_required_fields(self):
-        required_fields = [
+    def validate_at_least_one_field(self):
+        updatable_fields = [
             "shop_date_schedule",
+            "installation_date",
             "no_of_pieces",
             "total_sqft",
             "wj_linft",
             "edging_linft",
             "cnc_linft",
             "miter_linft",
+            "revision_complete",
         ]
-        for field_name in required_fields:
-            if getattr(self, field_name) is None:
-                raise ValueError(f"{field_name} required")
+
+        if all(getattr(self, field_name) is None for field_name in updatable_fields):
+            raise ValueError("At least one field is required")
+
         return self
 
 

@@ -202,7 +202,7 @@ async def delete_workstation(
             detail="Workstation not found"
         )
     
-    ws.status_id = 0
+    ws.status_id = 2
     ws.is_active = False
     ws.updated_at = datetime.now()
     ws.updated_by = current_user.id

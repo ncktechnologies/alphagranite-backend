@@ -1,7 +1,9 @@
 import logging
 from typing import Optional
+from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 from src.app.database.user import User
+from src.app.database.department import Department
 from src.app.utils.config import get_db
 from fastapi import File, Form, UploadFile
 from src.app.service.file import FileService
@@ -411,8 +413,8 @@ async def get_employees(
     role_id: Optional[int] = Query(None, description="Filter by role ID"),
     email: Optional[str] = Query(None, description="Filter by exact email address"),
     phone: Optional[str] = Query(None, description="Filter by phone number"),
-    sort_by: Optional[str] = Query("id", description="Field to sort by (id, first_name, last_name, email, created_at)"),
-    sort_order: Optional[str] = Query("asc", description="Sort order (asc, desc)"),
+    sort_by: Optional[str] = Query("created_at", description="Field to sort by (id, first_name, last_name, email, created_at)"),
+    sort_order: Optional[str] = Query("desc", description="Sort order (asc, desc)"),
     current_user: User = Depends(PermissionChecker("employees", "read")),
     db: Session = Depends(get_db)
 ):
@@ -454,6 +456,67 @@ async def get_employees(
     return success_response(
         data=result,
         message="Employees retrieved successfully"
+    )
+
+@employee_router.get("/department/sales")
+async def get_sales_employees(
+    skip: int = Query(0, ge=0, description="Number of records to skip for pagination"),
+    limit: int = Query(100, ge=1, le=500, description="Maximum number of records to return"),
+    search: Optional[str] = Query(None, description="Search term for name, email or username"),
+    status_id: Optional[int] = Query(None, description="Filter by status ID (1=Active, 2=Inactive, 3=Deleted)"),
+    role_id: Optional[int] = Query(None, description="Filter by role ID"),
+    email: Optional[str] = Query(None, description="Filter by exact email address"),
+    phone: Optional[str] = Query(None, description="Filter by phone number"),
+    sort_by: Optional[str] = Query("created_at", description="Field to sort by (id, first_name, last_name, email, created_at)"),
+    sort_order: Optional[str] = Query("desc", description="Sort order (asc, desc)"),
+    current_user: User = Depends(PermissionChecker("employees", "read")),
+    db: Session = Depends(get_db)
+):
+    """
+    Get list of employees in SALES department with pagination and filtering
+    """
+
+    sales_department_result = await db.execute(
+        select(Department.id)
+        .where(func.lower(Department.name) == "sales")
+        .limit(1)
+    )
+    sales_department_id = sales_department_result.scalar_one_or_none()
+
+    if sales_department_id is None:
+        return success_response(
+            data={
+                "total": 0,
+                "page": skip // limit + 1 if limit > 0 else 1,
+                "per_page": limit,
+                "data": []
+            },
+            message="SALES department not found"
+        )
+
+    result = await call_service(
+        EmployeeService.get_employees,
+        db=db,
+        skip=skip,
+        limit=limit,
+        search=search,
+        department_id=sales_department_id,
+        status_id=status_id,
+        role_id=role_id,
+        email=email,
+        phone=phone,
+        sort_by=sort_by,
+        sort_order=sort_order
+    )
+
+    if result["data"]:
+        employees_data = result["data"]
+        enriched_employees = await enrich_employees_with_profile_images(db, employees_data)
+        result["data"] = enriched_employees
+
+    return success_response(
+        data=result,
+        message="SALES employees retrieved successfully"
     )
 
 @employee_router.get("/check-email/{email}")

@@ -421,8 +421,8 @@ class EmployeeService:
         role_id: int = None,
         email: str = None,
         phone: str = None,
-        sort_by: str = "id",
-        sort_order: str = "asc"
+        sort_by: str = "created_at",
+        sort_order: str = "desc"
     ):
        
         query = select(User, Department.name, Status.name)

@@ -646,8 +646,10 @@ async def get_fab_notes(db: AsyncSession, fab_id: int) -> List[dict]:
         FabNotes,
         CreatorUser.first_name.label("creator_first_name"),
         CreatorUser.last_name.label("creator_last_name"),
+        CreatorUser.profile_image_id.label("creator_profile_image_id"),
         UpdaterUser.first_name.label("updater_first_name"),
-        UpdaterUser.last_name.label("updater_last_name")
+        UpdaterUser.last_name.label("updater_last_name"),
+        UpdaterUser.profile_image_id.label("updater_profile_image_id")
     ).where(FabNotes.fab_id == fab_id)
     
     query = query.join(CreatorUser, FabNotes.created_by == CreatorUser.id, isouter=True)
@@ -662,8 +664,20 @@ async def get_fab_notes(db: AsyncSession, fab_id: int) -> List[dict]:
         fab_note = row[0]
         creator_first = row[1]
         creator_last = row[2]
-        updater_first = row[3]
-        updater_last = row[4]
+        creator_profile_image_id = row[3]
+        updater_first = row[4]
+        updater_last = row[5]
+        updater_profile_image_id = row[6]
+        creator_profile_image_url = (
+            f"{BASE_URL}/api/v1/files/{creator_profile_image_id}/view"
+            if creator_profile_image_id
+            else None
+        )
+        updater_profile_image_url = (
+            f"{BASE_URL}/api/v1/files/{updater_profile_image_id}/view"
+            if updater_profile_image_id
+            else None
+        )
         
         note_dict = {
             "id": fab_note.id,
@@ -672,10 +686,14 @@ async def get_fab_notes(db: AsyncSession, fab_id: int) -> List[dict]:
             "note": fab_note.note,
             "created_by": fab_note.created_by,
             "created_by_name": f"{creator_first} {creator_last}" if creator_first else None,
+            "created_by_profile_image_id": creator_profile_image_id,
+            "created_by_profile_image_url": creator_profile_image_url,
             "created_at": fab_note.created_at.isoformat() if fab_note.created_at else None,
             "updated_at": fab_note.updated_at.isoformat() if fab_note.updated_at else None,
             "updated_by": fab_note.updated_by,
-            "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
+            "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None,
+            "updated_by_profile_image_id": updater_profile_image_id,
+            "updated_by_profile_image_url": updater_profile_image_url,
         }
         notes.append(note_dict)
     
@@ -1210,8 +1228,9 @@ async def get_fabs_for_cnc_widget(
 ):
     """Get FABs for CNC widget: cnc_linft > 0 and latest CNC draft is not completed."""
 
-    # Align with dashboard widgets: default to active FABs unless caller specifies status_id.
-    effective_status_id = status_id if status_id is not None else 1
+    # Align with dashboard widgets: by default include active and on-hold FABs.
+    # If caller provides status_id, preserve explicit filtering.
+    default_visible_status_ids = [0, 1]
 
     # Step 1: Apply templating filters to get FAB IDs
     templating_fab_ids = await _apply_templating_filters(
@@ -1569,8 +1588,9 @@ async def get_fabs_with_shop_est_completion(
 ):
     """Get list of FABs that have a shop_est_completion_date set, with full FAB details."""
 
-    # Align with dashboard widgets: default to active FABs unless caller specifies status_id.
-    effective_status_id = status_id if status_id is not None else 1
+    # Align with dashboard widgets: include active and on-hold FABs by default.
+    # If status_id is provided, keep explicit filtering behavior.
+    default_visible_status_ids = [0, 1]
 
     # Step 1: Apply templating filters to get FAB IDs
     templating_fab_ids = await _apply_templating_filters(
@@ -1614,13 +1634,16 @@ async def get_fabs_with_shop_est_completion(
     stage_for_query = None if effective_current_stage == "install_scheduling" else effective_current_stage
 
     query = _build_fab_list_query(
-        job_id, fab_type, sales_person_id, effective_status_id, stage_for_query, next_stage,
+        job_id, fab_type, sales_person_id, status_id, stage_for_query, next_stage,
         None,  # search is handled below
         templating_fab_ids, latest_templating, shop_date_start, shop_date_end,
         template_completed_start, template_completed_end, predraft_completed_start, predraft_completed_end,
         draft_completed_start, draft_completed_end, sct_completed_start, sct_completed_end,
         date_filter
     )
+
+    if status_id is None:
+        query = query.where(Fab.status_id.in_(default_visible_status_ids))
 
     install_shop_est_stage_filter = Fab.current_stage == "install_scheduling"
 
@@ -1828,7 +1851,10 @@ async def get_fabs_with_shop_est_completion(
         count_query = count_query.where(Fab.fab_type.ilike(f"%{fab_type}%"))
     if sales_person_id is not None:
         count_query = count_query.where(Fab.sales_person_id == sales_person_id)
-    count_query = count_query.where(Fab.status_id == effective_status_id)
+    if status_id is None:
+        count_query = count_query.where(Fab.status_id.in_(default_visible_status_ids))
+    else:
+        count_query = count_query.where(Fab.status_id == status_id)
     if effective_current_stage == "install_scheduling":
         count_query = count_query.where(install_shop_est_stage_filter)
     elif current_stage:
@@ -1932,7 +1958,10 @@ async def get_fabs_with_shop_est_completion(
             stage_totals_query = stage_totals_query.where(Fab.fab_type.ilike(f"%{fab_type}%"))
         if sales_person_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.sales_person_id == sales_person_id)
-        stage_totals_query = stage_totals_query.where(Fab.status_id == effective_status_id)
+        if status_id is None:
+            stage_totals_query = stage_totals_query.where(Fab.status_id.in_(default_visible_status_ids))
+        else:
+            stage_totals_query = stage_totals_query.where(Fab.status_id == status_id)
 
         if effective_current_stage == "pre_draft_review":
             date_start, date_end = template_completed_start, template_completed_end
@@ -3290,7 +3319,7 @@ async def toggle_fab_hold(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Toggle FAB hold status by changing status_id (0=on hold, 1=active)"""
+    """Toggle FAB hold status using valid status.value_id values."""
     fab_result = await db.execute(
         select(Fab).where(Fab.id == fab_id)
     )
@@ -3298,9 +3327,34 @@ async def toggle_fab_hold(
     
     if not fab:
         return error_response("FAB not found", 404)
+
+    # Resolve status IDs from table and enforce the intended convention:
+    # on_hold -> status_id 0, release -> active status id.
+    status_result = await db.execute(select(Status.value_id, Status.slug))
+    status_rows = status_result.all()
+
+    slug_to_value = {
+        (slug or "").strip().lower(): value_id
+        for value_id, slug in status_rows
+        if value_id is not None
+    }
+    available_status_ids = [value_id for value_id, _ in status_rows if value_id is not None]
+
+    hold_status_id = 0 if 0 in available_status_ids else None
+
+    # Determine release/active status as a valid status different from hold.
+    active_status_id = slug_to_value.get("active")
+    if active_status_id == hold_status_id:
+        active_status_id = None
+    if active_status_id is None:
+        active_status_id = next((sid for sid in available_status_ids if sid != hold_status_id), None)
+
+    if hold_status_id is None:
+        return error_response("Status value_id=0 (on hold) is not configured. Please seed/update status table.", 500)
+    if active_status_id is None:
+        return error_response("No valid active status is configured for release from hold.", 500)
     
-    # Set status_id: 0 for on hold, 1 for active
-    fab.status_id = 0 if on_hold else 1
+    fab.status_id = hold_status_id if on_hold else active_status_id
     fab.updated_by = current_user.id
     await db.commit()
     
@@ -4056,8 +4110,10 @@ async def _batch_load_fab_notes(db: AsyncSession, fab_ids: List[int]) -> dict:
         FabNotes,
         CreatorUser.first_name.label("creator_first_name"),
         CreatorUser.last_name.label("creator_last_name"),
+        CreatorUser.profile_image_id.label("creator_profile_image_id"),
         UpdaterUser.first_name.label("updater_first_name"),
-        UpdaterUser.last_name.label("updater_last_name")
+        UpdaterUser.last_name.label("updater_last_name"),
+        UpdaterUser.profile_image_id.label("updater_profile_image_id")
     ).where(FabNotes.fab_id.in_(fab_ids))\
      .join(CreatorUser, FabNotes.created_by == CreatorUser.id, isouter=True)\
      .join(UpdaterUser, FabNotes.updated_by == UpdaterUser.id, isouter=True)\
@@ -4070,7 +4126,19 @@ async def _batch_load_fab_notes(db: AsyncSession, fab_ids: List[int]) -> dict:
     for row in rows:
         note = row[0]
         creator_first, creator_last = row[1], row[2]
-        updater_first, updater_last = row[3], row[4]
+        creator_profile_image_id = row[3]
+        updater_first, updater_last = row[4], row[5]
+        updater_profile_image_id = row[6]
+        creator_profile_image_url = (
+            f"{BASE_URL}/api/v1/files/{creator_profile_image_id}/view"
+            if creator_profile_image_id
+            else None
+        )
+        updater_profile_image_url = (
+            f"{BASE_URL}/api/v1/files/{updater_profile_image_id}/view"
+            if updater_profile_image_id
+            else None
+        )
         
         if note.fab_id not in notes_by_fab:
             notes_by_fab[note.fab_id] = []
@@ -4083,10 +4151,14 @@ async def _batch_load_fab_notes(db: AsyncSession, fab_ids: List[int]) -> dict:
                 "note": note.note,
                 "created_by": note.created_by,
                 "created_by_name": f"{creator_first} {creator_last}" if creator_first else None,
+                "created_by_profile_image_id": creator_profile_image_id,
+                "created_by_profile_image_url": creator_profile_image_url,
                 "created_at": note.created_at.isoformat() if note.created_at else None,
                 "updated_at": note.updated_at.isoformat() if note.updated_at else None,
                 "updated_by": note.updated_by,
-                "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None
+                "updated_by_name": f"{updater_first} {updater_last}" if updater_first else None,
+                "updated_by_profile_image_id": updater_profile_image_id,
+                "updated_by_profile_image_url": updater_profile_image_url,
             })
     
     return notes_by_fab
