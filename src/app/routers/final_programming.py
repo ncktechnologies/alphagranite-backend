@@ -249,6 +249,22 @@ async def manage_programming_session(
             )
         )
         return [(row[0], row[1]) for row in open_drafting_result.all()]
+
+    def build_open_drafting_message(action_name: str, open_sessions: list[tuple[int, int]]) -> str:
+        fab_ids = sorted({fab_id for _, fab_id in open_sessions if fab_id is not None})
+        if fab_ids:
+            fab_list = ", ".join(str(fab_id) for fab_id in fab_ids)
+            return (
+                f"Cannot {action_name} final programming yet. "
+                f"You still have open Drafting timer(s) on FAB(s): {fab_list}. "
+                "Please end those Drafting timer(s) first."
+            )
+
+        return (
+            f"Cannot {action_name} final programming yet. "
+            "You still have open Drafting timer(s). "
+            "Please end those Drafting timer(s) first."
+        )
     
     if action == "start":
         # Block final programming start while this user still has open drafting timers.
@@ -257,10 +273,7 @@ async def manage_programming_session(
         if open_drafting_sessions:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Cannot start final programming session because this user has open drafting timers "
-                    f"(statuses: drafting/paused). Open drafting sessions (session_id, fab_id): {open_drafting_sessions}"
-                ),
+                detail=build_open_drafting_message("start", open_drafting_sessions),
             )
 
         # Prevent starting if any running timer exists across all session types
@@ -346,10 +359,7 @@ async def manage_programming_session(
         if open_drafting_sessions:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Cannot resume final programming session because this user has open drafting timers "
-                    f"(statuses: drafting/paused). Open drafting sessions (session_id, fab_id): {open_drafting_sessions}"
-                ),
+                detail=build_open_drafting_message("resume", open_drafting_sessions),
             )
 
         if not getattr(current_user, "is_super_admin", False):
