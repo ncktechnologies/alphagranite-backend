@@ -9,6 +9,8 @@ Usage in route handlers (skip for super admins):
         await assert_no_active_timer_session(db, user_id)
 """
 
+from collections import defaultdict
+
 from fastapi import HTTPException, status
 from sqlalchemy import or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,12 +29,50 @@ from src.app.database.templater_job_timer_session import TemplaterJobTimerSessio
 from src.app.interface.generated_schemas import ShopRevision
 
 
-def _build_open_timer_message(timer_entries: list[str]) -> str:
-    timers_text = "; ".join(timer_entries)
+def _format_reference_ids(label: str, values: list[int]) -> str:
+    unique_values = sorted({value for value in values if value is not None})
+    if not unique_values:
+        return ""
+
+    joined_values = ", ".join(str(value) for value in unique_values[:5])
+    if len(unique_values) > 5:
+        joined_values = f"{joined_values}, +{len(unique_values) - 5} more"
+
+    return f"{label} {joined_values}"
+
+
+def _build_open_timer_message(timer_entries: list[dict[str, object]]) -> str:
+    grouped_entries: dict[str, dict[str, list[int]]] = defaultdict(
+        lambda: {"fab_ids": [], "job_ids": [], "plan_ids": []}
+    )
+
+    for entry in timer_entries:
+        section = str(entry["section"])
+        if entry.get("fab_id") is not None:
+            grouped_entries[section]["fab_ids"].append(int(entry["fab_id"]))
+        if entry.get("job_id") is not None:
+            grouped_entries[section]["job_ids"].append(int(entry["job_id"]))
+        if entry.get("plan_id") is not None:
+            grouped_entries[section]["plan_ids"].append(int(entry["plan_id"]))
+
+    summaries: list[str] = []
+    for section, refs in grouped_entries.items():
+        parts = [
+            formatted
+            for formatted in (
+                _format_reference_ids("FABs", refs["fab_ids"]),
+                _format_reference_ids("jobs", refs["job_ids"]),
+                _format_reference_ids("plans", refs["plan_ids"]),
+            )
+            if formatted
+        ]
+        summaries.append(f"{section} ({'; '.join(parts)})" if parts else section)
+
+    timers_text = "; ".join(summaries)
     return (
-        "You already have open timer(s). "
-        "Please end those timer(s) before starting or resuming another one. "
-        f"Open timers: {timers_text}"
+        "You already have open timers. "
+        "End them before starting or resuming another one. "
+        f"Open in: {timers_text}"
     )
 
 
@@ -44,7 +84,7 @@ async def assert_no_active_timer_session(db: AsyncSession, user_id: int) -> None
     this call when ``current_user.is_super_admin`` is True.
     """
 
-    timer_entries: list[str] = []
+    timer_entries: list[dict[str, object]] = []
 
     drafting_rows = (
         await db.execute(
@@ -56,7 +96,7 @@ async def assert_no_active_timer_session(db: AsyncSession, user_id: int) -> None
         )
     ).all()
     timer_entries.extend(
-        [f"Drafting (FAB #{fab_id}, status: {status_value})" for fab_id, status_value in drafting_rows]
+        [{"section": "Drafting", "fab_id": fab_id} for fab_id, _status_value in drafting_rows]
     )
 
     cnc_rows = (
@@ -69,7 +109,7 @@ async def assert_no_active_timer_session(db: AsyncSession, user_id: int) -> None
         )
     ).all()
     timer_entries.extend(
-        [f"CNC (FAB #{fab_id}, status: {status_value})" for fab_id, status_value in cnc_rows]
+        [{"section": "CNC", "fab_id": fab_id} for fab_id, _status_value in cnc_rows]
     )
 
     final_programming_rows = (
@@ -82,10 +122,7 @@ async def assert_no_active_timer_session(db: AsyncSession, user_id: int) -> None
         )
     ).all()
     timer_entries.extend(
-        [
-            f"Final Programming (FAB #{fab_id}, status: {status_value})"
-            for fab_id, status_value in final_programming_rows
-        ]
+        [{"section": "Final Programming", "fab_id": fab_id} for fab_id, _status_value in final_programming_rows]
     )
 
     slab_smith_rows = (
@@ -98,7 +135,7 @@ async def assert_no_active_timer_session(db: AsyncSession, user_id: int) -> None
         )
     ).all()
     timer_entries.extend(
-        [f"SlabSmith (FAB #{fab_id}, status: {status_value})" for fab_id, status_value in slab_smith_rows]
+        [{"section": "SlabSmith", "fab_id": fab_id} for fab_id, _status_value in slab_smith_rows]
     )
 
     operator_rows = (
@@ -112,8 +149,8 @@ async def assert_no_active_timer_session(db: AsyncSession, user_id: int) -> None
     ).all()
     timer_entries.extend(
         [
-            f"Operator Job Timer (job #{job_id}, FAB #{fab_id}, status: {status_value})"
-            for job_id, fab_id, status_value in operator_rows
+            {"section": "Operator Job Timer", "job_id": job_id, "fab_id": fab_id}
+            for job_id, fab_id, _status_value in operator_rows
         ]
     )
 
@@ -127,7 +164,7 @@ async def assert_no_active_timer_session(db: AsyncSession, user_id: int) -> None
         )
     ).all()
     timer_entries.extend(
-        [f"Shop Cut Plan (plan #{plan_id}, status: {status_value})" for plan_id, status_value in shop_plan_rows]
+        [{"section": "Shop Cut Plan", "plan_id": plan_id} for plan_id, _status_value in shop_plan_rows]
     )
 
     installer_rows = (
@@ -141,8 +178,8 @@ async def assert_no_active_timer_session(db: AsyncSession, user_id: int) -> None
     ).all()
     timer_entries.extend(
         [
-            f"Installer Job Timer (job #{job_id}, FAB #{fab_id}, status: {status_value})"
-            for job_id, fab_id, status_value in installer_rows
+            {"section": "Installer Job Timer", "job_id": job_id, "fab_id": fab_id}
+            for job_id, fab_id, _status_value in installer_rows
         ]
     )
 
@@ -157,8 +194,8 @@ async def assert_no_active_timer_session(db: AsyncSession, user_id: int) -> None
     ).all()
     timer_entries.extend(
         [
-            f"Templater Job Timer (job #{job_id}, FAB #{fab_id}, status: {status_value})"
-            for job_id, fab_id, status_value in templater_rows
+            {"section": "Templater Job Timer", "job_id": job_id, "fab_id": fab_id}
+            for job_id, fab_id, _status_value in templater_rows
         ]
     )
 
