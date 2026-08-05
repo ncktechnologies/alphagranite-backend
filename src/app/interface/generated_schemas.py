@@ -214,6 +214,87 @@ class PlanningSection(SQLModel, table=True):
     updated_at: Optional[datetime] = None
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
 
+
+class HcpPayrollSourceConfig(SQLModel, table=True):
+    __tablename__ = "hcp_payroll_source_configs"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(max_length=255, unique=True, index=True)
+    base_url: str = Field(default="https://secure.saashr.com", max_length=255)
+    company_id: str = Field(default="83943830", max_length=100, index=True)
+    grant_type: str = Field(default="client_credentials", max_length=100)
+    client_id: Optional[str] = Field(default=None, max_length=255)
+    client_secret: Optional[str] = Field(default=None, max_length=255)
+    report_settings_id: str = Field(default="89798180", max_length=100, index=True)
+    schedule_type: str = Field(default="weekly", max_length=50)
+    schedule_interval: int = Field(default=1)
+    schedule_weekday: int = Field(default=0)
+    schedule_hour: int = Field(default=1)
+    schedule_minute: int = Field(default=0)
+    is_active: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: Optional[datetime] = None
+    created_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
+
+
+class HcpPayrollIngestionRun(SQLModel, table=True):
+    __tablename__ = "hcp_payroll_ingestion_runs"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    source_config_id: int = Field(foreign_key="hcp_payroll_source_configs.id", index=True)
+    status: str = Field(default="running", max_length=50, index=True)
+    token_request_url: Optional[str] = Field(default=None, max_length=500)
+    token_response_json: Optional[dict] = Field(default=None, sa_column=Column(JSONB))
+    token_acquired_at: Optional[datetime] = Field(default=None)
+    token_expires_in: Optional[int] = Field(default=None)
+    report_request_url: Optional[str] = Field(default=None, max_length=500)
+    report_http_status: Optional[int] = Field(default=None)
+    report_content_type: Optional[str] = Field(default=None, max_length=255)
+    error_message: Optional[str] = Field(default=None)
+    row_count: int = Field(default=0)
+    created_at: datetime = Field(default_factory=datetime.now)
+    started_at: datetime = Field(default_factory=datetime.now)
+    finished_at: Optional[datetime] = Field(default=None)
+    created_by: Optional[int] = Field(default=None, foreign_key="users.id")
+
+
+class HcpPayrollReportSnapshot(SQLModel, table=True):
+    __tablename__ = "hcp_payroll_report_snapshots"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    source_config_id: int = Field(foreign_key="hcp_payroll_source_configs.id", index=True)
+    ingestion_run_id: int = Field(foreign_key="hcp_payroll_ingestion_runs.id", index=True)
+    report_settings_id: str = Field(max_length=100, index=True)
+    report_title: Optional[str] = Field(default=None, max_length=255)
+    payload_format: str = Field(default="text", max_length=50)
+    raw_payload_text: str = Field()
+    row_count: int = Field(default=0)
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
+class HcpPayrollReportRow(SQLModel, table=True):
+    __tablename__ = "hcp_payroll_report_rows"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    snapshot_id: int = Field(foreign_key="hcp_payroll_report_snapshots.id", index=True)
+    source_config_id: int = Field(foreign_key="hcp_payroll_source_configs.id", index=True)
+    ingestion_run_id: int = Field(foreign_key="hcp_payroll_ingestion_runs.id", index=True)
+    row_kind: str = Field(max_length=50, index=True)
+    row_index: int = Field(index=True)
+    cost_center_name: Optional[str] = Field(default=None, max_length=255, index=True)
+    employee_first_name: Optional[str] = Field(default=None, max_length=255, index=True)
+    employee_last_name: Optional[str] = Field(default=None, max_length=255, index=True)
+    hourly_pay: Optional[float] = Field(default=None)
+    regular_hours: Optional[float] = Field(default=None)
+    holiday_hours: Optional[float] = Field(default=None)
+    pto_hours: Optional[float] = Field(default=None)
+    total_reg_pto_hol_wages: Optional[float] = Field(default=None)
+    overtime_hours: Optional[float] = Field(default=None)
+    total_ot_wages: Optional[float] = Field(default=None)
+    raw_line_text: Optional[str] = Field(default=None)
+    created_at: datetime = Field(default_factory=datetime.now)
+
 # --- Shop Planning Sections ---
 class ShopPlanningSection(SQLModel, table=True):
     __tablename__ = "shop_planning_sections"
