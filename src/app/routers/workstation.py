@@ -362,6 +362,10 @@ def _serialize_workstation(ws: WorkStation, operators_by_id: dict = None, sectio
         }
         for uid in (ws.operator_ids or [])
     ]
+    operators = sorted(
+        operators,
+        key=lambda item: (item.get("name") or "").strip().lower(),
+    )
 
     ps = sections_by_id.get(ws.planning_section_id) if ws.planning_section_id else None
 
