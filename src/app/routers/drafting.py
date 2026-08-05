@@ -589,6 +589,19 @@ async def update_drafting(
         
         if hasattr(drafting, db_field):
             setattr(drafting, db_field, value)
+
+    # Keep latest drafting session cumulative sqft in sync with drafting total sqft updates.
+    sqft_update = update_data.get('total_sqft_drafted', update_data.get('total_sqft'))
+    if sqft_update is not None:
+        latest_session_result = await db.execute(
+            select(DraftingSession)
+            .where(DraftingSession.fab_id == drafting.fab_id)
+            .order_by(DraftingSession.created_at.desc())
+            .limit(1)
+        )
+        latest_session = latest_session_result.scalar_one_or_none()
+        if latest_session:
+            latest_session.cumulative_sqft_drafted = str(sqft_update)
     
     # Handle completion
     if is_complete:

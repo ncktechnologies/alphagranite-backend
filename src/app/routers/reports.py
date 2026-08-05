@@ -4883,6 +4883,7 @@ async def get_owner_daily_completion_report(
                 func.coalesce(func.sum(_safe_numeric_col(DraftingSession.cumulative_sqft_drafted)), 0).label("sqft"),
             )
             .where(
+                func.lower(func.trim(func.coalesce(DraftingSession.status, ""))) == "completed",
                 draft_day_expr >= effective_from,
                 draft_day_expr <= effective_to,
             )
