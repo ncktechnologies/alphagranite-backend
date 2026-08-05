@@ -337,7 +337,15 @@ class RoleService:
 
             # Enforce one-role-per-user: reject users already assigned to another role.
             conflicting_member_rows = await db.execute(
-                select(UserRole.user_id, UserRole.role_id)
+                select(
+                    UserRole.user_id,
+                    UserRole.role_id,
+                    User.first_name,
+                    User.last_name,
+                    Role.name,
+                )
+                .join(User, User.id == UserRole.user_id)
+                .join(Role, Role.id == UserRole.role_id)
                 .where(
                     UserRole.user_id.in_(new_member_ids),
                     UserRole.role_id != role_id,
@@ -346,7 +354,13 @@ class RoleService:
             conflicting_members = conflicting_member_rows.all()
             if conflicting_members:
                 conflict_details = ", ".join(
-                    [f"user {user_id} (role {assigned_role_id})" for user_id, assigned_role_id in conflicting_members]
+                    [
+                        (
+                            f"{((first_name or '').strip() + ' ' + (last_name or '').strip()).strip() or f'User #{user_id}'} "
+                            f"(role: {role_name or f'Role #{assigned_role_id}'})"
+                        )
+                        for user_id, assigned_role_id, first_name, last_name, role_name in conflicting_members
+                    ]
                 )
                 raise ValueError(
                     "Cannot assign users who already have another role: "
