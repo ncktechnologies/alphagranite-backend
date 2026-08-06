@@ -637,6 +637,22 @@ async def delete_shop_plan(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Shop plan with ID {plan_id} not found"
             )
+
+        has_timer_session_result = await db.execute(
+            select(ShopCutPlanTimerSession.id)
+            .where(ShopCutPlanTimerSession.shop_cut_plan_id == plan_id)
+            .limit(1)
+        )
+        has_timer_started = has_timer_session_result.scalar_one_or_none() is not None
+
+        if int(plan.work_percentage or 0) > 0 or has_timer_started:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Shop plan cannot be deleted because work has already started "
+                    "(work percentage recorded or timer activity exists)."
+                ),
+            )
         
         fab_id = plan.fab_id
         await db.delete(plan)
