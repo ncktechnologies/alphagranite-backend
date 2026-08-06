@@ -28,62 +28,66 @@ async def create_revision(
     current_user: User = Depends(get_current_user)
 ):
     """Create a revision for a fab"""
-    
-    # Check if fab exists
-    fab_result = await db.execute(select(Fab).where(Fab.id == revision_data.fab_id))
-    fab = fab_result.scalar_one_or_none()
-    if not fab:
-        raise error_response("Fab not found", 404)
-    
-    # Check if requesting user exists
-    requester_result = await db.execute(select(User).where(User.id == revision_data.requested_by))
-    if not requester_result.scalar_one_or_none():
-        raise error_response("Requesting user not found", 404)
-    
-    # Create revision
-    revision = Revision(
-        fab_id=revision_data.fab_id,
-        revision_type=revision_data.revision_type,
-        revision_reason=revision_data.revision_reason,
-        requested_by=revision_data.requested_by,
-        assigned_to=revision_data.assigned_to,
-        scheduled_start_date=revision_data.scheduled_start_date,
-        scheduled_end_date=revision_data.scheduled_end_date,
-        revision_notes=revision_data.revision_notes,
-        status_id=1,
-        created_at=datetime.now()
-    )
-    
-    # Update fab stage
-    fab.current_stage = "revision"
-    fab.updated_at = datetime.now()
-    fab.updated_by = current_user.id
-    
-    db.add(revision)
-    await db.commit()
-    await db.refresh(revision)
-    
-    return success_response(
-        RevisionResponse(
-            id=revision.id,
-            fab_id=revision.fab_id,
-            revision_type=revision.revision_type,
-            revision_reason=revision.revision_reason,
-            requested_by=revision.requested_by,
-            assigned_to=revision.assigned_to,
-            scheduled_start_date=revision.scheduled_start_date,
-            scheduled_end_date=revision.scheduled_end_date,
-            actual_start_date=revision.actual_start_date,
-            actual_end_date=revision.actual_end_date,
-            revision_notes=revision.revision_notes,
-            is_completed=revision.is_completed,
-            status_id=revision.status_id,
-            created_at=revision.created_at,
-            updated_at=revision.updated_at,
-            updated_by=revision.updated_by
-        ),
-        "Revision created successfully"
-    )
+
+    try:
+        # Check if fab exists
+        fab_result = await db.execute(select(Fab).where(Fab.id == revision_data.fab_id))
+        fab = fab_result.scalar_one_or_none()
+        if not fab:
+            raise error_response("Fab not found", 404)
+
+        # Check if requesting user exists
+        requester_result = await db.execute(select(User).where(User.id == revision_data.requested_by))
+        if not requester_result.scalar_one_or_none():
+            raise error_response("Requesting user not found", 404)
+
+        # Create revision
+        revision = Revision(
+            fab_id=revision_data.fab_id,
+            revision_type=revision_data.revision_type,
+            revision_reason=revision_data.revision_reason,
+            requested_by=revision_data.requested_by,
+            assigned_to=revision_data.assigned_to,
+            scheduled_start_date=revision_data.scheduled_start_date,
+            scheduled_end_date=revision_data.scheduled_end_date,
+            revision_notes=revision_data.revision_notes,
+            status_id=1,
+            created_at=datetime.now()
+        )
+
+        # Update fab stage
+        fab.current_stage = "revision"
+        fab.updated_at = datetime.now()
+        fab.updated_by = current_user.id
+
+        db.add(revision)
+        await db.commit()
+        await db.refresh(revision)
+
+        return success_response(
+            RevisionResponse(
+                id=revision.id,
+                fab_id=revision.fab_id,
+                revision_type=revision.revision_type,
+                revision_reason=revision.revision_reason,
+                requested_by=revision.requested_by,
+                assigned_to=revision.assigned_to,
+                scheduled_start_date=revision.scheduled_start_date,
+                scheduled_end_date=revision.scheduled_end_date,
+                actual_start_date=revision.actual_start_date,
+                actual_end_date=revision.actual_end_date,
+                revision_notes=revision.revision_notes,
+                is_completed=revision.is_completed,
+                status_id=revision.status_id,
+                created_at=revision.created_at,
+                updated_at=revision.updated_at,
+                updated_by=revision.updated_by
+            ),
+            "Revision created successfully"
+        )
+    except HTTPException:
+        await db.rollback()
+        raise
 
 
 @router.put("/revisions/{revision_id}", response_model=SuccessResponse[RevisionResponse])
