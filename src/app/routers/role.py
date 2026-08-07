@@ -277,7 +277,7 @@ async def update_role_status(
 
 @role_router.get("")
 async def get_roles(
-    current_user: User = Depends(PermissionChecker("roles", "read")),
+    current_user: User = Depends(get_current_user),
     skip: int = Query(0, ge=0, description="Number of records to skip for pagination"),
     limit: int = Query(100, ge=1, le=500, description="Maximum number of records to return"),
     search: Optional[str] = Query(None, description="Search term for role name or description"),

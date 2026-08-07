@@ -387,7 +387,7 @@ class ResurfaceScheduling(SQLModel, table=True):
 class Revision(SQLModel, table=True):
     __tablename__ = "revisions"
     id: Optional[int] = Field(default=None, primary_key=True)
-    fab_id: int = Field(foreign_key="fabs.id", unique=True)  # ← Add unique=True
+    fab_id: int = Field(foreign_key="fabs.id", index=True)
     revision_type: str = Field(description="Type of revision needed")
     requested_by: int = Field()
     assigned_to: Optional[int] = Field(default=None)
