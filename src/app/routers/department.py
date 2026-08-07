@@ -171,7 +171,7 @@ async def list_departments(
     page: int = Query(1, ge=1, description="Page number"),
     size: int = Query(10, ge=1, le=100, description="Items per page"),
     status: Optional[int] = Query(None, description="Filter by status"),
-    current_user: User = Depends(PermissionChecker("departments", "read")),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
