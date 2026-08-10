@@ -5323,6 +5323,21 @@ async def get_owner_monthly_cut_completion_report(
         effective_start_date, effective_end_date = effective_end_date, effective_start_date
     start_dt, end_dt = _range_bounds(effective_start_date, effective_end_date)
     cut_date_expr = func.coalesce(Fab.shop_date_schedule, Fab.final_programming_completed_date)
+    has_shop_cut_plan = (
+        select(ShopCutPlan.id)
+        .where(ShopCutPlan.fab_id == Fab.id)
+        .limit(1)
+        .exists()
+    )
+    has_non_100_shop_cut_plan = (
+        select(ShopCutPlan.id)
+        .where(
+            ShopCutPlan.fab_id == Fab.id,
+            func.coalesce(ShopCutPlan.work_percentage, -1) != 100,
+        )
+        .limit(1)
+        .exists()
+    )
     fab_type_sort_normalized = (fab_type_sort or "asc").strip().lower()
     fab_type_order = (
         func.lower(Fab.fab_type).desc()
@@ -5357,7 +5372,12 @@ async def get_owner_monthly_cut_completion_report(
         .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
         .join(CostOfStone, CostOfStone.id == Fab.cost_of_stone_id, isouter=True)
         .join(CutList, CutList.fab_id == Fab.id, isouter=True)
-        .where(cut_date_expr >= start_dt, cut_date_expr <= end_dt)
+        .where(
+            cut_date_expr >= start_dt,
+            cut_date_expr <= end_dt,
+            has_shop_cut_plan,
+            ~has_non_100_shop_cut_plan,
+        )
         .order_by(cut_date_expr.asc(), fab_type_order, Fab.id.asc())
     )
 
@@ -5522,6 +5542,166 @@ async def get_owner_monthly_cut_completion_report(
         "Owner monthly cut completion report generated",
     )
 
+@router.get("/reports/monthly-cut-completion", response_model=SuccessResponse[dict])
+async def get_monthly_cut_completion_report(
+    month: str = Query(..., description="Month number (1-12) or month name (e.g. April)"),
+    year: int = Query(..., ge=2000, le=2100),
+    fab_type: Optional[str] = Query(None, description="Optional FAB type filter"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Monthly cut completion report with summary and detailed entries."""
+    month_num = _parse_month_input(month)
+    if month_num is None:
+        return success_response(None, "Invalid month. Use month number (1-12) or month name", status_code=400)
+
+    start_dt, end_dt = _month_bounds(year, month_num)
+    cut_date_expr = func.coalesce(Fab.shop_date_schedule, Fab.final_programming_completed_date)
+    has_shop_cut_plan = (
+        select(ShopCutPlan.id)
+        .where(ShopCutPlan.fab_id == Fab.id)
+        .limit(1)
+        .exists()
+    )
+    has_non_100_shop_cut_plan = (
+        select(ShopCutPlan.id)
+        .where(
+            ShopCutPlan.fab_id == Fab.id,
+            func.coalesce(ShopCutPlan.work_percentage, -1) != 100,
+        )
+        .limit(1)
+        .exists()
+    )
+    cut_or_wj_plan_exists = (
+        select(ShopCutPlan.id)
+        .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
+        .where(
+            ShopCutPlan.fab_id == Fab.id,
+            func.lower(func.trim(PlanningSection.plan_name)).in_(["cut", "wj"]),
+        )
+        .exists()
+    )
+
+    query = (
+        select(
+            cut_date_expr.label("cut_date"),
+            Fab.fab_type,
+            Fab.id,
+            BusinessJob.job_number,
+            Account.name.label("account_name"),
+            StoneType.name.label("stone_type_name"),
+            StoneColor.name.label("stone_color_name"),
+            StoneThickness.thickness.label("stone_thickness"),
+            Fab.no_of_pieces,
+            Fab.total_sqft,
+            CostOfStone.cost_per_sqft,
+            Fab.revenue,
+            Fab.cost_of_stone,
+            CostOfStone.total_cost,
+            Fab.gp,
+        )
+        .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
+        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
+        .join(StoneType, StoneType.id == Fab.stone_type_id, isouter=True)
+        .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
+        .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
+        .join(CostOfStone, CostOfStone.id == Fab.cost_of_stone_id, isouter=True)
+        .where(
+            cut_date_expr >= start_dt,
+            cut_date_expr <= end_dt,
+            cut_or_wj_plan_exists,
+            has_shop_cut_plan,
+            ~has_non_100_shop_cut_plan,
+        )
+        .order_by(cut_date_expr.asc(), Fab.id.asc())
+    )
+
+    if fab_type:
+        query = query.where(func.lower(Fab.fab_type) == fab_type.strip().lower())
+
+    records = (await db.execute(query)).all()
+
+    entries = []
+    total_pieces = 0
+    total_sqft = 0.0
+    total_revenue = 0.0
+    total_cost_of_stone = 0.0
+    total_gp = 0.0
+
+    for (
+        cut_date,
+        row_fab_type,
+        fab_id,
+        job_number,
+        account_name,
+        stone_type_name,
+        stone_color_name,
+        stone_thickness,
+        no_of_pieces,
+        sqft,
+        cost_per_sqft_raw,
+        revenue_raw,
+        fab_cost_of_stone,
+        cos_total_cost,
+        gp_raw,
+    ) in records:
+        if cut_date is None:
+            continue
+
+        pieces_value = int(_to_float(no_of_pieces))
+        sqft_value = round(_to_float(sqft), 2)
+        cost_per_sf = round(_to_float(cost_per_sqft_raw), 2)
+        revenue_value = round((-cost_per_sf * sqft_value), 2)
+        cost_of_stone_value = round(_to_float(fab_cost_of_stone if fab_cost_of_stone is not None else cos_total_cost), 2)
+        gp_value = round((-revenue_value - cost_of_stone_value), 2)
+
+        total_pieces += pieces_value
+        total_sqft += sqft_value
+        total_revenue += revenue_value
+        total_cost_of_stone += cost_of_stone_value
+        total_gp += gp_value
+
+        info_parts = [account_name, stone_type_name, stone_color_name, stone_thickness]
+        fab_info = " - ".join(str(part).strip() for part in info_parts if part and str(part).strip())
+
+        entries.append(
+            {
+                "cut_date": cut_date.date().isoformat(),
+                "fab_type": row_fab_type,
+                "fab_id": fab_id,
+                "job_number": job_number,
+                "fab_info": fab_info or None,
+                "no_of_pieces": pieces_value,
+                "sqft": sqft_value,
+                "cost/sf": cost_per_sf,
+                "revenue": revenue_value,
+                "revenue_per_sqft": round((revenue_value / sqft_value), 2) if sqft_value else 0.0,
+                "cost_of_stone": cost_of_stone_value,
+                "gp": gp_value,
+            }
+        )
+
+    total_sqft = round(total_sqft, 2)
+    total_revenue = round(total_revenue, 2)
+    total_cost_of_stone = round(total_cost_of_stone, 2)
+    total_gp = round(total_gp, 2)
+
+    return success_response(
+        {
+            "month": calendar.month_name[month_num],
+            "year": year,
+            "summary": {
+                "total_no_of_pieces": int(total_pieces),
+                "total_sqft": total_sqft,
+                "total_revenue": total_revenue,
+                "total_revenue/sqft": round((total_revenue / total_sqft), 2) if total_sqft else 0.0,
+                "total_cost_of_stone": total_cost_of_stone,
+                "total_gp": total_gp,
+            },
+            "entries": entries,
+        },
+        "Monthly Cut Completion data retrieved successfully",
+    )
 
 @router.patch("/reports/owner/monthly-cut-completion/{monthly_cut_completion_id}", response_model=SuccessResponse[dict])
 async def patch_owner_monthly_cut_completion(
@@ -5932,145 +6112,7 @@ async def get_daily_install_completion_report(
     )
 
 
-@router.get("/reports/monthly-cut-completion", response_model=SuccessResponse[dict])
-async def get_monthly_cut_completion_report(
-    month: str = Query(..., description="Month number (1-12) or month name (e.g. April)"),
-    year: int = Query(..., ge=2000, le=2100),
-    fab_type: Optional[str] = Query(None, description="Optional FAB type filter"),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Monthly cut completion report with summary and detailed entries."""
-    month_num = _parse_month_input(month)
-    if month_num is None:
-        return success_response(None, "Invalid month. Use month number (1-12) or month name", status_code=400)
 
-    start_dt, end_dt = _month_bounds(year, month_num)
-    cut_date_expr = func.coalesce(Fab.shop_date_schedule, Fab.final_programming_completed_date)
-    cut_or_wj_plan_exists = (
-        select(ShopCutPlan.id)
-        .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
-        .where(
-            ShopCutPlan.fab_id == Fab.id,
-            func.lower(func.trim(PlanningSection.plan_name)).in_(["cut", "wj"]),
-        )
-        .exists()
-    )
-
-    query = (
-        select(
-            cut_date_expr.label("cut_date"),
-            Fab.fab_type,
-            Fab.id,
-            BusinessJob.job_number,
-            Account.name.label("account_name"),
-            StoneType.name.label("stone_type_name"),
-            StoneColor.name.label("stone_color_name"),
-            StoneThickness.thickness.label("stone_thickness"),
-            Fab.no_of_pieces,
-            Fab.total_sqft,
-            CostOfStone.cost_per_sqft,
-            Fab.revenue,
-            Fab.cost_of_stone,
-            CostOfStone.total_cost,
-            Fab.gp,
-        )
-        .join(BusinessJob, BusinessJob.id == Fab.job_id, isouter=True)
-        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
-        .join(StoneType, StoneType.id == Fab.stone_type_id, isouter=True)
-        .join(StoneColor, StoneColor.id == Fab.stone_color_id, isouter=True)
-        .join(StoneThickness, StoneThickness.id == Fab.stone_thickness_id, isouter=True)
-        .join(CostOfStone, CostOfStone.id == Fab.cost_of_stone_id, isouter=True)
-        .where(cut_date_expr >= start_dt, cut_date_expr <= end_dt, cut_or_wj_plan_exists)
-        .order_by(cut_date_expr.asc(), Fab.id.asc())
-    )
-
-    if fab_type:
-        query = query.where(func.lower(Fab.fab_type) == fab_type.strip().lower())
-
-    records = (await db.execute(query)).all()
-
-    entries = []
-    total_pieces = 0
-    total_sqft = 0.0
-    total_revenue = 0.0
-    total_cost_of_stone = 0.0
-    total_gp = 0.0
-
-    for (
-        cut_date,
-        row_fab_type,
-        fab_id,
-        job_number,
-        account_name,
-        stone_type_name,
-        stone_color_name,
-        stone_thickness,
-        no_of_pieces,
-        sqft,
-        cost_per_sqft_raw,
-        revenue_raw,
-        fab_cost_of_stone,
-        cos_total_cost,
-        gp_raw,
-    ) in records:
-        if cut_date is None:
-            continue
-
-        pieces_value = int(_to_float(no_of_pieces))
-        sqft_value = round(_to_float(sqft), 2)
-        cost_per_sf = round(_to_float(cost_per_sqft_raw), 2)
-        revenue_value = round((-cost_per_sf * sqft_value), 2)
-        cost_of_stone_value = round(_to_float(fab_cost_of_stone if fab_cost_of_stone is not None else cos_total_cost), 2)
-        gp_value = round((-revenue_value - cost_of_stone_value), 2)
-
-        total_pieces += pieces_value
-        total_sqft += sqft_value
-        total_revenue += revenue_value
-        total_cost_of_stone += cost_of_stone_value
-        total_gp += gp_value
-
-        info_parts = [account_name, stone_type_name, stone_color_name, stone_thickness]
-        fab_info = " - ".join(str(part).strip() for part in info_parts if part and str(part).strip())
-
-        entries.append(
-            {
-                "cut_date": cut_date.date().isoformat(),
-                "fab_type": row_fab_type,
-                "fab_id": fab_id,
-                "job_number": job_number,
-                "fab_info": fab_info or None,
-                "no_of_pieces": pieces_value,
-                "sqft": sqft_value,
-                "cost/sf": cost_per_sf,
-                "revenue": revenue_value,
-                "revenue_per_sqft": round((revenue_value / sqft_value), 2) if sqft_value else 0.0,
-                "cost_of_stone": cost_of_stone_value,
-                "gp": gp_value,
-            }
-        )
-
-    total_sqft = round(total_sqft, 2)
-    total_revenue = round(total_revenue, 2)
-    total_cost_of_stone = round(total_cost_of_stone, 2)
-    total_gp = round(total_gp, 2)
-
-    return success_response(
-        {
-            "month": calendar.month_name[month_num],
-            "year": year,
-            "summary": {
-                "total_no_of_pieces": int(total_pieces),
-                "total_sqft": total_sqft,
-                "total_revenue": total_revenue,
-                "total_revenue/sqft": round((total_revenue / total_sqft), 2) if total_sqft else 0.0,
-                "total_cost_of_stone": total_cost_of_stone,
-                "total_gp": total_gp,
-            },
-            "entries": entries,
-        },
-        "Monthly Cut Completion data retrieved successfully",
-    )
 
 
 @router.get("/reports/owner/turnaround-times", response_model=SuccessResponse[dict])

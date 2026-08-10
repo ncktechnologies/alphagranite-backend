@@ -136,14 +136,20 @@ def _active_shop_cut_plan_visibility_filter():
     """Visibility for current_stage=shop listing.
 
     Rules:
-        - Only include FABs where shop_est_completion_date is NULL.
-            Once shop_est_completion_date is set, FAB should not appear in
-            current_stage=shop listing.
-        - Include FABs in current_stage=shop regardless of shop plan completion,
-            as long as shop_est_completion_date is NULL.
-    - Also include FABs still in current_stage=cut_list when cutlist_complete=true.
-    - Also include FABs from any stage that have shop cut plans with work_percentage < 100%.
+        - Keep FAB visible in Shop Planning while any shop cut plan row is incomplete
+          (work_percentage < 100), even if shop_est_completion_date is set.
+        - Remove FAB from Shop Planning once all existing shop cut plan rows are 100%.
+        - Include FABs still in current_stage=cut_list when cutlist_complete=true and
+          they either have no shop plans yet or at least one incomplete shop plan row.
+        - Include FABs from any stage that still have incomplete shop plan rows.
     """
+
+    has_shop_plan_exists = (
+        select(ShopCutPlan.id)
+        .where(ShopCutPlan.fab_id == Fab.id)
+        .limit(1)
+        .exists()
+    )
 
     any_incomplete_shop_plan_exists = (
         select(ShopCutPlan.id)
@@ -151,26 +157,33 @@ def _active_shop_cut_plan_visibility_filter():
             ShopCutPlan.fab_id == Fab.id,
             func.coalesce(ShopCutPlan.work_percentage, 0) < 100,
         )
+        .limit(1)
         .exists()
     )
 
-    shop_stage_visibility = Fab.current_stage == "shop"
+    has_active_shop_plan_work = or_(
+        ~has_shop_plan_exists,
+        any_incomplete_shop_plan_exists,
+    )
+
+    shop_stage_visibility = and_(
+        Fab.current_stage == "shop",
+        has_active_shop_plan_work,
+    )
 
     cut_list_ready_for_shop_visibility = and_(
         Fab.current_stage == "cut_list",
         Fab.cutlist_complete.is_(True),
+        has_active_shop_plan_work,
     )
 
     # Include FABs from any stage with incomplete shop plans
     any_stage_with_incomplete_shop_plans = any_incomplete_shop_plan_exists
 
-    return and_(
-        Fab.shop_est_completion_date.is_(None),
-        or_(
-            shop_stage_visibility,
-            cut_list_ready_for_shop_visibility,
-            any_stage_with_incomplete_shop_plans,
-        ),
+    return or_(
+        shop_stage_visibility,
+        cut_list_ready_for_shop_visibility,
+        any_stage_with_incomplete_shop_plans,
     )
 
 
