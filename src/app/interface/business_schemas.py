@@ -1288,7 +1288,12 @@ class CutListUpdate(BaseModel):
 class FinalProgrammingSessionUpdate(BaseModel):
     """Schema for final programming session actions (start, pause, resume, end)"""
     action: str = Field(..., description="Action: 'start', 'pause', 'resume', or 'end'")
-    notes: Optional[str] = Field(None, description="Session notes")
+    note: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("note", "notes"),
+        description="Session note",
+    )
+    sqft_completed: Optional[float] = Field(None, ge=0, description="Square footage completed for this action")
 
 
 class FinalProgrammingScheduleShopDate(BaseModel):
@@ -1351,7 +1356,12 @@ class FinalProgrammingUpdate(BaseModel):
 class SlabSmithSessionUpdate(BaseModel):
     """Schema for SlabSmith session actions (start, pause, resume, end)"""
     action: str = Field(..., description="Action: 'start', 'pause', 'resume', or 'end'")
-    notes: Optional[str] = Field(None, description="Session notes")
+    note: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("note", "notes"),
+        description="Session note",
+    )
+    sqft_completed: Optional[float] = Field(None, ge=0, description="Square footage completed for this action")
 
 # Drafting Session Schemas
 class DraftingSessionAction(BaseModel):

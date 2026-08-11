@@ -235,6 +235,7 @@ async def manage_programming_session(
         )
     
     action = session_data.action.lower()
+    note_value = (session_data.note or "").strip() or None
     now = datetime.now()
 
     active_session_result = await db.execute(
@@ -280,24 +281,11 @@ async def manage_programming_session(
                 user_id=current_user.id,
                 action="start",
                 timestamp=now,
-                note=session_data.notes,
+                note=note_value,
+                sqft_completed=session_data.sqft_completed,
                 created_at=now,
             )
         )
-        
-        # Add note
-        note_text = f"Final programming session started by {current_user.first_name} {current_user.last_name}"
-        if session_data.notes:
-            note_text += f" - {session_data.notes}"
-        
-        fab_note = FabNotes(
-            fab_id=fab_id,
-            note=note_text,
-            stage="final_programming",
-            created_by=current_user.id,
-            created_at=datetime.now()
-        )
-        db.add(fab_note)
         
         message = "Final programming session started"
     
@@ -327,24 +315,11 @@ async def manage_programming_session(
                 user_id=current_user.id,
                 action="pause",
                 timestamp=now,
-                note=session_data.notes,
+                note=note_value,
+                sqft_completed=session_data.sqft_completed,
                 created_at=now,
             )
         )
-        
-        # Add note
-        note_text = "Final programming session paused"
-        if session_data.notes:
-            note_text += f" - {session_data.notes}"
-        
-        fab_note = FabNotes(
-            fab_id=fab_id,
-            note=note_text,
-            stage="final_programming",
-            created_by=current_user.id,
-            created_at=datetime.now()
-        )
-        db.add(fab_note)
         
         message = "Final programming session paused"
     
@@ -381,24 +356,11 @@ async def manage_programming_session(
                 user_id=current_user.id,
                 action="resume",
                 timestamp=now,
-                note=session_data.notes,
+                note=note_value,
+                sqft_completed=session_data.sqft_completed,
                 created_at=now,
             )
         )
-        
-        # Add note
-        note_text = "Final programming session resumed"
-        if session_data.notes:
-            note_text += f" - {session_data.notes}"
-        
-        fab_note = FabNotes(
-            fab_id=fab_id,
-            note=note_text,
-            stage="final_programming",
-            created_by=current_user.id,
-            created_at=datetime.now()
-        )
-        db.add(fab_note)
         
         message = "Final programming session resumed"
     
@@ -438,24 +400,11 @@ async def manage_programming_session(
                 user_id=current_user.id,
                 action="end",
                 timestamp=now,
-                note=session_data.notes,
+                note=note_value,
+                sqft_completed=session_data.sqft_completed,
                 created_at=now,
             )
         )
-        
-        # Add note
-        note_text = f"Final programming session ended. Total time: {int(total_minutes)} minutes"
-        if session_data.notes:
-            note_text += f" - {session_data.notes}"
-        
-        fab_note = FabNotes(
-            fab_id=fab_id,
-            note=note_text,
-            stage="final_programming",
-            created_by=current_user.id,
-            created_at=datetime.now()
-        )
-        db.add(fab_note)
         
         message = f"Final programming session ended. Total time: {int(total_minutes)} minutes"
     
@@ -473,7 +422,9 @@ async def manage_programming_session(
         "data": {
             "fab_id": fab_id,
             "action": action,
-            "session_active": session is not None and session.status in ["active", "paused"]
+            "session_active": session is not None and session.status in ["active", "paused"],
+            "note": note_value,
+            "sqft_completed": session_data.sqft_completed,
         }
     }
 
@@ -688,4 +639,102 @@ async def get_session_status(
             "paused_at": session.current_pause_start_time.isoformat() if session.current_pause_start_time else None,
             "duration_minutes": int(duration_minutes)
         }
+    }
+
+
+@router.get("/{fab_id}/session-history", response_model=dict)
+async def get_final_programming_session_history(
+    fab_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Final Programming: Return full session history for a FAB."""
+    _ = current_user
+
+    fab = (await db.execute(select(Fab).where(Fab.id == fab_id))).scalar_one_or_none()
+    if not fab:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"FAB with ID {fab_id} not found",
+        )
+
+    sessions = (
+        await db.execute(
+            select(FinalProgrammingSession)
+            .where(FinalProgrammingSession.fab_id == fab_id)
+            .order_by(FinalProgrammingSession.created_at.desc(), FinalProgrammingSession.id.desc())
+        )
+    ).scalars().all()
+
+    if not sessions:
+        return {
+            "success": True,
+            "message": "No session history found",
+            "data": {
+                "fab_id": fab_id,
+                "total_sessions": 0,
+                "sessions": [],
+            },
+        }
+
+    session_ids = [session.id for session in sessions if session.id is not None]
+    notes = (
+        await db.execute(
+            select(FinalProgrammingSessionNote)
+            .where(FinalProgrammingSessionNote.session_id.in_(session_ids))
+            .order_by(FinalProgrammingSessionNote.timestamp.asc(), FinalProgrammingSessionNote.id.asc())
+        )
+    ).scalars().all()
+
+    notes_by_session_id: dict[int, list[dict]] = {}
+    for n in notes:
+        notes_by_session_id.setdefault(n.session_id, []).append(
+            {
+                "id": n.id,
+                "action": n.action,
+                "timestamp": n.timestamp.isoformat() if n.timestamp else None,
+                "note": n.note,
+                "sqft_completed": n.sqft_completed,
+                "user_id": n.user_id,
+            }
+        )
+
+    now = datetime.now()
+    session_rows: list[dict] = []
+    for session in sessions:
+        duration_seconds = int(session.total_time_spent or 0)
+        if session.status in ["active", "paused"]:
+            anchor = now if session.status == "active" else (session.current_pause_start_time or now)
+            duration_seconds = max(
+                int((anchor - session.session_start_time).total_seconds()) - int(session.total_pause_duration or 0),
+                0,
+            )
+
+        session_rows.append(
+            {
+                "session_id": session.id,
+                "fab_id": session.fab_id,
+                "user_id": session.user_id,
+                "status": session.status,
+                "session_start_time": session.session_start_time.isoformat() if session.session_start_time else None,
+                "session_end_time": session.session_end_time.isoformat() if session.session_end_time else None,
+                "current_pause_start_time": session.current_pause_start_time.isoformat() if session.current_pause_start_time else None,
+                "total_pause_duration": int(session.total_pause_duration or 0),
+                "total_time_spent": int(session.total_time_spent or 0),
+                "duration_seconds": int(duration_seconds),
+                "duration_minutes": round(duration_seconds / 60, 2),
+                "created_at": session.created_at.isoformat() if session.created_at else None,
+                "updated_at": session.updated_at.isoformat() if session.updated_at else None,
+                "notes": notes_by_session_id.get(session.id, []),
+            }
+        )
+
+    return {
+        "success": True,
+        "message": f"Found {len(session_rows)} final programming sessions",
+        "data": {
+            "fab_id": fab_id,
+            "total_sessions": len(session_rows),
+            "sessions": session_rows,
+        },
     }
