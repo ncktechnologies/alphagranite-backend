@@ -548,6 +548,7 @@ class SlabSmithSessionNote(SQLModel, table=True):
     action: str = Field()  # start, pause, resume, end
     timestamp: datetime = Field()
     note: Optional[str] = Field(default=None)
+    sqft_completed: Optional[float] = Field(default=None)
     created_at: datetime = Field(default_factory=datetime.now)
 
 
@@ -580,6 +581,7 @@ class FinalProgrammingSessionNote(SQLModel, table=True):
     action: str = Field()  # start, pause, resume, end
     timestamp: datetime = Field()
     note: Optional[str] = Field(default=None)
+    sqft_completed: Optional[float] = Field(default=None)
     created_at: datetime = Field(default_factory=datetime.now)
 
 
