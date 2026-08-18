@@ -1004,7 +1004,9 @@ async def manage_shop_cut_plan_timer(
             as_of=action_ts,
         )
 
-        if action in {"pause", "stop"}:
+        if action == "resume":
+            work_percentage = int(active_session.work_percentage or plan.work_percentage or 0)
+        elif action in {"pause", "stop"}:
             work_percentage = int(requested_work_percentage)
         else:
             work_percentage = computed_work_percentage
