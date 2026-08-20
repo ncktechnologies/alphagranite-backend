@@ -2225,9 +2225,10 @@ async def get_earliest_availability(
 
         results = []
         # Stage requests are chained in request order. Stage N starts on/after
-        # Stage N-1 earliest proposed end.
+        # Stage N-1 earliest proposed end. If a stage finds no slot, later stages
+        # still search (from the last known dependency point) instead of being
+        # permanently blocked for the rest of the sequence.
         dependency_start = start_from
-        chain_blocked = False
 
         for req in ordered_requests:
             duration_hours = float(req.estimated_hours or 0)
@@ -2242,11 +2243,8 @@ async def get_earliest_availability(
             )
 
             proposals = []
-            if not chain_blocked:
-                cursor = _align_to_slot(max(start_from, dependency_start), payload.slot_minutes)
-                cursor = _next_business_start(cursor)
-            else:
-                cursor = search_end
+            cursor = _align_to_slot(max(start_from, dependency_start), payload.slot_minutes)
+            cursor = _next_business_start(cursor)
 
             while cursor < search_end and len(proposals) < payload.max_proposals_per_request:
                 candidate_end = _compute_business_rollover_end(cursor, duration_hours)
@@ -2274,8 +2272,6 @@ async def get_earliest_availability(
 
             if proposals:
                 dependency_start = datetime.fromisoformat(proposals[0]["end"])
-            else:
-                chain_blocked = True
 
             results.append({
                 "sequence": req.sequence,
