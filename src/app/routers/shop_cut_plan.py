@@ -288,8 +288,14 @@ async def get_all_shop_plans(
     fab_id: Optional[int] = None,
     search_fab_id: Optional[str] = None,
     fab_type: Optional[str] = None,
-    workstation_id: Optional[int] = None,
-    planning_section_id: Optional[int] = None,
+    workstation_id: Optional[List[int]] = Query(
+        None,
+        description="Workstation ID filter. Pass multiple values as repeated query params, e.g. workstation_id=1&workstation_id=2",
+    ),
+    planning_section_id: Optional[List[int]] = Query(
+        None,
+        description="Planning section ID filter. Pass multiple values as repeated query params, e.g. planning_section_id=1&planning_section_id=2",
+    ),
     operator_id: Optional[List[int]] = Query(
         None,
         description="Operator ID filter. Pass multiple values as repeated query params, e.g. operator_id=1&operator_id=2",
@@ -308,6 +314,14 @@ async def get_all_shop_plans(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    parsed_workstation_ids = _parse_multi_int_query_param(request, "workstation_id", "workstation_ids")
+    if parsed_workstation_ids:
+        workstation_id = parsed_workstation_ids
+
+    parsed_planning_section_ids = _parse_multi_int_query_param(request, "planning_section_id", "planning_section_ids")
+    if parsed_planning_section_ids:
+        planning_section_id = parsed_planning_section_ids
+
     parsed_operator_ids = _parse_multi_int_query_param(request, "operator_id", "operator_ids")
     if parsed_operator_ids:
         operator_id = parsed_operator_ids
@@ -1577,8 +1591,8 @@ def _apply_shop_plan_filters(
     fab_id: Optional[int],
     search_fab_id: Optional[str],
     fab_type: Optional[str],
-    workstation_id: Optional[int],
-    planning_section_id: Optional[int],
+    workstation_id: Optional[List[int]],
+    planning_section_id: Optional[List[int]],
     operator_id: Optional[List[int]],
     status_id: Optional[int],
     cut_type: Optional[str],
@@ -1601,11 +1615,11 @@ def _apply_shop_plan_filters(
         elif search_type == "job_name":
             query = query.where(BusinessJob.name.ilike(f"%{search_value}%"))
 
-    if workstation_id is not None:
-        query = query.where(ShopCutPlan.workstation_id == workstation_id)
+    if workstation_id:
+        query = query.where(ShopCutPlan.workstation_id.in_(workstation_id))
 
-    if planning_section_id is not None:
-        query = query.where(ShopCutPlan.planning_section_id == planning_section_id)
+    if planning_section_id:
+        query = query.where(ShopCutPlan.planning_section_id.in_(planning_section_id))
 
     if operator_id:
         query = query.where(ShopCutPlan.user_id.in_(operator_id))
@@ -2211,9 +2225,10 @@ async def get_earliest_availability(
 
         results = []
         # Stage requests are chained in request order. Stage N starts on/after
-        # Stage N-1 earliest proposed end.
+        # Stage N-1 earliest proposed end. If a stage finds no slot, later stages
+        # still search (from the last known dependency point) instead of being
+        # permanently blocked for the rest of the sequence.
         dependency_start = start_from
-        chain_blocked = False
 
         for req in ordered_requests:
             duration_hours = float(req.estimated_hours or 0)
@@ -2228,11 +2243,8 @@ async def get_earliest_availability(
             )
 
             proposals = []
-            if not chain_blocked:
-                cursor = _align_to_slot(max(start_from, dependency_start), payload.slot_minutes)
-                cursor = _next_business_start(cursor)
-            else:
-                cursor = search_end
+            cursor = _align_to_slot(max(start_from, dependency_start), payload.slot_minutes)
+            cursor = _next_business_start(cursor)
 
             while cursor < search_end and len(proposals) < payload.max_proposals_per_request:
                 candidate_end = _compute_business_rollover_end(cursor, duration_hours)
@@ -2260,8 +2272,6 @@ async def get_earliest_availability(
 
             if proposals:
                 dependency_start = datetime.fromisoformat(proposals[0]["end"])
-            else:
-                chain_blocked = True
 
             results.append({
                 "sequence": req.sequence,

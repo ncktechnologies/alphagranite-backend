@@ -171,6 +171,7 @@ async def update_employee(
     email: Optional[str] = Form(None),
     phone_number: Optional[str] = Form(None),
     department_id: Optional[str] = Form(None),
+    department: Optional[str] = Form(None),
     gender: Optional[str] = Form(None),
     home_address: Optional[str] = Form(None),
     role_id: Optional[str] = Form(None),
@@ -190,7 +191,8 @@ async def update_employee(
     print(f"{'='*80}\n")
     
     # Convert empty strings to None
-    dep_id = int(department_id) if department_id not in (None, "", "null") else None
+    department_value = department_id if department_id not in (None, "", "null") else department
+    dep_id = int(department_value) if department_value not in (None, "", "null") else None
     r_id = int(role_id) if role_id not in (None, "", "null") else None
     
     # Handle profile image upload if provided
