@@ -2151,6 +2151,11 @@ async def get_earliest_availability(
         operator_ids = {r.operator_id for r in ordered_requests}
         workstation_ids = {r.workstation_id for r in ordered_requests}
 
+        # Later stages can each get their own fresh look-ahead window (see below),
+        # so widen the conflict lookup horizon to cover the worst case where every
+        # stage's window starts right after the previous one's.
+        conflict_horizon_end = start_from + timedelta(days=payload.search_horizon_days * len(ordered_requests))
+
         # Validate operators/workstations exist and build id->name maps
         user_rows = (
             await db.execute(
@@ -2196,7 +2201,7 @@ async def get_earliest_availability(
             select(ShopCutPlan)
             .where(
                 ShopCutPlan.scheduled_start_date.is_not(None),
-                ShopCutPlan.scheduled_start_date < search_end,
+                ShopCutPlan.scheduled_start_date < conflict_horizon_end,
                 or_(
                     ShopCutPlan.workstation_id.in_(list(workstation_ids)),
                     ShopCutPlan.user_id.in_(list(operator_ids)),
@@ -2245,10 +2250,14 @@ async def get_earliest_availability(
             proposals = []
             cursor = _align_to_slot(max(start_from, dependency_start), payload.slot_minutes)
             cursor = _next_business_start(cursor)
+            # Each stage gets its own look-ahead window measured from where it
+            # actually starts, so delays earlier in the chain don't eat into
+            # later stages' search budget.
+            stage_search_end = cursor + timedelta(days=payload.search_horizon_days)
 
-            while cursor < search_end and len(proposals) < payload.max_proposals_per_request:
+            while cursor < stage_search_end and len(proposals) < payload.max_proposals_per_request:
                 candidate_end = _compute_business_rollover_end(cursor, duration_hours)
-                if candidate_end > search_end:
+                if candidate_end > stage_search_end:
                     break
 
                 if not _is_valid_business_start(cursor):
