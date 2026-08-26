@@ -74,6 +74,8 @@ class Fab(SQLModel, table=True):
     edging_linft: Optional[float] = Field(default=None)  # Edging linear feet
     cnc_linft: Optional[float] = Field(default=None)  # CNC linear feet
     miter_linft: Optional[float] = Field(default=None)  # Miter linear feet
+    saw_miter_lnft: Optional[float] = Field(default=None, description="Saw miter linear feet")
+    wj_miter_lnft: Optional[float] = Field(default=None, description="Waterjet miter linear feet")
     installation_date: Optional[datetime] = None
     saw_cut_lnft: Optional[float] = Field(default=None, description="Saw cut linear feet from cutlist")
     

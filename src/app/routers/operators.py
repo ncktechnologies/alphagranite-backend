@@ -228,9 +228,10 @@ def _build_calendar_window(view: str, reference_date: date) -> tuple[datetime, d
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="view must be one of: day, week, month")
 
 
-def _serialize_operator_task(row) -> dict:
+def _serialize_operator_task(row, timer_status_by_fab: Optional[dict[int, str]] = None) -> dict:
     plan = row[0]
     fab = row[1]
+    timer_status = (timer_status_by_fab or {}).get(plan.fab_id, "not_started")
 
     return {
         "task_id": plan.id,
@@ -255,6 +256,7 @@ def _serialize_operator_task(row) -> dict:
         "work_percentage": plan.work_percentage,
         "notes": plan.notes,
         "is_completed": bool(plan.actual_end_date) or plan.work_percentage == 100,
+        "timer_status": timer_status,
         "created_at": plan.created_at.isoformat() if plan.created_at else None,
         "updated_at": plan.updated_at.isoformat() if plan.updated_at else None,
     }
@@ -500,6 +502,34 @@ async def _get_active_operator_job_session(
     query = query.order_by(OperatorJobTimerSession.created_at.desc()).limit(1)
     result = await db.execute(query)
     return result.scalars().first()
+
+
+async def _get_timer_statuses_for_fabs(
+    db: AsyncSession,
+    *,
+    operator_id: int,
+    fab_ids: list[int],
+) -> dict[int, str]:
+    """Return the latest timer session status per fab_id for the given operator."""
+
+    if not fab_ids:
+        return {}
+
+    result = await db.execute(
+        select(OperatorJobTimerSession)
+        .where(
+            OperatorJobTimerSession.operator_id == operator_id,
+            OperatorJobTimerSession.fab_id.in_(fab_ids),
+        )
+        .order_by(OperatorJobTimerSession.fab_id, OperatorJobTimerSession.created_at.desc())
+    )
+
+    statuses: dict[int, str] = {}
+    for session in result.scalars().all():
+        if session.fab_id not in statuses:
+            statuses[session.fab_id] = session.status
+    return statuses
+
 
 
 @router.get("/{operator_id}/workstations", response_model=SuccessResponse[dict])
@@ -1075,7 +1105,12 @@ async def get_current_operator_tasks(
         rows = [row for row in rows if _task_is_active(row[0])]
     total = len(rows)
     paginated_rows = rows[skip:skip + limit]
-    tasks = [_serialize_operator_task(row) for row in paginated_rows]
+    timer_status_by_fab = await _get_timer_statuses_for_fabs(
+        db,
+        operator_id=current_user.id,
+        fab_ids=[row[0].fab_id for row in paginated_rows],
+    )
+    tasks = [_serialize_operator_task(row, timer_status_by_fab) for row in paginated_rows]
     page = (skip // limit) + 1 if limit > 0 else 1
 
     return success_response(

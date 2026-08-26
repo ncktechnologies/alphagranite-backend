@@ -111,6 +111,12 @@ async def schedule_shop_date(
         if schedule_data.miter_linft is not None:
             fab.miter_linft = schedule_data.miter_linft
 
+        if schedule_data.saw_miter_lnft is not None:
+            fab.saw_miter_lnft = schedule_data.saw_miter_lnft
+
+        if schedule_data.wj_miter_lnft is not None:
+            fab.wj_miter_lnft = schedule_data.wj_miter_lnft
+
         if schedule_data.revision_complete is not None:
             fab.revised = not schedule_data.revision_complete
 
@@ -321,6 +327,8 @@ async def get_cut_list_details(
             "fp_not_needed": fab.fp_not_needed,
             "cutlist_complete": fab.cutlist_complete,
             "wj_linft": fab.wj_linft,
+            "saw_miter_lnft": fab.saw_miter_lnft,
+            "wj_miter_lnft": fab.wj_miter_lnft,
             "edging_linft": fab.edging_linft,
             "cnc_linft": fab.cnc_linft,
             "miter_linft": fab.miter_linft,
