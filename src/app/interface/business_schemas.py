@@ -342,6 +342,8 @@ class FabUpdate(BaseModel):
     edging_linft: Optional[float] = Field(None, ge=0, description="Edging linear feet")
     cnc_linft: Optional[float] = Field(None, ge=0, description="CNC linear feet")
     miter_linft: Optional[float] = Field(None, ge=0, description="Miter linear feet")
+    saw_miter_lnft: Optional[float] = Field(None, ge=0, description="Saw miter linear feet")
+    wj_miter_lnft: Optional[float] = Field(None, ge=0, description="Waterjet miter linear feet")
     installation_date: Optional[datetime] = Field(None, description="Installation date")
     current_stage: Optional[str] = None
     next_stage: Optional[str] = None
@@ -425,6 +427,8 @@ class FabResponse(BaseModel):
     edging_linft: Optional[float] = None  # Edging linear feet
     cnc_linft: Optional[float] = None  # CNC linear feet
     miter_linft: Optional[float] = None  # Miter linear feet
+    saw_miter_lnft: Optional[float] = None  # Saw miter linear feet
+    wj_miter_lnft: Optional[float] = None  # Waterjet miter linear feet
     saw_cut_lnft: Optional[float] = None  # Saw cut linear feet
 
     installation_date: Optional[datetime] = None
@@ -1253,6 +1257,8 @@ class CutListScheduleUpdate(BaseModel):
     edging_linft: Optional[float] = Field(None, ge=0, description="Edging linear feet")
     cnc_linft: Optional[float] = Field(None, ge=0, description="CNC linear feet")
     miter_linft: Optional[float] = Field(None, ge=0, description="Miter linear feet")
+    saw_miter_lnft: Optional[float] = Field(None, ge=0, description="Saw miter linear feet")
+    wj_miter_lnft: Optional[float] = Field(None, ge=0, description="Waterjet miter linear feet")
     revision_complete: Optional[bool] = Field(None, description="Mark revision as complete")
 
     @model_validator(mode="after")
@@ -1266,6 +1272,8 @@ class CutListScheduleUpdate(BaseModel):
             "edging_linft",
             "cnc_linft",
             "miter_linft",
+            "saw_miter_lnft",
+            "wj_miter_lnft",
             "revision_complete",
         ]
 
@@ -1306,6 +1314,8 @@ class FinalProgrammingScheduleShopDate(BaseModel):
     edging_linft: Optional[float] = Field(None, gt=0, description="Edging linear feet")
     cnc_linft: Optional[float] = Field(None, gt=0, description="CNC linear feet")
     miter_linft: Optional[float] = Field(None, gt=0, description="Miter linear feet")
+    saw_miter_lnft: Optional[float] = Field(None, gt=0, description="Saw miter linear feet")
+    wj_miter_lnft: Optional[float] = Field(None, gt=0, description="Waterjet miter linear feet")
     confirmed: Optional[bool] = Field(None, description="Mark as confirmed")
 
 

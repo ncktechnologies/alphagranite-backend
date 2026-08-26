@@ -476,6 +476,12 @@ async def schedule_shop_date(
     if schedule_data.miter_linft is not None:
         fab.miter_linft = schedule_data.miter_linft
     
+    if schedule_data.saw_miter_lnft is not None:
+        fab.saw_miter_lnft = schedule_data.saw_miter_lnft
+    
+    if schedule_data.wj_miter_lnft is not None:
+        fab.wj_miter_lnft = schedule_data.wj_miter_lnft
+    
     if schedule_data.confirmed is not None and schedule_data.confirmed:
         fab.confirmed_date = datetime.now()
     
