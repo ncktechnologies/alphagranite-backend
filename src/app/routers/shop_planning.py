@@ -69,7 +69,7 @@ def get_shop_planning(shop_plan_id: int, db: Session = Depends(get_db)):
     return success_response(shop_plan, "Shop planning retrieved successfully")
 
 @router.get("/shop-planning")
-def list_shop_planning(
+async def list_shop_planning(
     job_id: Optional[int] = None,
     fab_id: Optional[int] = None,
     search: Optional[str] = None,
@@ -82,5 +82,5 @@ def list_shop_planning(
         query = query.where(ShopPlanning.fab_ids.contains(str(fab_id)))
     if search:
         query = query.where(ShopPlanning.planning_section_ids.ilike(f"%{search}%"))
-    plans = db.exec(query).all()
+    plans = (await db.execute(query)).scalars().all()
     return success_response(plans, "Shop planning list retrieved successfully")
