@@ -259,20 +259,26 @@ def _compute_fab_progress_fields(plans: List[dict]) -> tuple[Optional[str], floa
         wp = p.get("work_percentage")
         total_percent += float(wp) if wp is not None else 0.0
 
-        # scheduled end = scheduled_start_date + estimated_hours
+        # scheduled end = scheduled_end_date if present, else start + estimated_hours
         candidate_end: Optional[datetime] = None
-        scheduled_start = p.get("scheduled_start_date")
-        estimated_hours = p.get("estimated_hours")
-
-        if scheduled_start:
+        scheduled_end = p.get("scheduled_end_date")
+        if scheduled_end:
             try:
-                start_dt = datetime.fromisoformat(scheduled_start)
-                if estimated_hours is not None:
-                    candidate_end = start_dt + timedelta(hours=float(estimated_hours))
-                else:
-                    candidate_end = start_dt
+                candidate_end = scheduled_end if isinstance(scheduled_end, datetime) else datetime.fromisoformat(str(scheduled_end))
             except Exception:
                 candidate_end = None
+        if candidate_end is None:
+            scheduled_start = p.get("scheduled_start_date")
+            estimated_hours = p.get("estimated_hours")
+            if scheduled_start:
+                try:
+                    start_dt = datetime.fromisoformat(scheduled_start)
+                    if estimated_hours is not None:
+                        candidate_end = start_dt + timedelta(hours=float(estimated_hours))
+                    else:
+                        candidate_end = start_dt
+                except Exception:
+                    candidate_end = None
 
         # fallback to actual_end_date if needed
         if candidate_end is None and p.get("actual_end_date"):
@@ -299,28 +305,40 @@ def _coalesce_shop_est_completion_date(
 
     latest_plan_end: Optional[datetime] = None
     for p in plans:
-        scheduled_start = p.get("scheduled_start_date")
-        if not scheduled_start:
-            continue
-
-        try:
-            start_dt = (
-                scheduled_start
-                if isinstance(scheduled_start, datetime)
-                else datetime.fromisoformat(str(scheduled_start))
-            )
-        except Exception:
-            continue
-
-        estimated_hours = p.get("estimated_hours")
-        try:
-            candidate_end = (
-                start_dt + timedelta(hours=float(estimated_hours))
-                if estimated_hours is not None
-                else start_dt
-            )
-        except Exception:
-            candidate_end = start_dt
+        candidate_end: Optional[datetime] = None
+        scheduled_end = p.get("scheduled_end_date")
+        if scheduled_end:
+            try:
+                candidate_end = (
+                    scheduled_end
+                    if isinstance(scheduled_end, datetime)
+                    else datetime.fromisoformat(str(scheduled_end))
+                )
+            except Exception:
+                candidate_end = None
+        if candidate_end is None:
+            scheduled_start = p.get("scheduled_start_date")
+            if not scheduled_start:
+                continue
+            try:
+                start_dt = (
+                    scheduled_start
+                    if isinstance(scheduled_start, datetime)
+                    else datetime.fromisoformat(str(scheduled_start))
+                )
+            except Exception:
+                continue
+            estimated_hours = p.get("estimated_hours")
+            try:
+                candidate_end = (
+                    start_dt + timedelta(hours=float(estimated_hours))
+                    if estimated_hours is not None
+                    else start_dt
+                )
+            except Exception:
+                candidate_end = start_dt
+            if not candidate_end:
+                continue
 
         if latest_plan_end is None or candidate_end > latest_plan_end:
             latest_plan_end = candidate_end
@@ -550,6 +568,16 @@ async def get_plans_map_for_fabs(db: AsyncSession, fab_ids: List[int]) -> dict[i
     )
     rows = (await db.execute(q)).all()
 
+    def _effective_scheduled_end_iso(plan_obj: ShopCutPlan) -> Optional[str]:
+            if getattr(plan_obj, "scheduled_end_date", None):
+                return plan_obj.scheduled_end_date.isoformat()
+            if plan_obj.scheduled_start_date and plan_obj.estimated_hours is not None:
+                try:
+                    return (plan_obj.scheduled_start_date + timedelta(hours=float(plan_obj.estimated_hours))).isoformat()
+                except Exception:
+                    return None
+            return None
+
     plans_map: dict[int, list[dict]] = defaultdict(list)
     for row in rows:
         p = row[0]
@@ -569,6 +597,7 @@ async def get_plans_map_for_fabs(db: AsyncSession, fab_ids: List[int]) -> dict[i
             ),
             "estimated_hours": p.estimated_hours,
             "scheduled_start_date": p.scheduled_start_date.isoformat() if p.scheduled_start_date else None,
+            "scheduled_end_date": _effective_scheduled_end_iso(p),
             "actual_start_date": p.actual_start_date.isoformat() if p.actual_start_date else None,
             "actual_end_date": p.actual_end_date.isoformat() if p.actual_end_date else None,
             "work_percentage": p.work_percentage,

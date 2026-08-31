@@ -17,6 +17,10 @@ class ShopCutPlan(SQLModel, table=True):
         default=None,
         description="Scheduled start date"
     )
+    scheduled_end_date: Optional[datetime] = Field(
+        default=None,
+        description="Scheduled end date"
+    )
     actual_start_date: Optional[datetime] = Field(default=None, description="Actual start date")
     actual_end_date: Optional[datetime] = Field(default=None, description="Actual end date")
     work_percentage: int = Field(default=0, ge=0, le=100, description="Work completion percentage")

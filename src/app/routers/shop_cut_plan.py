@@ -185,8 +185,14 @@ async def create_shop_plans(
             derived_cut_type = planning_section.plan_name.lower().strip()
             derived_stage_name = planning_section.plan_name.strip()
 
-            scheduled_start = stage.scheduled_start.replace(tzinfo=None) if stage.scheduled_start.tzinfo else stage.scheduled_start
+            scheduled_start = stage.scheduled_start.replace(tzinfo=None) if stage.scheduled_start and stage.scheduled_start.tzinfo else stage.scheduled_start
+            scheduled_end = stage.scheduled_end.replace(tzinfo=None) if stage.scheduled_end and stage.scheduled_end.tzinfo else stage.scheduled_end
             _validate_manual_schedule_interval(scheduled_start, stage.estimated_hours)
+            if scheduled_end is not None and scheduled_end <= scheduled_start:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="scheduled_end must be after scheduled_start",
+                )
 
             await _assert_no_shop_plan_conflicts(
                 db,
@@ -196,6 +202,7 @@ async def create_shop_plans(
                 operator_id=stage.operator_ids[0],
                 scheduled_start=scheduled_start,
                 estimated_hours=stage.estimated_hours,
+                scheduled_end=scheduled_end,
             )
 
             for operator_id in stage.operator_ids:
@@ -214,6 +221,7 @@ async def create_shop_plans(
                     user_id=operator_id,
                     estimated_hours=stage.estimated_hours,
                     scheduled_start_date=scheduled_start,
+                    scheduled_end_date=scheduled_end,
                     work_percentage=0,
                     sequence=stage.sequence,
                     notes=stage.notes,
@@ -243,7 +251,7 @@ async def create_shop_plans(
             user_result = await db.execute(select(User).where(User.id == plan.user_id))
             plan_operator = user_result.scalar_one_or_none()
 
-            scheduled_end = _compute_lunch_adjusted_end(plan.scheduled_start_date, plan.estimated_hours) if plan.scheduled_start_date else None
+            scheduled_end = _get_effective_scheduled_end(plan)
 
             plans_payload.append({
                 "id": plan.id,
@@ -255,7 +263,7 @@ async def create_shop_plans(
                 "operator_name": (f"{plan_operator.first_name} {plan_operator.last_name}".strip() or plan_operator.username) if plan_operator else None,
                 "estimated_hours": plan.estimated_hours,
                 "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
-                "scheduled_end_date": _compute_schedule_end_time_iso(plan.scheduled_start_date, plan.estimated_hours),
+                "scheduled_end_date": _get_effective_scheduled_end_iso(plan),
                 "scheduled_time": _format_scheduled_time_range(plan.scheduled_start_date, scheduled_end),
                 "work_percentage": plan.work_percentage,
                 "notes": plan.notes,
@@ -490,6 +498,7 @@ async def get_shop_plan(
             "total_actual_seconds": total_actual_seconds,
             "total_actual_hours": total_actual_hours,
             "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
+            "scheduled_end_date": _get_effective_scheduled_end_iso(plan),
             "actual_start_date": plan.actual_start_date.isoformat() if plan.actual_start_date else None,
             "actual_end_date": plan.actual_end_date.isoformat() if plan.actual_end_date else None,
             "work_percentage": work_percentage,
@@ -567,7 +576,17 @@ async def update_shop_plan(
             if stage.scheduled_start and stage.scheduled_start.tzinfo
             else stage.scheduled_start
         )
+        scheduled_end = (
+            stage.scheduled_end.replace(tzinfo=None)
+            if stage.scheduled_end and stage.scheduled_end.tzinfo
+            else stage.scheduled_end
+        )
         _validate_manual_schedule_interval(scheduled_start, stage.estimated_hours)
+        if scheduled_end is not None and scheduled_end <= scheduled_start:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="scheduled_end must be after scheduled_start",
+            )
         await _assert_no_shop_plan_conflicts(
             db,
             plan_id=plan.id,
@@ -576,6 +595,7 @@ async def update_shop_plan(
             operator_id=stage.operator_ids[0],
             scheduled_start=scheduled_start,
             estimated_hours=stage.estimated_hours,
+            scheduled_end=scheduled_end,
         )
 
         plan.workstation_id = stage.workstation_id
@@ -584,6 +604,7 @@ async def update_shop_plan(
         plan.sequence = stage.sequence
         plan.estimated_hours = stage.estimated_hours
         plan.scheduled_start_date = scheduled_start
+        plan.scheduled_end_date = scheduled_end
         plan.notes = update_data.notes
         if update_data.work_percentage is not None:
             plan.work_percentage = int(update_data.work_percentage)
@@ -615,6 +636,7 @@ async def update_shop_plan(
                 "estimated_hours": plan.estimated_hours,
                 "workstation_name": workstation.name if workstation else None,
                 "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
+                "scheduled_end_date": _get_effective_scheduled_end_iso(plan),
                 "work_percentage": plan.work_percentage,
                 "notes": plan.notes,
                 "updated_at": plan.updated_at.isoformat(),
@@ -694,6 +716,7 @@ async def delete_shop_plan(
 
 class RescheduleShopPlanRequest(BaseModel):
     scheduled_start: datetime
+    scheduled_end: Optional[datetime] = None
 
 
 @router.put("/plans/{plan_id}/unschedule", response_model=dict)
@@ -713,6 +736,7 @@ async def unschedule_shop_plan(
             )
 
         plan.scheduled_start_date = None
+        plan.scheduled_end_date = None
         plan.updated_at = datetime.now()
         plan.updated_by = current_user.id
 
@@ -725,6 +749,7 @@ async def unschedule_shop_plan(
             "data": {
                 "id": plan.id,
                 "scheduled_start_date": None,
+                "scheduled_end_date": None,
                 "updated_at": plan.updated_at.isoformat(),
                 "updated_by": plan.updated_by
             }
@@ -759,8 +784,11 @@ async def reschedule_shop_plan(
             )
 
         scheduled_start = payload.scheduled_start.replace(tzinfo=None) if payload.scheduled_start.tzinfo else payload.scheduled_start
+        scheduled_end = payload.scheduled_end.replace(tzinfo=None) if payload.scheduled_end and payload.scheduled_end.tzinfo else payload.scheduled_end
         _validate_manual_schedule_interval(scheduled_start, plan.estimated_hours)
         plan.scheduled_start_date = scheduled_start
+        if scheduled_end is not None:
+            plan.scheduled_end_date = scheduled_end
         plan.updated_at = datetime.now()
         plan.updated_by = current_user.id
 
@@ -773,6 +801,7 @@ async def reschedule_shop_plan(
             "data": {
                 "id": plan.id,
                 "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
+                "scheduled_end_date": _get_effective_scheduled_end_iso(plan),
                 "updated_at": plan.updated_at.isoformat(),
                 "updated_by": plan.updated_by
             }
@@ -1308,6 +1337,7 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
             "total_actual_seconds": total_actual_seconds,
             "total_actual_hours": total_actual_hours,
             "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
+            "scheduled_end_date": _get_effective_scheduled_end_iso(plan),
             "actual_start_date": plan.actual_start_date.isoformat() if plan.actual_start_date else None,
             "actual_end_date": plan.actual_end_date.isoformat() if plan.actual_end_date else None,
             "work_percentage": display_work_percentage,
@@ -1451,6 +1481,23 @@ def _compute_business_rollover_end(start: datetime, hours: float) -> datetime:
             cursor = _next_business_start(next_day)
 
 
+def _get_effective_scheduled_end(plan: ShopCutPlan) -> Optional[datetime]:
+    """Return stored scheduled_end_date if present, else compute from start + estimated_hours."""
+    if getattr(plan, "scheduled_end_date", None):
+        return plan.scheduled_end_date
+    if plan.scheduled_start_date and plan.estimated_hours is not None:
+        try:
+            return _compute_lunch_adjusted_end(plan.scheduled_start_date, float(plan.estimated_hours))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _get_effective_scheduled_end_iso(plan: ShopCutPlan) -> Optional[str]:
+    effective_end = _get_effective_scheduled_end(plan)
+    return effective_end.isoformat() if effective_end else None
+
+
 def _compute_schedule_end_time_iso(
     scheduled_start: Optional[datetime],
     estimated_hours: Optional[float]
@@ -1532,13 +1579,15 @@ def _task_overlaps_window(plan: ShopCutPlan, range_start: datetime, range_end: d
         return False
 
     task_start = plan.scheduled_start_date
-    if plan.estimated_hours is None:
-        task_end = task_start
-    else:
-        try:
-            task_end = task_start + timedelta(hours=float(plan.estimated_hours))
-        except (TypeError, ValueError):
+    task_end = _get_effective_scheduled_end(plan)
+    if task_end is None:
+        if plan.estimated_hours is None:
             task_end = task_start
+        else:
+            try:
+                task_end = task_start + timedelta(hours=float(plan.estimated_hours))
+            except (TypeError, ValueError):
+                task_end = task_start
 
     return task_start < range_end and task_end >= range_start
 
@@ -2358,8 +2407,12 @@ async def _assert_no_shop_plan_conflicts(
     operator_id: int,
     scheduled_start: datetime,
     estimated_hours: float,
+    scheduled_end: Optional[datetime] = None,
 ) -> None:
-    proposed_end = _compute_lunch_adjusted_end(scheduled_start, float(estimated_hours))
+    if scheduled_end is not None:
+        proposed_end = scheduled_end
+    else:
+        proposed_end = _compute_lunch_adjusted_end(scheduled_start, float(estimated_hours))
 
     conflict_result = await db.execute(
         select(ShopCutPlan).where(
@@ -2373,11 +2426,14 @@ async def _assert_no_shop_plan_conflicts(
 
     for other_plan in conflicting_plans:
         other_start = _normalize_naive_dt(other_plan.scheduled_start_date)
-        other_hours = float(other_plan.estimated_hours or 0)
-        if not other_start or other_hours <= 0:
+        if not other_start:
             continue
-
-        other_end = _compute_lunch_adjusted_end(other_start, other_hours)
+        other_end = _get_effective_scheduled_end(other_plan)
+        if not other_end:
+            other_hours = float(other_plan.estimated_hours or 0)
+            if other_hours <= 0:
+                continue
+            other_end = _compute_lunch_adjusted_end(other_start, other_hours)
 
         if _intervals_overlap(scheduled_start, proposed_end, other_start, other_end):
             readable_start_time = other_start.strftime("%I:%M %p").lstrip("0")
