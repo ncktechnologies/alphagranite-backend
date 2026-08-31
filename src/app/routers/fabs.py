@@ -546,7 +546,7 @@ async def get_plans_map_for_fabs(db: AsyncSession, fab_ids: List[int]) -> dict[i
         .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id, isouter=True)
         .join(User, User.id == ShopCutPlan.user_id, isouter=True)
         .where(ShopCutPlan.fab_id.in_(fab_ids))
-        .order_by(ShopCutPlan.fab_id, ShopCutPlan.id.desc())
+        .order_by(ShopCutPlan.fab_id, ShopCutPlan.sequence.asc())
     )
     rows = (await db.execute(q)).all()
 
