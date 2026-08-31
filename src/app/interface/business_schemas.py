@@ -1451,7 +1451,8 @@ class ShopCutPlanStageCreate(BaseModel):
     planning_section_id: int
     operator_ids: List[int]
     estimated_hours: float = Field(gt=0)
-    scheduled_start: Optional[datetime] = None
+    scheduled_start: Optional[datetime] = Field(default=None, validation_alias=AliasChoices("scheduled_start", "scheduled_start_date"))
+    scheduled_end: Optional[datetime] = Field(default=None, validation_alias=AliasChoices("scheduled_end", "scheduled_end_date"))
     notes: Optional[str] = None
 
 

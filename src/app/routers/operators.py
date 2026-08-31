@@ -198,7 +198,13 @@ def _serialize_workstation(ws: WorkStation, operators_by_id: dict = None, sectio
 def _compute_schedule_end_time_iso(
     scheduled_start: Optional[datetime],
     estimated_hours: Optional[float],
+    scheduled_end: Optional[datetime] = None,
 ) -> Optional[str]:
+    if scheduled_end is not None:
+        try:
+            return scheduled_end.isoformat() if isinstance(scheduled_end, datetime) else str(scheduled_end)
+        except Exception:
+            pass
     if not scheduled_start or estimated_hours is None:
         return None
     try:
@@ -249,7 +255,7 @@ def _serialize_operator_task(row, timer_status_by_fab: Optional[dict[int, str]] 
         "has_pending_shop_revision": bool(row[7]),
         "sequence": plan.sequence,
         "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
-        "scheduled_end_date": _compute_schedule_end_time_iso(plan.scheduled_start_date, plan.estimated_hours),
+        "scheduled_end_date": _compute_schedule_end_time_iso(plan.scheduled_start_date, plan.estimated_hours, getattr(plan, "scheduled_end_date", None)),
         "actual_start_date": plan.actual_start_date.isoformat() if plan.actual_start_date else None,
         "actual_end_date": plan.actual_end_date.isoformat() if plan.actual_end_date else None,
         "estimated_hours": float(plan.estimated_hours) if plan.estimated_hours is not None else None,
@@ -314,7 +320,8 @@ def _serialize_operator_workstation_task(
         "total_actual_seconds": total_actual_seconds,
         "total_actual_hours": total_actual_hours,
         "scheduled_start_date": plan.scheduled_start_date.isoformat() if plan.scheduled_start_date else None,
-        "est_workstation_comp_date": _compute_schedule_end_time_iso(plan.scheduled_start_date, plan.estimated_hours),
+        "scheduled_end_date": _compute_schedule_end_time_iso(plan.scheduled_start_date, plan.estimated_hours, getattr(plan, "scheduled_end_date", None)),
+        "est_workstation_comp_date": _compute_schedule_end_time_iso(plan.scheduled_start_date, plan.estimated_hours, getattr(plan, "scheduled_end_date", None)),
         "est_job_comp_date": fab.shop_est_completion_date.date().isoformat() if fab.shop_est_completion_date else None,
         "actual_start_date": plan.actual_start_date.isoformat() if plan.actual_start_date else None,
         "actual_end_date": plan.actual_end_date.isoformat() if plan.actual_end_date else None,
@@ -355,7 +362,10 @@ def _task_overlaps_window(plan: ShopCutPlan, range_start: datetime, range_end: d
         return False
 
     task_start = plan.scheduled_start_date
-    if plan.estimated_hours is None:
+    effective_end = getattr(plan, "scheduled_end_date", None)
+    if effective_end is not None:
+        task_end = effective_end
+    elif plan.estimated_hours is None:
         task_end = task_start
     else:
         try:
