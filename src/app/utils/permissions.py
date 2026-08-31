@@ -58,6 +58,10 @@ def PermissionChecker(resource: str, action: str):
         # Default baseline: any role-assigned employee can read Employees and Accounts.
         if action_menu.code in {"employees", "accounts"} and action == "read":
             return current_user
+            
+        # Allow read access to departments for any role-assigned user (similar to employees/accounts)
+        if action_menu.code == "departments" and action == "read":
+            return current_user
 
         # Check direct permissions for this resource across all user's roles
         result = await db.execute(
