@@ -1118,6 +1118,14 @@ async def get_current_operator_tasks(
         )
     )
     active_timer_fab_count = int(active_timer_fab_count_result.scalar() or 0)
+    running_timer_fab_ids_result = await db.execute(
+        select(func.distinct(OperatorJobTimerSession.fab_id)).where(
+            OperatorJobTimerSession.operator_id == current_user.id,
+            OperatorJobTimerSession.fab_id.is_not(None),
+            OperatorJobTimerSession.status == "running",
+        )
+    )
+    running_timer_fab_ids = [int(fab_id) for fab_id in running_timer_fab_ids_result.scalars().all() if fab_id is not None]
     tasks = [_serialize_operator_task(row, timer_status_by_fab) for row in paginated_rows]
     page = (skip // limit) + 1 if limit > 0 else 1
 
@@ -1130,6 +1138,7 @@ async def get_current_operator_tasks(
             "range_end": range_end.isoformat(),
             "total": total,
             "active_timer_fab_count": active_timer_fab_count,
+            "running_timer_fab_ids": running_timer_fab_ids,
             "page": page,
             "per_page": limit,
             "data": tasks,
