@@ -37,6 +37,9 @@ def PermissionChecker(resource: str, action: str):
             select(UserRole.role_id).filter(UserRole.user_id == current_user.id)
         )
         role_ids = [row[0] for row in ur_result.all()]
+        direct_role_id = getattr(current_user, "role_id", None)
+        if direct_role_id is not None and direct_role_id not in role_ids:
+            role_ids.append(direct_role_id)
         
         if not role_ids:
             raise HTTPException(
