@@ -14,6 +14,10 @@ FAB_DEPENDENT_RESOURCES = {
     "edges", "jobs", "employees"
 }
 
+RESOURCE_CODE_ALIASES = {
+    "departments": "department",
+}
+
 
 def PermissionChecker(resource: str, action: str):
     from src.app.utils.config import get_db
@@ -51,6 +55,12 @@ def PermissionChecker(resource: str, action: str):
             select(ActionMenu).where(ActionMenu.code == resource)
         )
         action_menu = result.scalars().first()
+
+        if not action_menu and resource in RESOURCE_CODE_ALIASES:
+            result = await db.execute(
+                select(ActionMenu).where(ActionMenu.code == RESOURCE_CODE_ALIASES[resource])
+            )
+            action_menu = result.scalars().first()
         
         if not action_menu:
             raise HTTPException(
@@ -63,7 +73,7 @@ def PermissionChecker(resource: str, action: str):
             return current_user
             
         # Allow read access to departments for any role-assigned user (similar to employees/accounts)
-        if action_menu.code == "departments" and action == "read":
+        if resource == "departments" and action == "read":
             return current_user
 
         # Check direct permissions for this resource across all user's roles
