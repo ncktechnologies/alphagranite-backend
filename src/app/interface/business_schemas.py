@@ -1302,6 +1302,7 @@ class FinalProgrammingSessionUpdate(BaseModel):
         description="Session note",
     )
     sqft_completed: Optional[float] = Field(None, ge=0, description="Square footage completed for this action")
+    work_percentage_done: Optional[float] = Field(None, ge=0, le=100, description="Work percentage completed for this action")
 
 
 class FinalProgrammingScheduleShopDate(BaseModel):
@@ -1372,6 +1373,7 @@ class SlabSmithSessionUpdate(BaseModel):
         description="Session note",
     )
     sqft_completed: Optional[float] = Field(None, ge=0, description="Square footage completed for this action")
+    work_percentage_done: Optional[float] = Field(None, ge=0, le=100, description="Work percentage completed for this action")
 
 # Drafting Session Schemas
 class DraftingSessionAction(BaseModel):

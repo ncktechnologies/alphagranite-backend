@@ -85,6 +85,7 @@ async def manage_slabsmith_session(
                 timestamp=now,
                 note=note_value,
                 sqft_completed=session_data.sqft_completed,
+                work_percentage_done=session_data.work_percentage_done,
                 created_at=now,
             )
         )
@@ -119,6 +120,7 @@ async def manage_slabsmith_session(
                 timestamp=now,
                 note=note_value,
                 sqft_completed=session_data.sqft_completed,
+                work_percentage_done=session_data.work_percentage_done,
                 created_at=now,
             )
         )
@@ -160,6 +162,7 @@ async def manage_slabsmith_session(
                 timestamp=now,
                 note=note_value,
                 sqft_completed=session_data.sqft_completed,
+                work_percentage_done=session_data.work_percentage_done,
                 created_at=now,
             )
         )
@@ -205,6 +208,7 @@ async def manage_slabsmith_session(
                 timestamp=now,
                 note=note_value,
                 sqft_completed=session_data.sqft_completed,
+                work_percentage_done=session_data.work_percentage_done,
                 created_at=now,
             )
         )
@@ -228,6 +232,7 @@ async def manage_slabsmith_session(
             "session_active": session is not None and session.status in ["active", "paused"],
             "note": note_value,
             "sqft_completed": session_data.sqft_completed,
+            "work_percentage_done": session_data.work_percentage_done,
         }
     }
 
@@ -259,9 +264,26 @@ async def get_slabsmith_session_status(
             "message": "No active session",
             "data": {
                 "fab_id": fab_id,
-                "has_active_session": False
+                "has_active_session": False,
+                "sqft_completed": None,
+                "work_percentage_done": None,
             }
         }
+
+    notes_result = await db.execute(
+        select(SlabSmithSessionNote)
+        .where(SlabSmithSessionNote.session_id == session.id)
+        .order_by(SlabSmithSessionNote.timestamp.desc(), SlabSmithSessionNote.id.desc())
+    )
+    sqft_completed = None
+    work_percentage_done = None
+    for session_note in notes_result.scalars().all():
+        if sqft_completed is None and session_note.sqft_completed is not None:
+            sqft_completed = session_note.sqft_completed
+        if work_percentage_done is None and session_note.work_percentage_done is not None:
+            work_percentage_done = session_note.work_percentage_done
+        if sqft_completed is not None and work_percentage_done is not None:
+            break
     
     # Calculate current duration
     current_time = datetime.now()
@@ -282,7 +304,9 @@ async def get_slabsmith_session_status(
             "status": session.status,
             "start_time": session.session_start_time.isoformat(),
             "paused_at": session.current_pause_start_time.isoformat() if session.current_pause_start_time else None,
-            "duration_minutes": int(duration_minutes)
+            "duration_minutes": int(duration_minutes),
+            "sqft_completed": sqft_completed,
+            "work_percentage_done": work_percentage_done,
         }
     }
 
@@ -340,6 +364,7 @@ async def get_slabsmith_session_history(
                 "timestamp": n.timestamp.isoformat() if n.timestamp else None,
                 "note": n.note,
                 "sqft_completed": n.sqft_completed,
+                "work_percentage_done": n.work_percentage_done,
                 "user_id": n.user_id,
             }
         )
