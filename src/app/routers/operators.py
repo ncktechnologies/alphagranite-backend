@@ -16,6 +16,7 @@ from src.app.database.file import File
 from src.app.database.fab import Fab
 from src.app.database.operator_job_timer_event import OperatorJobTimerEvent
 from src.app.database.operator_job_timer_session import OperatorJobTimerSession
+from src.app.database.shop_cut_plan_timer_session import ShopCutPlanTimerSession
 from src.app.interface.generated_schemas import PlanningSection, ShopRevision
 from src.app.database.shop_cut_plan import ShopCutPlan
 from src.app.database.stone_color import StoneColor
@@ -1129,10 +1130,11 @@ async def get_current_operator_tasks(
     )
     active_timer_fab_count = int(active_timer_fab_count_result.scalar() or 0)
     running_timer_fab_ids_result = await db.execute(
-        select(func.distinct(OperatorJobTimerSession.fab_id)).where(
-            OperatorJobTimerSession.operator_id == current_user.id,
-            OperatorJobTimerSession.fab_id.is_not(None),
-            OperatorJobTimerSession.status == "running",
+        select(func.distinct(ShopCutPlan.fab_id))
+        .join(ShopCutPlanTimerSession, ShopCutPlanTimerSession.shop_cut_plan_id == ShopCutPlan.id)
+        .where(
+            ShopCutPlanTimerSession.operator_id == current_user.id,
+            ShopCutPlanTimerSession.status == "running",
         )
     )
     running_timer_fab_ids = [int(fab_id) for fab_id in running_timer_fab_ids_result.scalars().all() if fab_id is not None]
