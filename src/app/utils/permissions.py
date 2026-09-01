@@ -72,11 +72,10 @@ def PermissionChecker(resource: str, action: str):
                 RolePermission.action_menu_id == action_menu.id
             )
         )
-        role_permission = result.first()
+        role_permissions = result.all()
 
-        # If user has direct permission, check it
-        if role_permission:
-            _, permission = role_permission
+        # Permissions from multiple assigned roles are additive.
+        for _, permission in role_permissions:
             action_map = {
                 "create": permission.can_create,
                 "read": permission.can_read,
@@ -84,7 +83,7 @@ def PermissionChecker(resource: str, action: str):
                 "delete": permission.can_delete,
             }
 
-            if action in action_map and action_map[action]:
+            if action_map.get(action, False):
                 return current_user
         
         # Check for implicit permissions from FAB IDs
