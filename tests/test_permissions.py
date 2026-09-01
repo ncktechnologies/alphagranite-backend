@@ -59,6 +59,32 @@ async def test_create_permission_accepts_legacy_direct_role(resource):
 
 
 @pytest.mark.asyncio
+async def test_departments_resource_accepts_singular_seeded_menu_code():
+	permission = SimpleNamespace(
+		can_create=True,
+		can_read=False,
+		can_update=False,
+		can_delete=False,
+	)
+	db = QueuedSession(
+		[
+			QueryResult(rows=[(10,)]),
+			QueryResult(scalar=None),
+			QueryResult(scalar=SimpleNamespace(id=5, code="department")),
+			QueryResult(rows=[(SimpleNamespace(role_id=10), permission)]),
+		]
+	)
+	current_user = SimpleNamespace(id=7, role_id=10, is_super_admin=False)
+
+	authorized_user = await PermissionChecker("departments", "create")(
+		db=db,
+		current_user=current_user,
+	)
+
+	assert authorized_user is current_user
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
 	("router", "endpoint", "resource"),
 	[
