@@ -177,7 +177,7 @@ async def update_employee(
     role_id: Optional[str] = Form(None),
     hcp_employee_id: Optional[str] = Form(None),
     profile_image: UploadFile = File(None),
-    current_user: User = Depends(PermissionChecker("employees", "update")),
+    current_user: User = Depends(PermissionChecker("employees")),
     db: Session = Depends(get_db)
 ):
     """
