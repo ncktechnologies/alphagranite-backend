@@ -68,7 +68,7 @@ async def create_department(
 async def update_department(
     data: DepartmentUpdate,
     department_id: int = Path(..., gt=0),
-    current_user: User = Depends(PermissionChecker("departments", "update")),
+    current_user: User = Depends(PermissionChecker("departments", "create")),
     db: AsyncSession = Depends(get_db)
 ):
     """
