@@ -5423,26 +5423,46 @@ async def get_owner_monthly_cut_completion_report(
         "cost_of_stone": 0.0,
         "gp": 0.0,
         "row_count": 0,
+        "revenue_has_value": False,
+        "cost_has_value": False,
+        "gp_has_value": False,
     })
 
     for cut_date, row_fab_type, fab_id, job_number, job_name, account_name, stone_type_name, stone_color_name, edge_name, stone_thickness_value, input_area, pieces, sq_ft, revenue, fab_cost_of_stone, cos_total_cost in records:
         if cut_date is None:
             continue
 
+        cost_source = fab_cost_of_stone if fab_cost_of_stone is not None else cos_total_cost
+        has_revenue = revenue is not None
+        has_cost = cost_source is not None
         sq_ft_value = round(_to_float(sq_ft), 2)
-        revenue_value = round(_to_float(revenue), 2)
-        cost_value = round(_to_float(fab_cost_of_stone if fab_cost_of_stone is not None else cos_total_cost), 2)
-        gp_value = round(revenue_value - cost_value, 2)
+        revenue_value = round(_to_float(revenue), 2) if has_revenue else None
+        cost_value = round(_to_float(cost_source), 2) if has_cost else None
+        if revenue_value is not None and cost_value is not None:
+            gp_value = round(revenue_value - cost_value, 2)
+            has_gp = True
+        else:
+            gp_value = None
+            has_gp = False
         pieces_value = int(_to_float(pieces))
-        revenue_per_sqft = round((revenue_value / sq_ft_value), 2) if sq_ft_value else 0.0
+        if revenue_value is not None and sq_ft_value:
+            revenue_per_sqft = round((revenue_value / sq_ft_value), 2)
+        else:
+            revenue_per_sqft = None
         day_key = cut_date.date().isoformat()
 
+        if revenue_value is not None:
+            daily_rollup[day_key]["revenue"] += revenue_value
+        if cost_value is not None:
+            daily_rollup[day_key]["cost_of_stone"] += cost_value
+        if gp_value is not None:
+            daily_rollup[day_key]["gp"] += gp_value
         daily_rollup[day_key]["pieces"] += pieces_value
         daily_rollup[day_key]["sq_ft"] += sq_ft_value
-        daily_rollup[day_key]["revenue"] += revenue_value
-        daily_rollup[day_key]["cost_of_stone"] += cost_value
-        daily_rollup[day_key]["gp"] += gp_value
         daily_rollup[day_key]["row_count"] += 1
+        daily_rollup[day_key]["revenue_has_value"] = daily_rollup[day_key]["revenue_has_value"] or has_revenue
+        daily_rollup[day_key]["cost_has_value"] = daily_rollup[day_key]["cost_has_value"] or has_cost
+        daily_rollup[day_key]["gp_has_value"] = daily_rollup[day_key]["gp_has_value"] or has_gp
 
         rows.append(
             {
@@ -5470,24 +5490,37 @@ async def get_owner_monthly_cut_completion_report(
     for day_key in sorted(daily_rollup.keys()):
         item = daily_rollup[day_key]
         day_sqft = round(item["sq_ft"], 2)
-        day_revenue = round(item["revenue"], 2)
+        day_revenue = round(item["revenue"], 2) if item["revenue_has_value"] else None
+        day_cost = round(item["cost_of_stone"], 2) if item["cost_has_value"] else None
+        day_gp = round(item["gp"], 2) if item["gp_has_value"] else None
+        if day_revenue is not None and day_sqft:
+            day_revenue_per_sqft = round((day_revenue / day_sqft), 2)
+        else:
+            day_revenue_per_sqft = None
         daily_totals.append(
             {
                 "cut_date": day_key,
                 "pieces": int(item["pieces"]),
                 "sq_ft": day_sqft,
                 "revenue": day_revenue,
-                "revenue_per_sq_ft": round((day_revenue / day_sqft), 2) if day_sqft else 0.0,
-                "cost_of_stone": round(item["cost_of_stone"], 2),
-                "gp": round(item["gp"], 2),
+                "revenue_per_sq_ft": day_revenue_per_sqft,
+                "cost_of_stone": day_cost,
+                "gp": day_gp,
                 "row_count": int(item["row_count"]),
             }
         )
 
     total_sqft = round(sum(item["sq_ft"] for item in daily_rollup.values()), 2)
-    total_revenue = round(sum(item["revenue"] for item in daily_rollup.values()), 2)
-    total_cost = round(sum(item["cost_of_stone"] for item in daily_rollup.values()), 2)
-    total_gp = round(sum(item["gp"] for item in daily_rollup.values()), 2)
+    any_revenue = any(item["revenue_has_value"] for item in daily_rollup.values())
+    any_cost = any(item["cost_has_value"] for item in daily_rollup.values())
+    any_gp = any(item["gp_has_value"] for item in daily_rollup.values())
+    total_revenue = round(sum(item["revenue"] for item in daily_rollup.values()), 2) if any_revenue else None
+    total_cost = round(sum(item["cost_of_stone"] for item in daily_rollup.values()), 2) if any_cost else None
+    total_gp = round(sum(item["gp"] for item in daily_rollup.values()), 2) if any_gp else None
+    if total_revenue is not None and total_sqft:
+        summary_revenue_per_sqft = round((total_revenue / total_sqft), 2)
+    else:
+        summary_revenue_per_sqft = None
 
     return success_response(
         {
@@ -5529,7 +5562,7 @@ async def get_owner_monthly_cut_completion_report(
                 "pieces": int(sum(item["pieces"] for item in daily_rollup.values())),
                 "sq_ft": total_sqft,
                 "revenue": total_revenue,
-                "revenue_per_sq_ft": round((total_revenue / total_sqft), 2) if total_sqft else 0.0,
+                "revenue_per_sq_ft": summary_revenue_per_sqft,
                 "cost_of_stone": total_cost,
                 "gp": total_gp,
                 "total_cost_of_stone": total_cost,
