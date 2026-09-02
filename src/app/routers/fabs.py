@@ -470,16 +470,19 @@ async def _transition_completed_cutlist_fabs_to_shop(
     if updated:
         await db.commit()
 
-def _stage_filter_condition(stage_name: str):
+def _stage_filter_condition(stage_name: str, plan_view: Optional[str] = None):
     """
     Stage visibility rule:
     - install_completion uses exact stage match
     - install_scheduling uses its redirected visibility rule
     - final_programming includes pending cut_list FABs with a shop date
     - cut_list excludes FABs counted as pending final_programming
-    - shop shows FABs with active (not yet 100%) shop cut plan work
+    - shop shows FABs with active (not yet 100%) shop cut plan work, or all shop FABs when plan_view='all'
     - all other stages use exact stage match
     """
+    _is_all_plan_view = isinstance(plan_view, str) and plan_view.strip().lower() == "all"
+    if stage_name == "shop" and _is_all_plan_view:
+        return Fab.current_stage == stage_name
     if stage_name == "install_completion":
         completed_install_schedule_exists = (
             select(InstallScheduling.id)
@@ -900,6 +903,7 @@ async def get_fabs(
     user_level: Optional[str] = Query(None, description="Requester user level flag; when 'installer', apply install_completion crew/date visibility"),
     search: Optional[str] = Query(None, description="Search value"),
     type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, job_name"),  # NEW
+    plan_view: Optional[str] = Query(None, description="Plan view filter for shop stage: 'all' to return all shop cut plans regardless of active status, 'active' (default) returns only active plans"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -947,6 +951,7 @@ async def get_fabs(
     else:
         search_filter = None
 
+    _is_all_plan_view = isinstance(plan_view, str) and plan_view.strip().lower() == "all"
     query = _build_fab_list_query(
         job_id, fab_type, sales_person_id, status_id, current_stage, next_stage,
         None,  # search is handled below
@@ -955,9 +960,10 @@ async def get_fabs(
         draft_completed_start, draft_completed_end, sct_completed_start, sct_completed_end,
         date_filter,
         drafter_id,
+        plan_view,
     )
 
-    if current_stage == "shop":
+    if current_stage == "shop" and not _is_all_plan_view:
         query = query.where(_active_shop_cut_plan_visibility_filter())
 
     # install_completion: restrict to logged-in user's crew and release after 4pm on scheduled day
@@ -1050,7 +1056,7 @@ async def get_fabs(
     count_query = select(func.count(Fab.id)).select_from(Fab)
     count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
     count_query = count_query.outerjoin(latest_templating, sa.literal(True))
-    if current_stage == "shop":
+    if current_stage == "shop" and not _is_all_plan_view:
         count_query = count_query.where(_active_shop_cut_plan_visibility_filter())
 
     # Apply all basic filters to count query
@@ -1065,7 +1071,7 @@ async def get_fabs(
     if status_id is not None:
         count_query = count_query.where(Fab.status_id == status_id)
     if current_stage:
-        count_query = count_query.where(_stage_filter_condition(current_stage))
+        count_query = count_query.where(_stage_filter_condition(current_stage, plan_view))
         if current_stage == "install_completion" and _install_completion_crew_filter is not None:
             count_query = count_query.where(_install_completion_crew_filter, _install_completion_date_filter)
     if next_stage:
@@ -1151,9 +1157,9 @@ async def get_fabs(
             func.sum(Fab.miter_linft).label("miter_linft"),
             func.sum(Fab.saw_cut_lnft).label("saw_cut_lnft"),
             func.sum(Fab.no_of_pieces).label("no_of_pieces")
-        ).select_from(Fab).where(_stage_filter_condition(current_stage))
+        ).select_from(Fab).where(_stage_filter_condition(current_stage, plan_view))
 
-        if current_stage == "shop":
+        if current_stage == "shop" and not _is_all_plan_view:
             stage_totals_query = stage_totals_query.where(_active_shop_cut_plan_visibility_filter())
         if current_stage == "install_completion" and _install_completion_crew_filter is not None:
             stage_totals_query = stage_totals_query.where(_install_completion_crew_filter, _install_completion_date_filter)
@@ -3621,6 +3627,7 @@ def _build_fab_list_query(
     sct_completed_end: Optional[date] = None,
     date_filter: Optional[str] = None,
     drafter_id: Optional[int] = None,
+    plan_view: Optional[str] = None,
 ) -> select:
     """Build the main FAB list query with all joins."""
     from sqlalchemy.orm import aliased
@@ -3680,7 +3687,7 @@ def _build_fab_list_query(
     if status_id is not None:
         query = query.where(Fab.status_id == status_id)
     if current_stage:
-        query = query.where(_stage_filter_condition(current_stage))
+        query = query.where(_stage_filter_condition(current_stage, plan_view))
     if next_stage:
         query = query.where(Fab.next_stage == next_stage)
     
