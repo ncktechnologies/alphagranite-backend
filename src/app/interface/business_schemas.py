@@ -1173,7 +1173,7 @@ class InstallCompletionCreate(BaseModel):
     fab_id: int = Field(..., gt=0)
     installer_id: int = Field(..., gt=0)
     install_date: Optional[datetime] = None
-    completion_date: datetime
+    completion_date: Optional[datetime] = None
     total_sqft_installed: Optional[str] = None
     customer_signature: Optional[str] = None
     completion_notes: Optional[str] = None
