@@ -979,7 +979,7 @@ async def get_fabs(
     sct_completed_end: Optional[date] = Query(None, description="Filter by sct_completed_date on or before this date (YYYY-MM-DD)"),  # NEW
     user_level: Optional[str] = Query(None, description="Requester user level flag; when 'installer', apply install_completion crew/date visibility"),
     search: Optional[str] = Query(None, description="Search value"),
-    type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, job_name"),  # NEW
+    type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, job_name, account_name"),  # NEW
     plan_view: Optional[str] = Query(None, description="Plan view filter for shop stage: 'all' to return all shop cut plans regardless of active status, 'active' (default) returns only active plans"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -1025,6 +1025,8 @@ async def get_fabs(
             search_filter = BusinessJob.job_number == search
         elif type == "job_name":
             search_filter = BusinessJob.name.ilike(f"%{search}%")
+        elif type == "account_name":
+            search_filter = Account.name.ilike(f"%{search}%")
     else:
         search_filter = None
 
@@ -1132,6 +1134,7 @@ async def get_fabs(
     # Step 7: Get total count with stage-specific date filtering
     count_query = select(func.count(Fab.id)).select_from(Fab)
     count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
+    count_query = count_query.join(Account, BusinessJob.account_id == Account.id, isouter=True)
     count_query = count_query.outerjoin(latest_templating, sa.literal(True))
     if current_stage == "shop" and not _is_all_plan_view:
         count_query = count_query.where(_active_shop_cut_plan_visibility_filter())
@@ -1276,6 +1279,10 @@ async def get_fabs(
 
         # Apply search filter to stage totals query
         if search_filter is not None:
+            if type in {"job_number", "job_name", "account_name"}:
+                stage_totals_query = stage_totals_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
+            if type == "account_name":
+                stage_totals_query = stage_totals_query.join(Account, BusinessJob.account_id == Account.id, isouter=True)
             stage_totals_query = stage_totals_query.where(search_filter)
         elif search:
             search_term = f"%{search}%"
@@ -1349,7 +1356,7 @@ async def get_fabs_for_cnc_widget(
     sct_completed_start: Optional[date] = Query(None, description="Filter by sct_completed_date on or after this date (YYYY-MM-DD)"),
     sct_completed_end: Optional[date] = Query(None, description="Filter by sct_completed_date on or before this date (YYYY-MM-DD)"),
     search: Optional[str] = Query(None, description="Search value"),
-    type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, job_name"),
+    type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, job_name, account_name"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -1396,6 +1403,8 @@ async def get_fabs_for_cnc_widget(
             search_filter = sa.cast(BusinessJob.job_number, sa.String) == search_value
         elif search_type == "job_name":
             search_filter = BusinessJob.name.ilike(f"%{search_value}%")
+        elif search_type == "account_name":
+            search_filter = Account.name.ilike(f"%{search_value}%")
 
     stage_for_query = None if current_stage == "install_scheduling" else current_stage
 
@@ -1471,6 +1480,7 @@ async def get_fabs_for_cnc_widget(
     # Step 7: Get total count
     count_query = select(func.count(Fab.id)).select_from(Fab)
     count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
+    count_query = count_query.join(Account, BusinessJob.account_id == Account.id, isouter=True)
     count_query = count_query.outerjoin(latest_templating, sa.literal(True))
     count_query = count_query.where(cnc_widget_filter)
 
@@ -1637,6 +1647,10 @@ async def get_fabs_for_cnc_widget(
         )
 
         if search_filter is not None:
+            if search_type in {"job_number", "job_name", "account_name"}:
+                stage_totals_query = stage_totals_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
+            if search_type == "account_name":
+                stage_totals_query = stage_totals_query.join(Account, BusinessJob.account_id == Account.id, isouter=True)
             stage_totals_query = stage_totals_query.where(search_filter)
         elif search_value:
             search_term = f"%{search_value}%"
@@ -1709,7 +1723,7 @@ async def get_fabs_with_shop_est_completion(
     sct_completed_start: Optional[date] = Query(None, description="Filter by sct_completed_date on or after this date (YYYY-MM-DD)"),
     sct_completed_end: Optional[date] = Query(None, description="Filter by sct_completed_date on or before this date (YYYY-MM-DD)"),
     search: Optional[str] = Query(None, description="Search value"),
-    type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, job_name"),
+    type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, job_name, account_name"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -1756,6 +1770,8 @@ async def get_fabs_with_shop_est_completion(
             search_filter = sa.cast(BusinessJob.job_number, sa.String) == search_value
         elif search_type == "job_name":
             search_filter = BusinessJob.name.ilike(f"%{search_value}%")
+        elif search_type == "account_name":
+            search_filter = Account.name.ilike(f"%{search_value}%")
 
     effective_current_stage = current_stage
     stage_for_query = None if effective_current_stage == "install_scheduling" else effective_current_stage
@@ -1964,6 +1980,7 @@ async def get_fabs_with_shop_est_completion(
     # Step 7: Get total count
     count_query = select(func.count(Fab.id)).select_from(Fab)
     count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
+    count_query = count_query.join(Account, BusinessJob.account_id == Account.id, isouter=True)
     count_query = count_query.outerjoin(latest_templating, sa.literal(True))
 
     count_query = count_query.where(
@@ -2110,6 +2127,10 @@ async def get_fabs_with_shop_est_completion(
         )
 
         if search_filter is not None:
+            if search_type in {"job_number", "job_name", "account_name"}:
+                stage_totals_query = stage_totals_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
+            if search_type == "account_name":
+                stage_totals_query = stage_totals_query.join(Account, BusinessJob.account_id == Account.id, isouter=True)
             stage_totals_query = stage_totals_query.where(search_filter)
         elif search_value:
             search_term = f"%{search_value}%"
@@ -2902,7 +2923,7 @@ async def get_pending_final_programming_fabs(
     shop_date_end: Optional[date] = Query(None, description="Filter by shop_date_schedule on or before this date (YYYY-MM-DD)"),  # NEW
     fab_type: Optional[str] = Query(None, description="Filter by fab type"),  # NEW
     search: Optional[str] = Query(None, description="Search by FAB ID or Job Name"),  # NEW
-    type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, job_name"),  # NEW
+    type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, job_name, account_name"),  # NEW
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -3010,6 +3031,8 @@ async def get_pending_final_programming_fabs(
             search_filter = BusinessJob.job_number == search
         elif type == "job_name":
             search_filter = BusinessJob.name.ilike(f"%{search}%")
+        elif type == "account_name":
+            search_filter = Account.name.ilike(f"%{search}%")
         else:
             search_filter = None
     else:
@@ -3052,6 +3075,8 @@ async def get_pending_final_programming_fabs(
         count_query = count_query.where(Fab.fab_type.ilike(f"%{fab_type}%"))
     if search_filter is not None:
         count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
+        if type == "account_name":
+            count_query = count_query.join(Account, BusinessJob.account_id == Account.id, isouter=True)
         count_query = count_query.where(search_filter)
     elif search:
         search_term = f"%{search}%"
@@ -5761,7 +5786,7 @@ async def get_fabs_cost_of_stone_queue(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
     search: Optional[str] = Query(None, description="Search value"),
-    type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, fab_info"),
+    type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, fab_info, account_name"),
     date_filter: Optional[str] = Query(None, description="Predefined date filter: today, this_week, last_week, this_month, last_month, next_week, next_month"),
     sct_completed_start: Optional[date] = Query(None, description="Filter by sct_completed_date on or after this date (YYYY-MM-DD)"),
     sct_completed_end: Optional[date] = Query(None, description="Filter by sct_completed_date on or before this date (YYYY-MM-DD)"),
@@ -5835,6 +5860,8 @@ async def get_fabs_cost_of_stone_queue(
             search_filter = sa.cast(BusinessJob.job_number, sa.String) == search
         elif type == "fab_info":
             search_filter = Fab.input_area.ilike(f"%{search}%")
+        elif type == "account_name":
+            search_filter = Account.name.ilike(f"%{search}%")
 
     if search_filter is not None:
         base_query = base_query.where(search_filter)
