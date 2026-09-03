@@ -2351,6 +2351,7 @@ async def get_fab(
                 "id": revision.id,
                 "fab_id": revision.fab_id,
                 "revision_note": revision.revision_note,
+                "shop_revision_type": revision.shop_revision_type,
                 "revision_feedback": revision.revision_feedback,
                 "requested_by": revision.requested_by,
                 "requested_by_name": f"{requester_first} {requester_last}".strip() if requester_first else None,
@@ -5616,7 +5617,7 @@ async def get_resurface_schedule(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
     search: Optional[str] = Query(None, description="Search value"),
-    type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, job_name"),
+    type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, job_name, account_name"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -5690,6 +5691,8 @@ async def get_resurface_schedule(
             search_filter = BusinessJob.job_number == search
         elif type == "job_name":
             search_filter = BusinessJob.name.ilike(f"%{search}%")
+        elif type == "account_name":
+            search_filter = Account.name.ilike(f"%{search}%")
     else:
         search_filter = None
 

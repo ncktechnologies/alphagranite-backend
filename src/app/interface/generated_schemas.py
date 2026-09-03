@@ -413,6 +413,7 @@ class ShopRevision(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     fab_id: int = Field(foreign_key="fabs.id", index=True)
     revision_note: str = Field(description="Shop revision note")
+    shop_revision_type: Optional[str] = Field(default=None)
     requested_by: int = Field(foreign_key="users.id")
     assigned_to: Optional[int] = Field(default=None, foreign_key="users.id")
     revision_feedback: Optional[str] = Field(default=None)
