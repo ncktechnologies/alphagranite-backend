@@ -24,7 +24,7 @@ from src.app.interface.business_schemas import (
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.utils.helpers import error_response, success_response
 from src.app.database.work_station import WorkStation
-from src.app.interface.generated_schemas import PlanningSection
+from src.app.interface.generated_schemas import PlanningSection, ShopRevision
 from src.app.database.business_job import BusinessJob
 from src.app.database.account import Account
 from src.app.database.shop_cut_plan_timer_session import ShopCutPlanTimerSession
@@ -1252,6 +1252,10 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
         db,
         [plan.fab_id for plan in plans if plan.fab_id is not None],
     )
+    pending_shop_revision_by_fab = await _get_pending_shop_revision_flags(
+        db,
+        [plan.fab_id for plan in plans if plan.fab_id is not None],
+    )
 
     for plan in plans:
         work_percentage, total_actual_hours, total_actual_seconds = await _recalculate_shop_plan_work_percentage(
@@ -1320,6 +1324,7 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
         item = {
             "id": plan.id,
             "fab_id": plan.fab_id,
+            "has_pending_shop_revision": pending_shop_revision_by_fab.get(plan.fab_id, False),
             "current_plan_stage": current_plan_stage_by_fab.get(plan.fab_id),
             "fab_type": fab_type,
             "account_name": account_name,
@@ -1363,6 +1368,21 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
         grouped_plans.append(grouped[key])
 
     return serialized_plans, grouped_plans
+
+
+async def _get_pending_shop_revision_flags(db: AsyncSession, fab_ids: List[int]) -> Dict[int, bool]:
+    if not fab_ids:
+        return {}
+
+    result = await db.execute(
+        select(ShopRevision.fab_id)
+        .where(
+            ShopRevision.fab_id.in_(set(fab_ids)),
+            ShopRevision.revision_completed.is_(False),
+        )
+        .distinct()
+    )
+    return {row[0]: True for row in result.all()}
 
 
 async def _get_current_plan_stage_by_fab(db: AsyncSession, fab_ids: List[int]) -> Dict[int, Optional[str]]:

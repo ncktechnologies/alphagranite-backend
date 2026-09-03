@@ -464,6 +464,7 @@ class FabResponse(BaseModel):
     plans: List[FabPlanResponse] = []
     resurface_scheduling: Optional['ResurfaceSchedulingResponse'] = None
     install_details: Optional['InstallSchedulingResponse'] = None
+    install_confirm: bool = False
 
 
     class Config:
@@ -1173,6 +1174,7 @@ class InstallCompletionCreate(BaseModel):
     total_sqft_installed: Optional[str] = None
     customer_signature: Optional[str] = None
     completion_notes: Optional[str] = None
+    install_confirm: bool = False
 
 
 class InstallCompletionUpdate(BaseModel):
@@ -1183,6 +1185,7 @@ class InstallCompletionUpdate(BaseModel):
     customer_signature: Optional[str] = None
     completion_notes: Optional[str] = None
     is_completed: Optional[bool] = None
+    install_confirm: Optional[bool] = None
     status_id: Optional[int] = None
 
 
@@ -1196,6 +1199,7 @@ class InstallCompletionResponse(BaseModel):
     customer_signature: Optional[str]
     completion_notes: Optional[str]
     is_completed: bool
+    install_confirm: bool
     status_id: int
     created_at: datetime
     updated_at: Optional[datetime]

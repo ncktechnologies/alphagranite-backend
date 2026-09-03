@@ -58,6 +58,7 @@ async def create_install_completion(
         total_sqft_installed=install_data.total_sqft_installed,
         customer_signature=install_data.customer_signature,
         completion_notes=install_data.completion_notes,
+        is_confirmed=install_data.install_confirm,
         status_id=1,
         created_at=datetime.now()
     )
@@ -94,6 +95,7 @@ async def create_install_completion(
             customer_signature=install_completion.customer_signature,
             completion_notes=install_completion.completion_notes,
             is_completed=install_completion.is_completed,
+            install_confirm=install_completion.is_confirmed,
             status_id=install_completion.status_id,
             created_at=install_completion.created_at,
             updated_at=install_completion.updated_at,
@@ -121,7 +123,10 @@ async def update_install_completion(
     # Update fields
     update_dict = update_data.model_dump(exclude_unset=True)
     for key, value in update_dict.items():
-        setattr(install_completion, key, value)
+        if key == "install_confirm":
+            install_completion.is_confirmed = value
+        else:
+            setattr(install_completion, key, value)
     
     install_completion.updated_at = datetime.now()
     install_completion.updated_by = current_user.id
@@ -140,6 +145,7 @@ async def update_install_completion(
             customer_signature=install_completion.customer_signature,
             completion_notes=install_completion.completion_notes,
             is_completed=install_completion.is_completed,
+            install_confirm=install_completion.is_confirmed,
             status_id=install_completion.status_id,
             created_at=install_completion.created_at,
             updated_at=install_completion.updated_at,
@@ -174,6 +180,7 @@ async def get_install_completion_by_fab(
             customer_signature=install_completion.customer_signature,
             completion_notes=install_completion.completion_notes,
             is_completed=install_completion.is_completed,
+            install_confirm=install_completion.is_confirmed,
             status_id=install_completion.status_id,
             created_at=install_completion.created_at,
             updated_at=install_completion.updated_at,

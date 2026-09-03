@@ -69,6 +69,83 @@ PUNCHOUT_REDIRECT_FAB_TYPES = (
     "PUNCHOUT-BILLABLE",
 )
 
+SHOP_PLAN_REQUIREMENTS = {
+    "wj_linft": ("CUT - WJ", {"CUT - WJ"}),
+    "edging_linft": ("EDGING", {"EDGING"}),
+    "cnc_linft": ("CNC", {"CNC"}),
+    "miter_linft": ("MITER", {"MITER"}),
+    "saw_cut_lnft": ("CUT - SAW", {"CUT - SAW"}),
+    "saw_miter_lnft": ("MITER", {"MITER"}),
+    "wj_miter_lnft": ("MITER", {"MITER"}),
+}
+
+
+def _normalize_shop_plan_name(plan_name: Optional[str]) -> str:
+    return "".join(character for character in (plan_name or "").upper() if character.isalnum())
+
+
+def _find_missing_shop_plan_data_points(
+    fab: Fab,
+    update_data: dict,
+    existing_plan_names: set[str],
+) -> List[dict]:
+    normalized_plan_names = {_normalize_shop_plan_name(name) for name in existing_plan_names}
+    missing_data_points = []
+
+    for field_name, (required_plan, accepted_plan_names) in SHOP_PLAN_REQUIREMENTS.items():
+        value = update_data.get(field_name, getattr(fab, field_name, None))
+        if value is None or float(value) <= 0:
+            continue
+
+        normalized_accepted_names = {
+            _normalize_shop_plan_name(name) for name in accepted_plan_names
+        }
+        if normalized_plan_names.isdisjoint(normalized_accepted_names):
+            missing_data_points.append(
+                {
+                    "field": field_name,
+                    "value": float(value),
+                    "required_planning_section": required_plan,
+                }
+            )
+
+    return missing_data_points
+
+
+async def _validate_shop_plans_for_completion_date(
+    db: AsyncSession,
+    fab: Fab,
+    update_data: dict,
+) -> Optional[JSONResponse]:
+    result = await db.execute(
+        select(PlanningSection.plan_name)
+        .join(ShopCutPlan, ShopCutPlan.planning_section_id == PlanningSection.id)
+        .where(ShopCutPlan.fab_id == fab.id)
+    )
+    existing_plan_names = {row[0] for row in result.all() if row[0]}
+    missing_data_points = _find_missing_shop_plan_data_points(
+        fab,
+        update_data,
+        existing_plan_names,
+    )
+
+    if not missing_data_points:
+        return None
+
+    missing_fields = ", ".join(item["field"] for item in missing_data_points)
+    required_sections = sorted(
+        {item["required_planning_section"] for item in missing_data_points}
+    )
+    return error_response(
+        "Cannot set shop_est_completion_date because required shop cut plans are missing.",
+        400,
+        errors={
+            "note": f"Create shop cut plans for these FAB values: {missing_fields}.",
+            "missing_data_points": missing_data_points,
+            "required_planning_sections": required_sections,
+        },
+    )
+
 
 def _install_to_schedule_filter():
     return or_(
@@ -2357,6 +2434,11 @@ async def update_fab(
     
     # Update fields (exclude notes and stage as they're for fab_notes)
     update_data = fab_data.model_dump(exclude_unset=True, exclude={"notes", "stage"})
+
+    if update_data.get("shop_est_completion_date") is not None:
+        validation_error = await _validate_shop_plans_for_completion_date(db, fab, update_data)
+        if validation_error is not None:
+            return validation_error
     
     # Track if current_stage is being updated
     stage_changed = False
@@ -4134,6 +4216,9 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
         fab_dict["slabsmith_data"] = slabsmith_by_fab.get(fab_id)
         fab_dict["resurface_details"] = resurface_by_fab.get(fab_id)
         fab_dict["install_details"] = install_by_fab.get(fab_id)
+        fab_dict["install_confirm"] = (
+            install_by_fab[fab_id]["install_confirm"] if fab_id in install_by_fab else False
+        )
         fab_dict["latest_revision"] = latest_revisions_by_fab.get(fab_id)
         fab_dict["has_pending_shop_revision"] = pending_shop_revision_by_fab.get(fab_id, False)
         fab_dict["drafting_session"] = drafting_sessions_by_fab.get(fab_id)
@@ -5116,6 +5201,7 @@ async def _batch_load_install_completion_data(db: AsyncSession, fab_ids: List[in
                 "customer_signature": install.customer_signature,
                 "completion_notes": install.completion_notes,
                 "is_completed": install.is_completed,
+                "install_confirm": install.is_confirmed,
                 "status_id": install.status_id,
                 "status_name": row[5],
                 "created_at": install.created_at.isoformat() if install.created_at else None,
