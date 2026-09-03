@@ -1052,6 +1052,7 @@ class RevisionResponse(BaseModel):
 class ShopRevisionCreate(BaseModel):
     fab_id: int = Field(..., gt=0)
     revision_note: str = Field(..., min_length=1)
+    shop_revision_type: Optional[str] = Field(default=None, min_length=1)
     requested_by: Optional[int] = Field(default=None, gt=0)
     assigned_to: Optional[int] = Field(default=None, gt=0)
     revision_completed: bool = Field(default=False)
@@ -1059,6 +1060,7 @@ class ShopRevisionCreate(BaseModel):
 
 class ShopRevisionUpdate(BaseModel):
     revision_note: Optional[str] = Field(default=None, min_length=1)
+    shop_revision_type: Optional[str] = Field(default=None, min_length=1)
     revision_feedback: Optional[str] = Field(default=None)
     assigned_to: Optional[int] = Field(default=None, gt=0)
     revision_completed: Optional[bool] = None
@@ -1068,6 +1070,7 @@ class ShopRevisionResponse(BaseModel):
     id: int
     fab_id: int
     revision_note: str
+    shop_revision_type: Optional[str]
     revision_feedback: Optional[str]
     requested_by: int
     assigned_to: Optional[int]

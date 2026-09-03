@@ -313,7 +313,7 @@ async def get_all_shop_plans(
     month: Optional[int] = None,
     year: Optional[int] = None,
     search: Optional[str] = Query(None, description="Search value"),
-    type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, job_name"),
+    type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, job_name, account_name"),
     view: str = "week",
     reference_date: Optional[date] = None,
     skip: int = 0,
@@ -1617,6 +1617,7 @@ def _build_shop_plans_query():
         select(ShopCutPlan)
         .join(Fab, Fab.id == ShopCutPlan.fab_id)
         .join(BusinessJob, BusinessJob.id == Fab.job_id)
+        .join(Account, Account.id == BusinessJob.account_id, isouter=True)
         .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
     )
 
@@ -1683,6 +1684,8 @@ def _apply_shop_plan_filters(
             query = query.where(cast(BusinessJob.job_number, String) == search_value)
         elif search_type == "job_name":
             query = query.where(BusinessJob.name.ilike(f"%{search_value}%"))
+        elif search_type == "account_name":
+            query = query.where(Account.name.ilike(f"%{search_value}%"))
 
     if workstation_id:
         query = query.where(ShopCutPlan.workstation_id.in_(workstation_id))

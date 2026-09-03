@@ -41,6 +41,7 @@ def _serialize_shop_revision(revision: ShopRevision) -> dict:
         "id": revision.id,
         "fab_id": revision.fab_id,
         "revision_note": revision.revision_note,
+        "shop_revision_type": revision.shop_revision_type,
         "revision_feedback": revision.revision_feedback,
         "requested_by": revision.requested_by,
         "assigned_to": revision.assigned_to,
@@ -141,6 +142,7 @@ async def create_shop_revision(
     revision = ShopRevision(
         fab_id=revision_data.fab_id,
         revision_note=revision_data.revision_note,
+        shop_revision_type=revision_data.shop_revision_type,
         requested_by=current_user.id,
         assigned_to=revision_data.assigned_to,
         revision_completed=bool(revision_data.revision_completed),
@@ -338,6 +340,7 @@ async def get_fabs_with_pending_shop_revisions(
             latest_revision_by_fab[revision.fab_id] = {
                 "id": revision.id,
                 "revision_note": revision.revision_note,
+                "shop_revision_type": revision.shop_revision_type,
                 "revision_feedback": revision.revision_feedback,
                 "requested_by": revision.requested_by,
                 "assigned_to": revision.assigned_to,
@@ -391,6 +394,8 @@ async def complete_shop_revision(
     now = datetime.now()
     if revision_data and revision_data.revision_note:
         revision.revision_note = revision_data.revision_note
+    if revision_data and revision_data.shop_revision_type is not None:
+        revision.shop_revision_type = revision_data.shop_revision_type
     if revision_data and revision_data.revision_feedback is not None:
         revision.revision_feedback = revision_data.revision_feedback
     if revision_data and revision_data.assigned_to is not None:
