@@ -13,6 +13,7 @@ from src.app.database.fab import Fab
 from src.app.database.slab_smith import SlabSmith
 from src.app.database.sales_ct import SalesCT
 from src.app.database.business_job import BusinessJob
+from src.app.database.account import Account
 from src.app.interface.generated_schemas import Revision
 
 from src.app.interface.business_schemas import (
@@ -540,7 +541,7 @@ async def get_all_sales_ct(
 @router.get("/stages/slabsmith/pending", response_model=SuccessResponse[dict])
 async def get_pending_slabsmith_fab_ids(
     search: Optional[str] = None,
-    type: Optional[str] = None,
+    type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, job_name, account_name"),
     date_filter: Optional[str] = Query(
         None,
         description="Predefined date filter: today, this_week, last_week, this_month, last_month, next_week, next_month",
@@ -681,6 +682,8 @@ async def get_pending_slabsmith_fab_ids(
             search_filter = BusinessJob.job_number == search
         elif type == "job_name":
             search_filter = BusinessJob.name.ilike(f"%{search}%")
+        elif type == "account_name":
+            search_filter = Account.name.ilike(f"%{search}%")
         else:
             search_filter = None
     else:
@@ -702,6 +705,7 @@ async def get_pending_slabsmith_fab_ids(
         select(func.count(Fab.id))
         .select_from(Fab)
         .join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
+        .join(Account, BusinessJob.account_id == Account.id, isouter=True)
         .where(*filters)
     )
     if search_filter is not None:
