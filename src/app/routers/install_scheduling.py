@@ -359,6 +359,7 @@ async def unmark_install_completion(
             customer_signature=install_completion.customer_signature,
             completion_notes=install_completion.completion_notes,
             is_completed=install_completion.is_completed,
+            install_confirm=install_completion.is_confirmed,
             status_id=install_completion.status_id,
             created_at=install_completion.created_at,
             updated_at=install_completion.updated_at,

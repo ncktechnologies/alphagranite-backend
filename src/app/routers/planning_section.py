@@ -17,8 +17,10 @@ router = APIRouter()
 
 PLANNING_SECTION_ACTIVE_ORDER = {
     "CUT": 0,
+    "CUT-SAW": 0,
     "WATERJET": 1,
     "WJ": 1,
+    "CUT-WJ": 1,
     "EDGING": 2,
     "CNC": 3,
     "MITER": 4,

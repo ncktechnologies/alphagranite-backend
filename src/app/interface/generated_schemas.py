@@ -474,6 +474,7 @@ class InstallCompletion(SQLModel, table=True):
     customer_signature: Optional[str] = Field(default=None, description="Path to signature file or signature data")
     completion_notes: Optional[str] = Field(default=None)
     is_completed: bool = Field(default=False)
+    is_confirmed: bool = Field(default=False)
     status_id: int = Field()
     created_at: datetime = Field()
     updated_at: Optional[datetime] = Field(default=None)
