@@ -47,7 +47,8 @@ async def create_install_completion(
     if existing.scalar_one_or_none():
         raise error_response("Install Completion already exists for this fab", 400)
     
-    resolved_install_date = install_data.install_date or install_data.completion_date
+    now = datetime.now()
+    resolved_install_date = install_data.install_date or install_data.completion_date or now
 
     # Create install completion
     install_completion = InstallCompletion(
@@ -60,7 +61,7 @@ async def create_install_completion(
         completion_notes=install_data.completion_notes,
         is_confirmed=install_data.install_confirm,
         status_id=1,
-        created_at=datetime.now()
+        created_at=now
     )
     
     # Update fab stage - mark as completed

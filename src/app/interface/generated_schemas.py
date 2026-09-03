@@ -470,7 +470,7 @@ class InstallCompletion(SQLModel, table=True):
     fab_id: int = Field()
     installer_id: int = Field()
     install_date: datetime = Field()
-    completion_date: datetime = Field()
+    completion_date: Optional[datetime] = Field(default=None)
     total_sqft_installed: Optional[str] = Field(default=None)
     customer_signature: Optional[str] = Field(default=None, description="Path to signature file or signature data")
     completion_notes: Optional[str] = Field(default=None)
