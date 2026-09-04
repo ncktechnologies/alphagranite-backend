@@ -154,8 +154,6 @@ def safe_cast_numeric(column):
 
 
 async def _build_report_rows(year: int, month: int) -> tuple[list[dict], list[dict]]:
-    start_dt, end_dt = _month_bounds(year, month)
-
     async with SessionLocal() as db:
         cut_sqft_subq = (
             select(
@@ -215,8 +213,6 @@ async def _build_report_rows(year: int, month: int) -> tuple[list[dict], list[di
             .join(completed_sqft_subq, completed_sqft_subq.c.fab_id == Fab.id, isouter=True)
             .join(avg_work_pct_subq, avg_work_pct_subq.c.fab_id == Fab.id, isouter=True)
             .where(
-                Fab.created_at >= start_dt,
-                Fab.created_at <= end_dt,
                 Fab.cutlist_complete.is_(True),
                 func.lower(func.coalesce(Fab.current_stage, "")) != "install_completion",
             )
