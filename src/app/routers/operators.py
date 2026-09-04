@@ -185,6 +185,7 @@ def _serialize_workstation(ws: WorkStation, operators_by_id: dict = None, sectio
     return {
         "id": ws.id,
         "name": ws.name,
+        "attendance_required": ws.attendance_required,
         "status_id": ws.status_id,
         "planning_section_id": ws.planning_section_id,
         "planning_section_name": ps.plan_name if ps else None,

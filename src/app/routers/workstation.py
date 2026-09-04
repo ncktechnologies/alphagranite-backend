@@ -22,6 +22,7 @@ router = APIRouter(
 class WorkstationCreate(BaseModel):
     name: str
     is_active: bool = True
+    attendance_required: bool = False
     status_id: int
     planning_section_id: Optional[int] = None
     operator_ids: Optional[List[int]] = None
@@ -29,6 +30,7 @@ class WorkstationCreate(BaseModel):
 class WorkstationUpdate(BaseModel):
     name: Optional[str] = None
     is_active: Optional[bool] = None
+    attendance_required: Optional[bool] = None
     status_id: Optional[int] = None
     planning_section_id: Optional[int] = None
     operator_ids: Optional[List[int]] = None
@@ -78,6 +80,7 @@ async def create_workstation(
     ws = WorkStation(
         name=payload.name,
         is_active=payload.is_active,
+        attendance_required=payload.attendance_required,
         status_id=payload.status_id,
         planning_section_id=payload.planning_section_id,
         operator_ids=payload.operator_ids or [],
@@ -136,6 +139,9 @@ async def update_workstation(
 
     if payload.is_active is not None:
         ws.is_active = payload.is_active
+
+    if payload.attendance_required is not None:
+        ws.attendance_required = payload.attendance_required
 
     if payload.status_id is not None:
         status_result = await db.execute(select(Status).where(Status.value_id == payload.status_id))
@@ -373,6 +379,7 @@ def _serialize_workstation(ws: WorkStation, operators_by_id: dict = None, sectio
         "id": ws.id,
         "name": ws.name,
         "is_active": ws.is_active,
+        "attendance_required": ws.attendance_required,
         "status_id": ws.status_id,
         "planning_section_id": ws.planning_section_id,
         "planning_section_name": ps.plan_name if ps else None,

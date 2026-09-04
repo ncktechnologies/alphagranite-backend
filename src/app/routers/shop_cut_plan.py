@@ -786,9 +786,23 @@ async def reschedule_shop_plan(
         scheduled_start = payload.scheduled_start.replace(tzinfo=None) if payload.scheduled_start.tzinfo else payload.scheduled_start
         scheduled_end = payload.scheduled_end.replace(tzinfo=None) if payload.scheduled_end and payload.scheduled_end.tzinfo else payload.scheduled_end
         _validate_manual_schedule_interval(scheduled_start, plan.estimated_hours)
+        if scheduled_end is not None and scheduled_end <= scheduled_start:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="scheduled_end must be after scheduled_start",
+            )
+        await _assert_no_shop_plan_conflicts(
+            db,
+            plan_id=plan.id,
+            fab_id=plan.fab_id,
+            workstation_id=plan.workstation_id,
+            operator_id=plan.user_id,
+            scheduled_start=scheduled_start,
+            estimated_hours=plan.estimated_hours,
+            scheduled_end=scheduled_end,
+        )
         plan.scheduled_start_date = scheduled_start
-        if scheduled_end is not None:
-            plan.scheduled_end_date = scheduled_end
+        plan.scheduled_end_date = scheduled_end
         plan.updated_at = datetime.now()
         plan.updated_by = current_user.id
 
@@ -2437,17 +2451,28 @@ async def _assert_no_shop_plan_conflicts(
     else:
         proposed_end = _compute_lunch_adjusted_end(scheduled_start, float(estimated_hours))
 
+    new_workstation = (
+        await db.execute(select(WorkStation).where(WorkStation.id == workstation_id))
+    ).scalar_one_or_none()
+    if new_workstation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workstation with ID {workstation_id} not found",
+        )
+
     conflict_result = await db.execute(
-        select(ShopCutPlan).where(
+        select(ShopCutPlan, WorkStation)
+        .join(WorkStation, WorkStation.id == ShopCutPlan.workstation_id)
+        .where(
             ShopCutPlan.id != plan_id,
-            ShopCutPlan.workstation_id == workstation_id,
+            ShopCutPlan.user_id == operator_id,
             ShopCutPlan.scheduled_start_date.is_not(None),
             ShopCutPlan.scheduled_start_date < proposed_end,
         )
     )
-    conflicting_plans = conflict_result.scalars().all()
+    conflicting_plans = conflict_result.all()
 
-    for other_plan in conflicting_plans:
+    for other_plan, existing_workstation in conflicting_plans:
         other_start = _normalize_naive_dt(other_plan.scheduled_start_date)
         if not other_start:
             continue
@@ -2458,29 +2483,18 @@ async def _assert_no_shop_plan_conflicts(
                 continue
             other_end = _compute_lunch_adjusted_end(other_start, other_hours)
 
-        if _intervals_overlap(scheduled_start, proposed_end, other_start, other_end):
-            readable_start_time = other_start.strftime("%I:%M %p").lstrip("0")
-            readable_end_time = other_end.strftime("%I:%M %p").lstrip("0")
-            readable_date = other_start.strftime("%b %d, %Y")
-            conflicting_fab_id = other_plan.fab_id
-            conflicting_workstation_id = other_plan.workstation_id
-            conflicting_workstation_name = None
-            if conflicting_workstation_id is not None:
-                ws_result = await db.execute(
-                    select(WorkStation.name).where(WorkStation.id == conflicting_workstation_id)
-                )
-                conflicting_workstation_name = ws_result.scalar_one_or_none()
-        
+        if (
+            _intervals_overlap(scheduled_start, proposed_end, other_start, other_end)
+            and (existing_workstation.attendance_required or new_workstation.attendance_required)
+        ):
+            required_workstation = (
+                existing_workstation
+                if existing_workstation.attendance_required
+                else new_workstation
+            )
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "This schedule update conflicts with an existing plan scheduled "
-                    f"from {readable_start_time} to {readable_end_time} on {readable_date}. "
-                    f"Conflicting FAB ID: {conflicting_fab_id}. "
-                    f"Conflicting Workstation ID: {conflicting_workstation_id}. "
-                    f"Conflicting Workstation Name: {conflicting_workstation_name}. "
-                    "Please choose a different time slot."
-                ),
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot assign plan: Attendance is required for workstation {required_workstation.name}.",
             )
 
 
