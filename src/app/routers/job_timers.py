@@ -133,6 +133,17 @@ def _enforce_lead_only_sqft(payload: Optional[InstallerJobTimerCommandRequest], 
         )
 
 
+def _enforce_required_sqft_on_stop(payload: Optional[InstallerJobTimerCommandRequest], installer_role: str) -> None:
+    # Only the lead installer records sqft, so only the lead is required to provide it when stopping.
+    if installer_role != INSTALLER_ROLE_LEAD:
+        return
+    if not payload or payload.sqft_installed is None or payload.sqft_not_installed is None:
+        raise error_response(
+            "sqft_installed and sqft_not_installed are required to stop the timer",
+            400,
+        )
+
+
 async def _resolve_role_for_timer_session(
     db: AsyncSession,
     session: InstallerJobTimerSession,
@@ -240,13 +251,13 @@ async def start_installer_job_timer(
 
     _enforce_lead_only_sqft(payload, installer_role)
     
-    # Check if there's already a running timer for this installer at this stage
+    # An installer can only be at one location at a time, so block starting a new
+    # timer while ANY job/fab timer is still running for this installer.
     conflict_result = await db.execute(
         select(InstallerJobTimerSession, BusinessJob)
         .join(BusinessJob, BusinessJob.id == InstallerJobTimerSession.job_id)
         .where(
             InstallerJobTimerSession.installer_id == installer_id,
-            InstallerJobTimerSession.job_id == job_id,
             InstallerJobTimerSession.status == "running",
         )
         .limit(1)
@@ -500,6 +511,7 @@ async def stop_installer_job_timer(
 
     installer_role = await _resolve_role_for_timer_session(db, session, installer_id, fab_id)
     _enforce_lead_only_sqft(payload, installer_role)
+    _enforce_required_sqft_on_stop(payload, installer_role)
     
     now = datetime.now()
     
