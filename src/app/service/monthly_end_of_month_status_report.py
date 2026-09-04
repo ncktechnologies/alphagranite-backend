@@ -421,7 +421,7 @@ async def _scheduler_loop() -> None:
 def start_monthly_status_report_scheduler() -> None:
     global _scheduler_task
 
-    is_enabled = os.getenv("EOM_STATUS_REPORT_ENABLED", "true").strip().lower() == "true"
+    is_enabled = os.getenv("EOM_STATUS_REPORT_ENABLED", "false").strip().lower() == "false"
     if not is_enabled:
         logger.info("End-of-month status report scheduler is disabled")
         return
