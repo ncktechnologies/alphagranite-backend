@@ -182,6 +182,10 @@ async def _build_report_rows(year: int, month: int) -> tuple[list[dict], list[di
             .subquery()
         )
 
+        completed_install_fab_ids_subq = select(InstallCompletion.fab_id).where(
+            InstallCompletion.is_completed.is_(True)
+        )
+
         detail_query = (
             select(
                 Fab.fab_type,
@@ -214,7 +218,7 @@ async def _build_report_rows(year: int, month: int) -> tuple[list[dict], list[di
             .join(avg_work_pct_subq, avg_work_pct_subq.c.fab_id == Fab.id, isouter=True)
             .where(
                 Fab.cutlist_complete.is_(True),
-                func.lower(func.coalesce(Fab.current_stage, "")) != "install_completion",
+                Fab.id.not_in(completed_install_fab_ids_subq),
             )
             .order_by(Fab.id.asc())
         )
