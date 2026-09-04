@@ -213,7 +213,8 @@ def _active_shop_cut_plan_visibility_filter():
     Rules:
         - Keep FAB visible in Shop Planning while any shop cut plan row is incomplete
           (work_percentage < 100), even if shop_est_completion_date is set.
-        - Remove FAB from Shop Planning once all existing shop cut plan rows are 100%.
+                - Keep FABs whose plans are all 100% visible until shop_est_completion_date is set.
+                - Remove fully planned FABs only after shop_est_completion_date is set.
         - Include FABs still in current_stage=cut_list when cutlist_complete=true and
           they either have no shop plans yet or at least one incomplete shop plan row.
         - Include FABs from any stage that still have incomplete shop plan rows.
@@ -243,7 +244,10 @@ def _active_shop_cut_plan_visibility_filter():
 
     shop_stage_visibility = and_(
         Fab.current_stage == "shop",
-        has_active_shop_plan_work,
+        or_(
+            has_active_shop_plan_work,
+            Fab.shop_est_completion_date.is_(None),
+        ),
     )
 
     cut_list_ready_for_shop_visibility = and_(
@@ -552,7 +556,7 @@ def _stage_filter_condition(stage_name: str, plan_view: Optional[str] = None):
     - install_scheduling uses its redirected visibility rule
     - final_programming includes pending cut_list FABs with a shop date
     - cut_list excludes FABs counted as pending final_programming
-    - shop shows FABs with active (not yet 100%) shop cut plan work, or all shop FABs when plan_view='all'
+    - shop shows FABs with incomplete plans or a missing shop estimate, or all shop FABs when plan_view='all'
     - all other stages use exact stage match
     """
     _is_all_plan_view = isinstance(plan_view, str) and plan_view.strip().lower() == "all"
