@@ -119,7 +119,11 @@ class TestStopInstallerJobTimerRequiresSqft:
         )
         stop_result = Mock()
         stop_result.scalar_one_or_none.return_value = session
-        db.execute.side_effect = [stop_result]
+        scheduling_result = Mock()
+        scheduling_result.scalar_one_or_none.return_value = SimpleNamespace(
+            installer_id=9, extra_crew_1_id=None, extra_crew_2_id=None, extra_crew_3_id=None
+        )
+        db.execute.side_effect = [stop_result, scheduling_result]
         current_user = SimpleNamespace(id=9)
 
         with pytest.raises(HTTPException) as exc_info:
@@ -153,7 +157,11 @@ class TestStopInstallerJobTimerRequiresSqft:
         )
         stop_result = Mock()
         stop_result.scalar_one_or_none.return_value = session
-        db.execute.side_effect = [stop_result]
+        scheduling_result = Mock()
+        scheduling_result.scalar_one_or_none.return_value = SimpleNamespace(
+            installer_id=9, extra_crew_1_id=None, extra_crew_2_id=None, extra_crew_3_id=None
+        )
+        db.execute.side_effect = [stop_result, scheduling_result]
         current_user = SimpleNamespace(id=9)
         payload = InstallerJobTimerCommandRequest(sqft_installed=12.5, sqft_not_installed=0)
 
@@ -189,7 +197,11 @@ class TestStopInstallerJobTimerRequiresSqft:
         )
         stop_result = Mock()
         stop_result.scalar_one_or_none.return_value = session
-        db.execute.side_effect = [stop_result]
+        scheduling_result = Mock()
+        scheduling_result.scalar_one_or_none.return_value = SimpleNamespace(
+            installer_id=9, extra_crew_1_id=10, extra_crew_2_id=None, extra_crew_3_id=None
+        )
+        db.execute.side_effect = [stop_result, scheduling_result]
         current_user = SimpleNamespace(id=10)
 
         response = await stop_installer_job_timer(

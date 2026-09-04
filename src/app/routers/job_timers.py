@@ -115,6 +115,35 @@ async def _resolve_installer_role_for_fab(
     raise error_response("Installer is not assigned to this fab install crew", 403)
 
 
+async def _resolve_installer_role_for_job(
+    db: AsyncSession,
+    job_id: int,
+    installer_id: int,
+) -> str:
+    result = await db.execute(
+        select(InstallScheduling)
+        .join(Fab, Fab.id == InstallScheduling.fab_id)
+        .where(Fab.job_id == job_id)
+        .order_by(InstallScheduling.id.desc())
+        .limit(1)
+    )
+    install_scheduling = result.scalar_one_or_none()
+    if not install_scheduling:
+        raise error_response("Install Scheduling not found for this job", 404)
+
+    if installer_id == install_scheduling.installer_id:
+        return INSTALLER_ROLE_LEAD
+
+    if installer_id in {
+        install_scheduling.extra_crew_1_id,
+        install_scheduling.extra_crew_2_id,
+        install_scheduling.extra_crew_3_id,
+    }:
+        return INSTALLER_ROLE_EXTRA_CREW
+
+    raise error_response("Installer is not assigned to this job install crew", 403)
+
+
 def _payload_has_sqft(payload: Optional[InstallerJobTimerCommandRequest]) -> bool:
     return bool(
         payload
@@ -155,9 +184,11 @@ async def _resolve_role_for_timer_session(
 
     resolved_fab_id = session.fab_id or requested_fab_id
     if not resolved_fab_id:
-        # No FAB context means we cannot verify crew assignment; preserve existing role
-        # (or default to lead for backward compatibility).
-        return session.installer_role or INSTALLER_ROLE_LEAD
+        # No FAB context: resolve crew role from the job's install scheduling instead of
+        # assuming lead, otherwise extra crew get wrongly required to submit sqft.
+        installer_role = await _resolve_installer_role_for_job(db, session.job_id, installer_id)
+        session.installer_role = installer_role
+        return installer_role
 
     installer_role = await _resolve_installer_role_for_fab(db, resolved_fab_id, installer_id)
     session.installer_role = installer_role
