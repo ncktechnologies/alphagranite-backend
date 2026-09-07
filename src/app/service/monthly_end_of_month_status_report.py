@@ -83,6 +83,12 @@ def _to_float(value: Any) -> float:
     except (TypeError, ValueError):
         return 0.0
 
+def _format_us_date(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, (date, datetime)):
+        return value.strftime("%m/%d/%Y")
+    return str(value)
 
 def _month_bounds(year: int, month: int) -> tuple[datetime, datetime]:
     start_dt = datetime(year, month, 1)
@@ -281,7 +287,7 @@ async def _build_report_rows(year: int, month: int) -> tuple[list[dict], list[di
                     "MiterPercent": _to_percent(miter_linft, linear_total),
                     "TouchupSqFt": completed_sqft,
                     "TouchupPercent": _to_percent(completed_sqft, total_sqft),
-                    "EstCompletionDate": est_completion_date.isoformat() if est_completion_date else None,
+                    "EstCompletionDate": _format_us_date(est_completion_date),
                     "PercentageComplete": avg_work_pct,
                 }
             )
