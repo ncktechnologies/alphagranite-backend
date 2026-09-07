@@ -2460,6 +2460,17 @@ async def _assert_no_shop_plan_conflicts(
             detail=f"Workstation with ID {workstation_id} not found",
         )
 
+    if new_workstation.attendance_required:
+        requested_time_range = _format_scheduled_time_range(scheduled_start, proposed_end)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Cannot create or assign shop plan: Attendance is required for this workstation. "
+                f"Workstation: {new_workstation.name} (ID {new_workstation.id}). "
+                f"Requested FAB {fab_id} time range: {requested_time_range}."
+            ),
+        )
+
     conflict_result = await db.execute(
         select(ShopCutPlan, WorkStation)
         .join(WorkStation, WorkStation.id == ShopCutPlan.workstation_id)
@@ -2492,9 +2503,16 @@ async def _assert_no_shop_plan_conflicts(
                 if existing_workstation.attendance_required
                 else new_workstation
             )
+            existing_time_range = _format_scheduled_time_range(other_start, other_end)
+            requested_time_range = _format_scheduled_time_range(scheduled_start, proposed_end)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot assign plan: Attendance is required for workstation {required_workstation.name}.",
+                detail=(
+                    "Cannot create or assign shop plan: Attendance is required for this workstation. "
+                    f"Workstation: {required_workstation.name} (ID {required_workstation.id}). "
+                    f"Existing FAB {other_plan.fab_id} is using it during {existing_time_range}. "
+                    f"Requested FAB {fab_id} time range: {requested_time_range}."
+                ),
             )
 
 
