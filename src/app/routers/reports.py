@@ -2466,6 +2466,7 @@ async def get_owner_revision_report(
         select(
             ShopRevision.id.label("shop_revision_id"),
             ShopRevision.fab_id,
+            ShopRevision.shop_revision_type,
             ShopRevision.revision_note,
             ShopRevision.revision_feedback,
             ShopRevision.requested_by,
@@ -2578,12 +2579,13 @@ async def get_owner_revision_report(
     active_shop_fab_ids: set[int] = set()
     for row in shop_revision_rows:
         active_shop_fab_ids.add(int(row.fab_id))
+        shop_revision_type = (row.shop_revision_type or "").strip() or "shop"
         shop_revisions.append(
             {
                 "shop_revision_id": row.shop_revision_id,
                 "fab_id": row.fab_id,
-                "revision_type": "shop",
-                "revision_type_label": "Shop",
+                "revision_type": shop_revision_type,
+                "revision_type_label": shop_revision_type.title(),
                 "revision_notes": row.revision_note,
                 "revision_feedback": row.revision_feedback,
                 "requested_by": row.requested_by,
