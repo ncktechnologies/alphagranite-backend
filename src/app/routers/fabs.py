@@ -29,7 +29,7 @@ from src.app.database.templating import Templating
 from src.app.database.sales_ct import SalesCT
 from src.app.database.cnc import CNCDrafting
 from src.app.database.status import Status
-from src.app.interface.generated_schemas import ResurfaceScheduling, InstallScheduling, Revision
+from src.app.interface.generated_schemas import InstallCompletion, ResurfaceScheduling, InstallScheduling, Revision
 from src.app.interface.generated_schemas import ShopRevision
 
 from src.app.interface.business_schemas import (
@@ -1050,6 +1050,7 @@ async def get_fabs(
     # install_completion: restrict to logged-in user's crew and release after 4pm on scheduled day
     _install_completion_crew_filter = None
     _install_completion_date_filter = None
+    _install_completion_confirmation_filter = None
     is_installer_request = isinstance(user_level, str) and user_level.strip().lower() == "installer"
     if current_stage == "install_completion" and is_installer_request:
         normalized_install_completion_filter = _normalize_installer_install_completion_date_filter(date_filter)
@@ -1083,7 +1084,19 @@ async def get_fabs(
             )
             .exists()
         )
-        query = query.where(_install_completion_crew_filter, _install_completion_date_filter)
+        _install_completion_confirmation_filter = (
+            select(InstallCompletion.id)
+            .where(
+                InstallCompletion.fab_id == Fab.id,
+                InstallCompletion.is_confirmed.is_(True),
+            )
+            .exists()
+        )
+        query = query.where(
+            _install_completion_crew_filter,
+            _install_completion_date_filter,
+            _install_completion_confirmation_filter,
+        )
 
     # Apply search filter if present
     if search_filter is not None:
@@ -1155,7 +1168,11 @@ async def get_fabs(
     if current_stage:
         count_query = count_query.where(_stage_filter_condition(current_stage, plan_view))
         if current_stage == "install_completion" and _install_completion_crew_filter is not None:
-            count_query = count_query.where(_install_completion_crew_filter, _install_completion_date_filter)
+            count_query = count_query.where(
+                _install_completion_crew_filter,
+                _install_completion_date_filter,
+                _install_completion_confirmation_filter,
+            )
     if next_stage:
         count_query = count_query.where(Fab.next_stage == next_stage)
 
@@ -1244,7 +1261,11 @@ async def get_fabs(
         if current_stage == "shop" and not _is_all_plan_view:
             stage_totals_query = stage_totals_query.where(_active_shop_cut_plan_visibility_filter())
         if current_stage == "install_completion" and _install_completion_crew_filter is not None:
-            stage_totals_query = stage_totals_query.where(_install_completion_crew_filter, _install_completion_date_filter)
+            stage_totals_query = stage_totals_query.where(
+                _install_completion_crew_filter,
+                _install_completion_date_filter,
+                _install_completion_confirmation_filter,
+            )
 
         # Apply same basic filters
         if job_id is not None:
