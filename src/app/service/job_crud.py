@@ -43,13 +43,6 @@ async def create_job(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     
-    # Check if job name already exists (NEW)
-    name_check = await db.execute(
-        select(BusinessJob).where(BusinessJob.name == job_data.name)
-    )
-    if name_check.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail=f"Job name '{job_data.name}' already exists")
-    
     # Check if job number already exists
     job_check = await db.execute(
         select(BusinessJob).where(BusinessJob.job_number == job_data.job_number)

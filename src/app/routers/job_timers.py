@@ -123,13 +123,21 @@ async def _resolve_installer_role_for_job(
     result = await db.execute(
         select(InstallScheduling)
         .join(Fab, Fab.id == InstallScheduling.fab_id)
-        .where(Fab.job_id == job_id)
+        .where(
+            Fab.job_id == job_id,
+            or_(
+                InstallScheduling.installer_id == installer_id,
+                InstallScheduling.extra_crew_1_id == installer_id,
+                InstallScheduling.extra_crew_2_id == installer_id,
+                InstallScheduling.extra_crew_3_id == installer_id,
+            ),
+        )
         .order_by(InstallScheduling.id.desc())
         .limit(1)
     )
     install_scheduling = result.scalar_one_or_none()
     if not install_scheduling:
-        raise error_response("Install Scheduling not found for this job", 404)
+        raise error_response("Installer is not assigned to this job install crew", 403)
 
     if installer_id == install_scheduling.installer_id:
         return INSTALLER_ROLE_LEAD
@@ -181,6 +189,11 @@ async def _resolve_role_for_timer_session(
 ) -> str:
     if session.fab_id and requested_fab_id and session.fab_id != requested_fab_id:
         raise error_response("fab_id does not match the timer session fab_id", 400)
+
+    # The role was resolved and stored when the timer started. Preserve an
+    # extra-crew role so later scheduling changes cannot make sqft mandatory.
+    if session.installer_role == INSTALLER_ROLE_EXTRA_CREW:
+        return INSTALLER_ROLE_EXTRA_CREW
 
     resolved_fab_id = session.fab_id or requested_fab_id
     if not resolved_fab_id:

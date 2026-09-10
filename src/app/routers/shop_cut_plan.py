@@ -2439,7 +2439,10 @@ async def _assert_no_shop_plan_conflicts(
         .join(WorkStation, WorkStation.id == ShopCutPlan.workstation_id)
         .where(
             ShopCutPlan.id != plan_id,
-            ShopCutPlan.user_id == operator_id,
+            or_(
+                ShopCutPlan.workstation_id == workstation_id,
+                ShopCutPlan.user_id == operator_id,
+            ),
             ShopCutPlan.scheduled_start_date.is_not(None),
             ShopCutPlan.scheduled_start_date < proposed_end,
         )
@@ -2457,10 +2460,23 @@ async def _assert_no_shop_plan_conflicts(
                 continue
             other_end = _compute_lunch_adjusted_end(other_start, other_hours)
 
-        if (
-            _intervals_overlap(scheduled_start, proposed_end, other_start, other_end)
-            and (existing_workstation.attendance_required or new_workstation.attendance_required)
-        ):
+        if not _intervals_overlap(scheduled_start, proposed_end, other_start, other_end):
+            continue
+
+        if other_plan.workstation_id == workstation_id:
+            existing_time_range = _format_scheduled_time_range(other_start, other_end)
+            requested_time_range = _format_scheduled_time_range(scheduled_start, proposed_end)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Cannot create or assign shop plan: Workstation schedule overlaps are not allowed. "
+                    f"Workstation: {new_workstation.name} (ID {new_workstation.id}). "
+                    f"Existing FAB {other_plan.fab_id} is scheduled during {existing_time_range}. "
+                    f"Requested FAB {fab_id} time range: {requested_time_range}."
+                ),
+            )
+
+        if existing_workstation.attendance_required or new_workstation.attendance_required:
             required_workstation = (
                 existing_workstation
                 if existing_workstation.attendance_required

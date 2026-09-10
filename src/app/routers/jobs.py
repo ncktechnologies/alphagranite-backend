@@ -101,18 +101,6 @@ async def create_job(
     """Create a new job with job name, job number, and account_id"""
     
     try:
-        # Check if job name already exists
-        name_check = await db.execute(
-            select(BusinessJob.id)
-            .where(BusinessJob.name == job_data.name)
-            .limit(1)
-        )
-        if name_check.scalar_one_or_none():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="A job with this name already exists. Please use a unique name."
-            )
-        
         # Check if job number already exists (if provided)
         if job_data.job_number:
             number_check = await db.execute(
@@ -135,12 +123,6 @@ async def create_job(
     except IntegrityError as e:
         await db.rollback()
         error_text = str(getattr(e, "orig", e)).lower()
-
-        if "name" in error_text and ("unique" in error_text or "duplicate" in error_text):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="A job with this name already exists. Please use a unique name."
-            )
 
         if "job_number" in error_text and ("unique" in error_text or "duplicate" in error_text):
             raise HTTPException(
