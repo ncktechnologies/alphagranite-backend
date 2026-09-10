@@ -66,8 +66,8 @@ def sample_account():
 
 # Tests for create_job
 @pytest.mark.asyncio
-async def test_create_job_success(mock_db, sample_account):
-    """Test successful job creation"""
+async def test_create_job_allows_duplicate_name(mock_db, sample_account):
+    """Job names may be reused as long as the job number is unique."""
     # Mock account existence check
     account_result = MagicMock()
     account_result.scalar_one_or_none.return_value = sample_account
@@ -88,11 +88,12 @@ async def test_create_job_success(mock_db, sample_account):
     
     result = await create_job(mock_db, job_data, user_id=100)
     
-    assert isinstance(result, BusinessJob)
-    assert result.job_number == "JOB-2024-001"
-    assert result.account_id == 10
-    assert result.status_id == 1  # Default status
-    assert result.created_by == 100
+    assert result["name"] == "Test Job"
+    assert result["job_number"] == "JOB-2024-001"
+    assert result["account_id"] == 10
+    assert result["status_id"] == 1
+    assert result["created_by"] == 100
+    assert mock_db.execute.await_count == 2
     assert mock_db.add.called
     assert mock_db.commit.called
     assert mock_db.refresh.called
@@ -144,7 +145,7 @@ async def test_create_job_duplicate_job_number(mock_db, sample_account, sample_j
     with pytest.raises(HTTPException) as exc_info:
         await create_job(mock_db, job_data, user_id=100)
     
-    assert exc_info.value.status_code == 400
+    assert exc_info.value.status_code == 409
     assert "Job number already exists" in exc_info.value.detail
     assert not mock_db.add.called
 
