@@ -214,3 +214,6 @@ class TestStopInstallerJobTimerRequiresSqft:
 
         assert response["success"] is True
         assert response["data"]["status"] == "stopped"
+        # Only the timer lookup is needed. The persisted extra-crew role must
+        # not be overwritten by a later install-scheduling lookup.
+        assert db.execute.await_count == 1

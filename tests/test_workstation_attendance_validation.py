@@ -13,6 +13,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 pytest.importorskip("aiosqlite")
 
 from src.app.routers.shop_cut_plan import _assert_no_shop_plan_conflicts
+from src.app.database.shop_cut_plan import ShopCutPlan
 from src.app.routers.workstation import WorkstationCreate, _serialize_workstation
 
 
@@ -156,6 +157,99 @@ async def test_overlapping_plan_succeeds_when_attendance_is_not_required():
             estimated_hours=1,
         )
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_overlapping_plan_fails_on_same_workstation_for_different_operator():
+    session, engine = await _create_attendance_test_session(False, False)
+    async with session:
+        with pytest.raises(HTTPException) as exc_info:
+            await _assert_no_shop_plan_conflicts(
+                session,
+                plan_id=0,
+                fab_id=2,
+                workstation_id=10,
+                operator_id=8,
+                scheduled_start=datetime(2026, 9, 4, 10, 0),
+                estimated_hours=1,
+            )
+    await engine.dispose()
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == (
+        "Cannot create or assign shop plan: Workstation schedule overlaps are not allowed. "
+        "Workstation: Existing WS (ID 10). "
+        "Existing FAB 1 is scheduled during Sep 4, 9:00 AM – 11:00 AM. "
+        "Requested FAB 2 time range: Sep 4, 10:00 AM – 11:00 AM."
+    )
+
+
+@pytest.mark.asyncio
+async def test_overlapping_plan_succeeds_on_different_workstation():
+    session, engine = await _create_attendance_test_session(False, False)
+    async with session:
+        await _assert_no_shop_plan_conflicts(
+            session,
+            plan_id=0,
+            fab_id=2,
+            workstation_id=20,
+            operator_id=8,
+            scheduled_start=datetime(2026, 9, 4, 10, 0),
+            estimated_hours=1,
+        )
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_adjacent_plan_succeeds_on_same_workstation():
+    session, engine = await _create_attendance_test_session(False, False)
+    async with session:
+        await _assert_no_shop_plan_conflicts(
+            session,
+            plan_id=0,
+            fab_id=2,
+            workstation_id=10,
+            operator_id=8,
+            scheduled_start=datetime(2026, 9, 4, 11, 0),
+            estimated_hours=1,
+        )
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_overlapping_pending_stages_fail_on_same_workstation():
+    session, engine = await _create_attendance_test_session(False, False)
+    async with session:
+        session.add(
+            ShopCutPlan(
+                fab_id=2,
+                workstation_id=20,
+                planning_section_id=1,
+                user_id=8,
+                sequence=1,
+                estimated_hours=2,
+                scheduled_start_date=datetime(2026, 9, 4, 9, 0),
+                scheduled_end_date=datetime(2026, 9, 4, 11, 0),
+                work_percentage=0,
+                created_at=datetime(2026, 9, 4, 8, 0),
+                created_by=1,
+            )
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _assert_no_shop_plan_conflicts(
+                session,
+                plan_id=0,
+                fab_id=2,
+                workstation_id=20,
+                operator_id=9,
+                scheduled_start=datetime(2026, 9, 4, 10, 0),
+                estimated_hours=1,
+            )
+
+    await engine.dispose()
+    assert exc_info.value.status_code == 400
+    assert "Workstation schedule overlaps are not allowed" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
