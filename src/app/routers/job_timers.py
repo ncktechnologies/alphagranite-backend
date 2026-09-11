@@ -285,13 +285,14 @@ async def start_installer_job_timer(
     if not job_result.scalar_one_or_none():
         raise error_response("Job not found", 404)
     
-    # Verify fab if provided
-    installer_role = INSTALLER_ROLE_LEAD
+    # Resolve the installer role from the relevant install scheduling.
     if fab_id:
         fab_result = await db.execute(select(Fab).where(Fab.id == fab_id))
         if not fab_result.scalar_one_or_none():
             raise error_response("Fab not found", 404)
         installer_role = await _resolve_installer_role_for_fab(db, fab_id, installer_id)
+    else:
+        installer_role = await _resolve_installer_role_for_job(db, job_id, installer_id)
 
     _enforce_lead_only_sqft(payload, installer_role)
     

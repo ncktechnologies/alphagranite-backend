@@ -56,12 +56,17 @@ class TestStartInstallerJobTimerConflict:
         job_result = Mock()
         job_result.scalar_one_or_none.return_value = SimpleNamespace(id=75)
 
+        scheduling_result = Mock()
+        scheduling_result.scalar_one_or_none.return_value = SimpleNamespace(
+            installer_id=9, extra_crew_1_id=None, extra_crew_2_id=None, extra_crew_3_id=None
+        )
+
         conflict_job = SimpleNamespace(id=41, job_number="41")
         conflict_session = SimpleNamespace(fab_id=None)
         conflict_result = Mock()
         conflict_result.first.return_value = (conflict_session, conflict_job)
 
-        db.execute.side_effect = [job_result, conflict_result]
+        db.execute.side_effect = [job_result, scheduling_result, conflict_result]
         current_user = SimpleNamespace(id=9)
 
         with pytest.raises(HTTPException) as exc_info:
@@ -81,10 +86,15 @@ class TestStartInstallerJobTimerConflict:
         job_result = Mock()
         job_result.scalar_one_or_none.return_value = SimpleNamespace(id=75)
 
+        scheduling_result = Mock()
+        scheduling_result.scalar_one_or_none.return_value = SimpleNamespace(
+            installer_id=9, extra_crew_1_id=None, extra_crew_2_id=None, extra_crew_3_id=None
+        )
+
         conflict_result = Mock()
         conflict_result.first.return_value = None
 
-        db.execute.side_effect = [job_result, conflict_result]
+        db.execute.side_effect = [job_result, scheduling_result, conflict_result]
         current_user = SimpleNamespace(id=9)
 
         response = await start_installer_job_timer(
@@ -98,7 +108,39 @@ class TestStartInstallerJobTimerConflict:
         assert response["success"] is True
         assert response["data"]["job_id"] == 75
         assert response["data"]["installer_id"] == 9
+        assert response["data"]["installer_role"] == INSTALLER_ROLE_LEAD
         assert response["data"]["status"] == "running"
+
+    async def test_extra_crew_without_fab_id_is_stored_as_extra_crew(self):
+        db = AsyncMock()
+        job_result = Mock()
+        job_result.scalar_one_or_none.return_value = SimpleNamespace(id=66)
+
+        scheduling_result = Mock()
+        scheduling_result.scalar_one_or_none.return_value = SimpleNamespace(
+            installer_id=9,
+            extra_crew_1_id=23,
+            extra_crew_2_id=57,
+            extra_crew_3_id=0,
+        )
+
+        conflict_result = Mock()
+        conflict_result.first.return_value = None
+
+        db.execute.side_effect = [job_result, scheduling_result, conflict_result]
+        current_user = SimpleNamespace(id=57)
+
+        response = await start_installer_job_timer(
+            job_id=66,
+            payload=None,
+            fab_id=None,
+            db=db,
+            current_user=current_user,
+        )
+
+        assert response["success"] is True
+        assert response["data"]["installer_id"] == 57
+        assert response["data"]["installer_role"] == INSTALLER_ROLE_EXTRA_CREW
 
 
 @pytest.mark.asyncio
