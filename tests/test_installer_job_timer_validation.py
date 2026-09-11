@@ -57,9 +57,11 @@ class TestStartInstallerJobTimerConflict:
         job_result.scalar_one_or_none.return_value = SimpleNamespace(id=75)
 
         scheduling_result = Mock()
-        scheduling_result.scalar_one_or_none.return_value = SimpleNamespace(
-            installer_id=9, extra_crew_1_id=None, extra_crew_2_id=None, extra_crew_3_id=None
-        )
+        scheduling_result.scalars.return_value.all.return_value = [
+            SimpleNamespace(
+                installer_id=9, extra_crew_1_id=None, extra_crew_2_id=None, extra_crew_3_id=None
+            )
+        ]
 
         conflict_job = SimpleNamespace(id=41, job_number="41")
         conflict_session = SimpleNamespace(fab_id=None)
@@ -87,9 +89,11 @@ class TestStartInstallerJobTimerConflict:
         job_result.scalar_one_or_none.return_value = SimpleNamespace(id=75)
 
         scheduling_result = Mock()
-        scheduling_result.scalar_one_or_none.return_value = SimpleNamespace(
-            installer_id=9, extra_crew_1_id=None, extra_crew_2_id=None, extra_crew_3_id=None
-        )
+        scheduling_result.scalars.return_value.all.return_value = [
+            SimpleNamespace(
+                installer_id=9, extra_crew_1_id=None, extra_crew_2_id=None, extra_crew_3_id=None
+            )
+        ]
 
         conflict_result = Mock()
         conflict_result.first.return_value = None
@@ -117,12 +121,14 @@ class TestStartInstallerJobTimerConflict:
         job_result.scalar_one_or_none.return_value = SimpleNamespace(id=66)
 
         scheduling_result = Mock()
-        scheduling_result.scalar_one_or_none.return_value = SimpleNamespace(
-            installer_id=9,
-            extra_crew_1_id=23,
-            extra_crew_2_id=57,
-            extra_crew_3_id=0,
-        )
+        scheduling_result.scalars.return_value.all.return_value = [
+            SimpleNamespace(
+                installer_id=9,
+                extra_crew_1_id=23,
+                extra_crew_2_id=57,
+                extra_crew_3_id=0,
+            )
+        ]
 
         conflict_result = Mock()
         conflict_result.first.return_value = None
@@ -140,6 +146,41 @@ class TestStartInstallerJobTimerConflict:
 
         assert response["success"] is True
         assert response["data"]["installer_id"] == 57
+        assert response["data"]["installer_role"] == INSTALLER_ROLE_EXTRA_CREW
+
+    async def test_extra_crew_assignment_takes_precedence_across_job_schedulings(self):
+        db = AsyncMock()
+        job_result = Mock()
+        job_result.scalar_one_or_none.return_value = SimpleNamespace(id=66)
+
+        scheduling_result = Mock()
+        scheduling_result.scalars.return_value.all.return_value = [
+            SimpleNamespace(
+                installer_id=57,
+                extra_crew_1_id=None,
+                extra_crew_2_id=None,
+                extra_crew_3_id=None,
+            ),
+            SimpleNamespace(
+                installer_id=9,
+                extra_crew_1_id=23,
+                extra_crew_2_id=57,
+                extra_crew_3_id=0,
+            ),
+        ]
+
+        conflict_result = Mock()
+        conflict_result.first.return_value = None
+        db.execute.side_effect = [job_result, scheduling_result, conflict_result]
+
+        response = await start_installer_job_timer(
+            job_id=66,
+            payload=None,
+            fab_id=None,
+            db=db,
+            current_user=SimpleNamespace(id=57),
+        )
+
         assert response["data"]["installer_role"] == INSTALLER_ROLE_EXTRA_CREW
 
 
@@ -162,9 +203,11 @@ class TestStopInstallerJobTimerRequiresSqft:
         stop_result = Mock()
         stop_result.scalar_one_or_none.return_value = session
         scheduling_result = Mock()
-        scheduling_result.scalar_one_or_none.return_value = SimpleNamespace(
-            installer_id=9, extra_crew_1_id=None, extra_crew_2_id=None, extra_crew_3_id=None
-        )
+        scheduling_result.scalars.return_value.all.return_value = [
+            SimpleNamespace(
+                installer_id=9, extra_crew_1_id=None, extra_crew_2_id=None, extra_crew_3_id=None
+            )
+        ]
         db.execute.side_effect = [stop_result, scheduling_result]
         current_user = SimpleNamespace(id=9)
 
@@ -200,9 +243,11 @@ class TestStopInstallerJobTimerRequiresSqft:
         stop_result = Mock()
         stop_result.scalar_one_or_none.return_value = session
         scheduling_result = Mock()
-        scheduling_result.scalar_one_or_none.return_value = SimpleNamespace(
-            installer_id=9, extra_crew_1_id=None, extra_crew_2_id=None, extra_crew_3_id=None
-        )
+        scheduling_result.scalars.return_value.all.return_value = [
+            SimpleNamespace(
+                installer_id=9, extra_crew_1_id=None, extra_crew_2_id=None, extra_crew_3_id=None
+            )
+        ]
         db.execute.side_effect = [stop_result, scheduling_result]
         current_user = SimpleNamespace(id=9)
         payload = InstallerJobTimerCommandRequest(sqft_installed=12.5, sqft_not_installed=0)

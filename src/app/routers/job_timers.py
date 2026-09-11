@@ -133,23 +133,22 @@ async def _resolve_installer_role_for_job(
             ),
         )
         .order_by(InstallScheduling.id.desc())
-        .limit(1)
     )
-    install_scheduling = result.scalar_one_or_none()
-    if not install_scheduling:
+    install_schedulings = result.scalars().all()
+    if not install_schedulings:
         raise error_response("Installer is not assigned to this job install crew", 403)
 
-    if installer_id == install_scheduling.installer_id:
-        return INSTALLER_ROLE_LEAD
-
-    if installer_id in {
-        install_scheduling.extra_crew_1_id,
-        install_scheduling.extra_crew_2_id,
-        install_scheduling.extra_crew_3_id,
-    }:
+    if any(
+        installer_id in {
+            install_scheduling.extra_crew_1_id,
+            install_scheduling.extra_crew_2_id,
+            install_scheduling.extra_crew_3_id,
+        }
+        for install_scheduling in install_schedulings
+    ):
         return INSTALLER_ROLE_EXTRA_CREW
 
-    raise error_response("Installer is not assigned to this job install crew", 403)
+    return INSTALLER_ROLE_LEAD
 
 
 def _payload_has_sqft(payload: Optional[InstallerJobTimerCommandRequest]) -> bool:
