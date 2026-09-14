@@ -596,15 +596,30 @@ def _normalize_installer_install_completion_date_filter(date_filter: Optional[st
     return normalized_filter or None
 
 
+def _install_scheduling_installer_match(user_id: int):
+    return or_(
+        InstallScheduling.installer_id == user_id,
+        InstallScheduling.extra_crew_1_id == user_id,
+        InstallScheduling.extra_crew_2_id == user_id,
+        InstallScheduling.extra_crew_3_id == user_id,
+    )
+
+
+def _installer_assignment_filter(installer_id: int):
+    return (
+        select(InstallScheduling.id)
+        .where(
+            InstallScheduling.fab_id == Fab.id,
+            _install_scheduling_installer_match(installer_id),
+        )
+        .exists()
+    )
+
+
 def _installer_install_scheduling_filter(user_id: int, date_filter: Optional[str]):
     conditions = [
         InstallScheduling.fab_id == Fab.id,
-        or_(
-            InstallScheduling.installer_id == user_id,
-            InstallScheduling.extra_crew_1_id == user_id,
-            InstallScheduling.extra_crew_2_id == user_id,
-            InstallScheduling.extra_crew_3_id == user_id,
-        ),
+        _install_scheduling_installer_match(user_id),
     ]
 
     scheduled_date = sa.cast(InstallScheduling.scheduled_install_date, sa.Date)
@@ -617,6 +632,46 @@ def _installer_install_scheduling_filter(user_id: int, date_filter: Optional[str
         conditions.append(scheduled_date < today)
 
     return select(InstallScheduling.id).where(*conditions).exists()
+
+
+def _completed_install_status_filter():
+    has_shop_plan_exists = (
+        select(ShopCutPlan.id)
+        .where(ShopCutPlan.fab_id == Fab.id)
+        .limit(1)
+        .exists()
+    )
+    incomplete_shop_plan_exists = (
+        select(ShopCutPlan.id)
+        .where(
+            ShopCutPlan.fab_id == Fab.id,
+            func.coalesce(ShopCutPlan.work_percentage, 0) < 100,
+        )
+        .limit(1)
+        .exists()
+    )
+    completed_install_exists = (
+        select(InstallCompletion.id)
+        .where(
+            InstallCompletion.fab_id == Fab.id,
+            InstallCompletion.is_completed.is_(True),
+        )
+        .limit(1)
+        .exists()
+    )
+
+    return and_(
+        has_shop_plan_exists,
+        ~incomplete_shop_plan_exists,
+        completed_install_exists,
+    )
+
+
+def _install_status_filter(install_status: str):
+    completed_condition = _completed_install_status_filter()
+    if install_status == "complete":
+        return completed_condition
+    return ~completed_condition
 
 
 def _needs_slabsmith(
@@ -992,6 +1047,8 @@ async def get_fabs(
     schedule_due_date: Optional[date] = Query(None, description="Filter FABs scheduled on or before this date (YYYY-MM-DD)"),
     schedule_status: Optional[str] = Query(None, description="Filter by schedule status: scheduled or unscheduled"),
     date_filter: Optional[str] = Query(None, description="Predefined date filter: today, this_week, last_week, this_month, last_month, next_week, next_month"),
+    install_status: Optional[str] = Query(None, description="Filter install completion status: complete or incomplete"),
+    installer_id: Optional[int] = Query(None, gt=0, description="Filter by assigned installer or crew user ID"),
     shop_date_start: Optional[date] = Query(None, description="Filter by shop_date_schedule on or after this date (YYYY-MM-DD)"),
     shop_date_end: Optional[date] = Query(None, description="Filter by shop_date_schedule on or before this date (YYYY-MM-DD)"),
     template_completed_start: Optional[date] = Query(None, description="Filter by template_completed_date on or after this date (YYYY-MM-DD)"),
@@ -1010,6 +1067,20 @@ async def get_fabs(
     current_user: User = Depends(get_current_user)
 ):
     """Get list of fabs with optional filtering and pagination"""
+
+    normalized_install_status = install_status.strip().lower() if isinstance(install_status, str) else None
+    if normalized_install_status == "completed":
+        normalized_install_status = "complete"
+    elif normalized_install_status == "incompleted":
+        normalized_install_status = "incomplete"
+    if normalized_install_status not in {None, "complete", "incomplete"}:
+        raise HTTPException(
+            status_code=400,
+            detail="install_status must be 'complete' or 'incomplete'",
+        )
+
+    installer_assignment_filter = _installer_assignment_filter(installer_id) if installer_id is not None else None
+    install_status_condition = _install_status_filter(normalized_install_status) if normalized_install_status else None
 
     if current_stage == "cut_list":
         await _transition_completed_cutlist_fabs_to_shop(db, current_user.id)
@@ -1069,6 +1140,11 @@ async def get_fabs(
 
     if current_stage == "shop" and not _is_all_plan_view:
         query = query.where(_active_shop_cut_plan_visibility_filter())
+
+    if installer_assignment_filter is not None:
+        query = query.where(installer_assignment_filter)
+    if install_status_condition is not None:
+        query = query.where(install_status_condition)
 
     # install_completion: restrict installers to their scheduling assignments and requested date
     _installer_scheduling_filter = None
@@ -1161,6 +1237,10 @@ async def get_fabs(
             count_query = count_query.where(_installer_scheduling_filter)
     if next_stage:
         count_query = count_query.where(Fab.next_stage == next_stage)
+    if installer_assignment_filter is not None:
+        count_query = count_query.where(installer_assignment_filter)
+    if install_status_condition is not None:
+        count_query = count_query.where(install_status_condition)
 
     # Apply stage-specific date filtering to count
     if current_stage:
@@ -1260,6 +1340,10 @@ async def get_fabs(
             stage_totals_query = stage_totals_query.where(Fab.drafter_id == drafter_id)
         if status_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.status_id == status_id)
+        if installer_assignment_filter is not None:
+            stage_totals_query = stage_totals_query.where(installer_assignment_filter)
+        if install_status_condition is not None:
+            stage_totals_query = stage_totals_query.where(install_status_condition)
 
         # Apply stage-specific date filters (same as count_query)
         if current_stage == "pre_draft_review":
