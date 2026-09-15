@@ -54,6 +54,8 @@ def test_complete_install_status_requires_shop_plans_done_and_install_complete()
     assert "coalesce(shop_cut_plans.work_percentage, 0) < 100" in sql
     assert "install_completions.fab_id = fabs.id" in sql
     assert "install_completions.is_completed IS true" in sql
+    assert "install_schedulings.fab_id = fabs.id" in sql
+    assert "install_schedulings.is_completed IS true" in sql
 
 
 def test_incomplete_install_status_is_inverse_of_complete_status():

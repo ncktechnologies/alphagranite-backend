@@ -659,11 +659,21 @@ def _completed_install_status_filter():
         .limit(1)
         .exists()
     )
+    completed_install_schedule_exists = (
+        select(InstallScheduling.id)
+        .where(
+            InstallScheduling.fab_id == Fab.id,
+            InstallScheduling.is_completed.is_(True),
+        )
+        .limit(1)
+        .exists()
+    )
 
     return and_(
         has_shop_plan_exists,
         ~incomplete_shop_plan_exists,
         completed_install_exists,
+        completed_install_schedule_exists,
     )
 
 
