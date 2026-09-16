@@ -152,12 +152,24 @@ async def get_jobs(
     need_to_invoice: Optional[bool] = Query(None, description="Filter by invoice flag (true/false)"),
     is_invoiced: Optional[bool] = Query(None, description="Filter by invoiced status (true=invoiced, false=not invoiced)"),
     search: Optional[str] = Query(None, description="Search by job name or job number"),
+    account_name: Optional[str] = Query(None, description="Search by account name"),
     include_notes: bool = Query(False, description="Include job notes in response"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(PermissionChecker("jobs", "read"))
 ):
     """Get list of jobs with optional filtering and pagination metadata"""
-    jobs, total = await job_crud.get_jobs(db, skip, limit, account_id, status_id, priority, need_to_invoice, search, is_invoiced)
+    jobs, total = await job_crud.get_jobs(
+        db,
+        skip,
+        limit,
+        account_id,
+        status_id,
+        priority,
+        need_to_invoice,
+        search,
+        is_invoiced,
+        account_name=account_name,
+    )
     
     # If include_notes is True, fetch notes for each job
     if include_notes:

@@ -141,7 +141,8 @@ async def get_jobs(
     priority: Optional[str] = None,
     need_to_invoice: Optional[bool] = None,
     search: Optional[str] = None,
-    is_invoiced: Optional[bool] = None
+    is_invoiced: Optional[bool] = None,
+    account_name: Optional[str] = None,
 
 ) -> tuple[List[dict], int]:
     """
@@ -157,6 +158,7 @@ async def get_jobs(
         need_to_invoice: Filter by invoice flag (true/false)
         search: Search term for job name or job number
         is_invoiced: Filter by invoiced status (true/false)
+        account_name: Search term for account name
         
     Returns:
         Tuple of (jobs list with account details, total count)
@@ -198,10 +200,15 @@ async def get_jobs(
             (BusinessJob.job_number.ilike(search_term))
         )
 
+    if account_name:
+        conditions.append(Account.name.ilike(f"%{account_name}%"))
+
     if conditions:
         query = query.where(*conditions)
 
-    count_query = select(func.count()).select_from(BusinessJob)
+    count_query = select(func.count()).select_from(BusinessJob).outerjoin(
+        Account, BusinessJob.account_id == Account.id
+    )
     if conditions:
         count_query = count_query.where(*conditions)
 
