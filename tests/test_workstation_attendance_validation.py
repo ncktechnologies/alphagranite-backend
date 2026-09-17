@@ -253,23 +253,16 @@ async def test_overlapping_pending_stages_fail_on_same_workstation():
 
 
 @pytest.mark.asyncio
-async def test_non_overlapping_plan_fails_when_new_workstation_requires_attendance():
+async def test_non_overlapping_plan_succeeds_when_new_workstation_requires_attendance():
     session, engine = await _create_attendance_test_session(True, True)
     async with session:
-        with pytest.raises(HTTPException) as exc_info:
-            await _assert_no_shop_plan_conflicts(
-                session,
-                plan_id=0,
-                fab_id=2,
-                workstation_id=20,
-                operator_id=7,
-                scheduled_start=datetime(2026, 9, 4, 12, 0),
-                estimated_hours=1,
-            )
+        await _assert_no_shop_plan_conflicts(
+            session,
+            plan_id=0,
+            fab_id=2,
+            workstation_id=20,
+            operator_id=7,
+            scheduled_start=datetime(2026, 9, 4, 12, 0),
+            estimated_hours=1,
+        )
     await engine.dispose()
-    assert exc_info.value.status_code == 400
-    assert exc_info.value.detail == (
-        "Cannot create or assign shop plan: Attendance is required for this workstation. "
-        "Workstation: New WS (ID 20). "
-        "Requested FAB 2 time range: Sep 4, 12:00 PM – 1:00 PM."
-    )

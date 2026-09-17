@@ -4539,8 +4539,12 @@ async def get_owner_installation_template_dashboard_report(
     )
     incomplete_sq_ft = round(sum(_to_float(row["sq_ft_incomplete"]) for row in flat_rows), 2)
     templated_row_count = sum(1 for row in flat_rows if row["activity_type"] == "Template")
-    selected_date_range_days = (
-        (to_date - from_date).days + 1
+    selected_date_range_weekdays = (
+        sum(
+            1
+            for offset in range((to_date - from_date).days + 1)
+            if (from_date + timedelta(days=offset)).weekday() < 5
+        )
         if from_date is not None and to_date is not None
         else templated_row_count
     )
@@ -4600,8 +4604,8 @@ async def get_owner_installation_template_dashboard_report(
                 "sqft_not_installed": incomplete_sq_ft,
                 "sqft_templated": sqft_templated,
                 "sqft_not_templated": sqft_not_templated,
-                "average_sqft_templated": round(_safe_div(sqft_templated, selected_date_range_days), 2),
-                "average_sqft_installed": round(_safe_div(installs_sq_ft, selected_date_range_days), 2),
+                "average_sqft_templated": round(_safe_div(sqft_templated, selected_date_range_weekdays), 2),
+                "average_sqft_installed": round(_safe_div(installs_sq_ft, selected_date_range_weekdays), 2),
                 "row_count": len(flat_rows),
                 "group_count": len(grouped_rows),
             },
