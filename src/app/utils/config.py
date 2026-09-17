@@ -37,7 +37,7 @@ SUPERUSER_LAST_NAME = os.getenv("SUPERUSER_LAST_NAME", "Admin")
 STATIC_DIR = os.getenv("STATIC_DIR", os.path.join(BASE_DIR, "static"))
 UPLOADS_DIR = os.getenv("UPLOADS_DIR", os.path.join(STATIC_DIR, "uploads"))
 MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE", 5 * 1024 * 1024))  # 5 MB default
-ALLOWED_EXTENSIONS = os.getenv("ALLOWED_EXTENSIONS", "jpg,jpeg,png,gif,pdf,doc,docx,xls,xlsx").split(",")
+ALLOWED_EXTENSIONS = os.getenv("ALLOWED_EXTENSIONS", "jpg,jpeg,png,gif,pdf,doc,docx,xls,xlsx,glb").split(",")
 
 # API base URL for generating file URLs
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
