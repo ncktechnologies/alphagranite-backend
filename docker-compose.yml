@@ -1,4 +1,5 @@
 services:
+
   # FastAPI Application
   web:
     build:
@@ -6,7 +7,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
-      - ${APP_ENV_FILE:-.env}
+      - ${APP_ENV_FILE:-.env.staging}
     ports:
       - "${WEB_HOST_PORT:-8000}:8000"
     extra_hosts:
@@ -15,16 +16,19 @@ services:
       - ./static/uploads:/app/static/uploads
       - ./static/defaults:/app/static/defaults
       - ./logs:/app/logs
-      - ${STATIC_HOST_DIR:-/root/alphagranite/alpha-granit/static}:/app/static
+      - /var/www/staging/backend/alphagranite-backend/static:/app/static
+      - ./alembic/versions:/app/alembic/versions
+    entrypoint: []
     command: uvicorn src.app.main:app --host 0.0.0.0 --port 8000
     environment:
       - FILE_UPLOAD_ROOT=/app/static   # root for FileService
       - UPLOAD_DIR=/app/static/jobs    # if your code reads this
-      - BASE_URL=${BASE_URL:-https://api.ag.easybusiness.ng}
+      - BASE_URL=${BASE_URL:-https://api.staging.odysseytracker.com}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
       - HCP_PAYROLL_SCHEDULER_ENABLED=false   # celery beat owns scheduling
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
 
   redis:
     image: redis:7-alpine
@@ -32,6 +36,11 @@ services:
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   celery_worker:
     build:
@@ -39,16 +48,22 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
-      - ${APP_ENV_FILE:-.env}
+      - ${APP_ENV_FILE:-.env.staging}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./logs:/app/logs
+      - /var/www/staging/backend/alphagranite-backend/static:/app/static
+    entrypoint: []
     command: celery -A src.app.tasks.celery_app.celery_app worker --loglevel=info --concurrency=2
     environment:
+      - FILE_UPLOAD_ROOT=/app/static
+      - UPLOAD_DIR=/app/static/jobs
+      - BASE_URL=${BASE_URL:-https://api.staging.odysseytracker.com}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
 
   celery_beat:
     build:
@@ -56,16 +71,18 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
-      - ${APP_ENV_FILE:-.env}
+      - ${APP_ENV_FILE:-.env.staging}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./logs:/app/logs
-    command: celery -A src.app.tasks.celery_app.celery_app beat --loglevel=info
+    entrypoint: []
+    command: celery -A src.app.tasks.celery_app.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
     environment:
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
 
   nginx:
     image: nginx:alpine

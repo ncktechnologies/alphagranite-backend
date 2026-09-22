@@ -65,6 +65,56 @@ docker-compose down
 docker-compose restart web
 ```
 
+> The stack includes `redis`, `celery_worker` and `celery_beat`. Any change to
+> `requirements.txt` (Celery was added there) requires `--build`, not just a restart.
+
+## ⏱️ Background Jobs (Celery + Redis)
+
+Scheduled data pulls (currently the HCP payroll/staff-roster ingestion) run through
+Celery rather than inside the API process.
+
+| Service | Role |
+| --- | --- |
+| `redis` | Broker + result backend, appendonly persistence on the `redis_data` volume |
+| `celery_worker` | Executes tasks (`--concurrency=2`) |
+| `celery_beat` | Ticks every minute and dispatches whatever is due |
+
+Beat runs `hcp_payroll.dispatch_due_ingestions` every minute. That task reads the
+active rows in `hcp_payroll_source_configs` and queues `hcp_payroll.ingest_config`
+only for configs whose `schedule_*` columns match the current time, so schedules are
+edited through the API and never hardcoded in beat.
+
+```bash
+# Worker / beat logs
+docker-compose logs -f celery_worker
+docker-compose logs -f celery_beat
+
+# Inspect the queue
+docker-compose exec celery_worker celery -A src.app.tasks.celery_app.celery_app inspect active
+
+# Fire an ingestion by hand (config id 1)
+docker-compose exec celery_worker \
+  celery -A src.app.tasks.celery_app.celery_app call hcp_payroll.ingest_config --args='[1]'
+```
+
+**Run exactly one `celery_beat` container.** There is no distributed lock, so a
+second replica would duplicate every pull.
+
+### HCP ingestion endpoints
+
+All admin-only, under `/api/v1/hcp-payroll`:
+
+| Route | Purpose |
+| --- | --- |
+| `POST /settings` | Create a config (one per saved report) |
+| `POST /settings/{id}/test` | Dry run — fetches and parses, persists nothing |
+| `POST /settings/{id}/ingest` | Real pull — writes run + snapshot + rows |
+| `GET /runs?setting_id=` | Run history with HTTP status and errors |
+| `GET /staff-roster/latest` | Newest roster snapshot plus active employee count |
+
+After deploying, verify connectivity with `/settings/{id}/test` before enabling the
+schedule.
+
 ## 🔄 Auto Migration System
 
 The Django-like migration system runs automatically on startup:
@@ -106,7 +156,20 @@ python scripts/auto_migrate.py
 │    - Health Checks                      │
 └──────────────┬──────────────────────────┘
                │
-               ▼
+               ├──────────────┐
+               │              ▼
+               │   ┌─────────────────────────────┐
+               │   │   Redis (Port 6379)         │
+               │   │   - Celery broker/backend   │
+               │   └──────────┬──────────────────┘
+               │              │
+               │              ▼
+               │   ┌─────────────────────────────┐
+               │   │  celery_worker + celery_beat│
+               │   │  - Scheduled HCP pulls      │
+               │   └──────────┬──────────────────┘
+               │              │
+               ▼              ▼
 ┌─────────────────────────────────────────┐
 │    PostgreSQL 15 (Port 5432)            │
 │    - Persistent Volume                  │
@@ -131,6 +194,13 @@ python scripts/auto_migrate.py
 - `DATABASE_HOST` - DB host (default: db)
 - `CORS_ORIGINS` - Allowed origins
 - `LOG_LEVEL` - Logging level (default: INFO)
+- `APP_ENV_FILE` - Env file used by compose (default: `.env.staging`)
+- `BASE_URL` - Public API URL (default: `https://api.staging.odysseytracker.com`)
+- `CELERY_BROKER_URL` - Broker/backend (default: `redis://redis:6379/0`)
+- `CELERY_TIMEZONE` - Beat timezone (default: `America/Chicago`)
+- `HCP_BASE_URL` - HCP API host (default: `https://secure.saashr.com`)
+- `HCP_PAYROLL_SCHEDULER_ENABLED` - Legacy in-process scheduler; compose sets it to
+  `false` so Celery beat is the only scheduler. Set `true` only if running without Redis.
 
 ### Ports
 
@@ -138,6 +208,7 @@ python scripts/auto_migrate.py
 - **80** - Nginx HTTP
 - **443** - Nginx HTTPS (configure SSL first)
 - **5432** - PostgreSQL database
+- **6379** - Redis (internal to the compose network, not published)
 
 ## 📊 Monitoring
 
@@ -162,6 +233,10 @@ docker-compose logs -f db
 
 # Nginx logs
 docker-compose logs -f nginx
+
+# Background jobs
+docker-compose logs -f celery_worker
+docker-compose logs -f celery_beat
 
 # All logs
 docker-compose logs -f
@@ -289,6 +364,26 @@ DATABASE_PORT=5433
 NGINX_HTTP_PORT=8080
 ```
 
+### Scheduled Pulls Not Running
+
+```bash
+# Is beat ticking? Look for "Scheduler: Sending due task"
+docker-compose logs --tail=50 celery_beat
+
+# Is the worker connected to the broker?
+docker-compose logs --tail=50 celery_worker
+
+# Is Redis reachable?
+docker-compose exec redis redis-cli ping
+```
+
+Common causes:
+
+- Container not rebuilt after `celery[redis]` was added to `requirements.txt`
+- Config row is `is_active = false`, or its `schedule_*` columns never match
+- Duplicate pulls means more than one `celery_beat` container is running
+- Credentials rejected by HCP; check `GET /api/v1/hcp-payroll/runs` for the error
+
 ## 📦 Updates and Maintenance
 
 ### Update Application
@@ -330,6 +425,8 @@ docker system prune -a
 - [ ] Set up monitoring/alerting
 - [ ] Review and adjust resource limits
 - [ ] Test failover scenarios
+- [ ] Run exactly one `celery_beat` replica
+- [ ] Verify HCP configs with `POST /api/v1/hcp-payroll/settings/{id}/test` before enabling
 
 ## 📞 Support
 
