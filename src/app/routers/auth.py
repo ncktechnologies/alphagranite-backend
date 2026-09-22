@@ -19,7 +19,7 @@ from src.app.utils.config import ADMIN_EMAIL, SUPPORT_EMAIL
 from src.app.interface.response_wrappers import SuccessResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from src.app.service.background import send_notification, save_audit_trail
-from src.app.utils.helpers import call_service, success_response, error_response
+from src.app.utils.helpers import call_service, success_response, error_response, utc_now_aware
 from fastapi import APIRouter, Depends, Request, BackgroundTasks, HTTPException, status
 
 # Import database session dependency
@@ -798,7 +798,7 @@ async def update_user_profile(
             if value is not None:  # Only update fields that were included in the request
                 setattr(current_user, field, value)
 
-        current_user.updated_at = datetime.now()
+        current_user.updated_at = utc_now_aware()
         db.add(current_user)
         await db.commit()
         await db.refresh(current_user)

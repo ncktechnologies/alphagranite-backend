@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
+from src.app.utils.helpers import utc_now_aware
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -220,7 +222,7 @@ class AuthService:
         # Get user permissions for action menus (existing functionality)
         user_permissions = await self.get_user_permissions(user.id, db_session)
 
-        user.updated_at = datetime.utcnow()
+        user.updated_at = utc_now_aware()
         await db_session.commit()
 
         # Create tokens with claims
@@ -323,7 +325,7 @@ class AuthService:
         # Update password in database
         user.password = hashed_password
         user.is_first_login = False  # User has changed password, so no longer first login
-        user.updated_at = datetime.now()
+        user.updated_at = utc_now_aware()
         db_session.add(user)
         await db_session.commit()
 
@@ -461,7 +463,7 @@ class AuthService:
             # Hash password using get_password_hash (handles bcrypt 72-byte limit)
             user.password = self.get_password_hash(new_password)
             user.is_first_login = False
-            user.updated_at = datetime.now()
+            user.updated_at = utc_now_aware()
             db.add(user)
             await db.commit()
             await db.refresh(user)

@@ -68,6 +68,11 @@ def utc_now() -> datetime:
     """Get current UTC time as naive datetime for database storage"""
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
+
+def utc_now_aware() -> datetime:
+    """Current UTC time for columns declared TIMESTAMP WITH TIME ZONE (e.g. users)."""
+    return datetime.now(timezone.utc)
+
 def datetime_to_iso(dt: Optional[datetime]) -> Optional[str]:
     """
     Convert datetime to ISO 8601 format string with UTC timezone.

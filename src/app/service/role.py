@@ -13,7 +13,7 @@ from src.app.database.file import File
 from src.app.database.status import Status
 from src.app.utils.config import API_BASE_URL
 from src.app.database.user_role import UserRole
-from src.app.utils.helpers import error_response, utc_now
+from src.app.utils.helpers import error_response, utc_now, utc_now_aware
 from src.app.database.permission import Permission
 from src.app.database.action_menu import ActionMenu
 from src.app.service.background import save_audit_trail
@@ -1232,7 +1232,7 @@ class RoleService:
             # Update status to inactive (2)
             old_status = user.status
             user.status = 2  # 2 = Inactive
-            user.updated_at = utc_now()
+            user.updated_at = utc_now_aware()
             
             db.add(user)
             await db.commit()
