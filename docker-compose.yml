@@ -15,13 +15,57 @@ services:
       - ./static/uploads:/app/static/uploads
       - ./static/defaults:/app/static/defaults
       - ./logs:/app/logs
-      - /root/alphagranite/alpha-granit/static:/app/static
-    entrypoint: []
+      - ${STATIC_HOST_DIR:-/root/alphagranite/alpha-granit/static}:/app/static
     command: uvicorn src.app.main:app --host 0.0.0.0 --port 8000
     environment:
       - FILE_UPLOAD_ROOT=/app/static   # root for FileService
       - UPLOAD_DIR=/app/static/jobs    # if your code reads this
       - BASE_URL=${BASE_URL:-https://api.ag.easybusiness.ng}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - HCP_PAYROLL_SCHEDULER_ENABLED=false   # celery beat owns scheduling
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ${APP_ENV_FILE:-.env}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./logs:/app/logs
+    command: celery -A src.app.tasks.celery_app.celery_app worker --loglevel=info --concurrency=2
+    environment:
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+    depends_on:
+      - redis
+
+  celery_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ${APP_ENV_FILE:-.env}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./logs:/app/logs
+    command: celery -A src.app.tasks.celery_app.celery_app beat --loglevel=info
+    environment:
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+    depends_on:
+      - redis
 
   nginx:
     image: nginx:alpine
@@ -42,3 +86,6 @@ services:
       - ./certbot/conf:/etc/letsencrypt
       - ./certbot/www:/var/www/certbot
     entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+
+volumes:
+  redis_data:

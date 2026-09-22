@@ -12,10 +12,16 @@ from src.app.database.hcp_payroll import (
     HcpPayrollReportRow,
     HcpPayrollReportSnapshot,
     HcpPayrollSourceConfig,
+    HcpStaffRosterRow,
+    HcpStaffRosterSnapshot,
 )
 from src.app.database.user import User
 from src.app.middleware.jwt_auth import get_current_user
-from src.app.service.hcp_payroll_ingestion import ingest_hcp_payroll_report
+from src.app.service.hcp_payroll_ingestion import (
+    get_default_base_url,
+    ingest_hcp_payroll_report,
+    preview_hcp_payroll_report,
+)
 from src.app.utils.helpers import error_response, success_response
 
 router = APIRouter(prefix="/hcp-payroll", tags=["HCP Payroll"])
@@ -23,12 +29,13 @@ router = APIRouter(prefix="/hcp-payroll", tags=["HCP Payroll"])
 
 class HcpPayrollSourceConfigCreate(BaseModel):
     name: str
-    base_url: str = Field(default="https://secure.saashr.com")
+    base_url: Optional[str] = None
     company_id: str = Field(default="83943830")
     grant_type: str = Field(default="client_credentials")
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
     report_settings_id: str = Field(default="89798180")
+    report_kind: str = Field(default="labor_cost")
     schedule_type: str = Field(default="weekly")
     schedule_interval: int = Field(default=1, ge=1)
     schedule_weekday: int = Field(default=0, ge=0, le=6)
@@ -45,6 +52,7 @@ class HcpPayrollSourceConfigUpdate(BaseModel):
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
     report_settings_id: Optional[str] = None
+    report_kind: Optional[str] = None
     schedule_type: Optional[str] = None
     schedule_interval: Optional[int] = Field(default=None, ge=1)
     schedule_weekday: Optional[int] = Field(default=None, ge=0, le=6)
@@ -68,6 +76,7 @@ def _serialize_config(config: HcpPayrollSourceConfig) -> dict:
         "client_id": config.client_id,
         "client_secret": config.client_secret,
         "report_settings_id": config.report_settings_id,
+        "report_kind": config.report_kind,
         "schedule_type": config.schedule_type,
         "schedule_interval": config.schedule_interval,
         "schedule_weekday": config.schedule_weekday,
@@ -118,12 +127,13 @@ async def create_setting(
     _require_admin(current_user)
     setting = HcpPayrollSourceConfig(
         name=payload.name,
-        base_url=payload.base_url,
+        base_url=payload.base_url or get_default_base_url(),
         company_id=payload.company_id,
         grant_type=payload.grant_type,
         client_id=payload.client_id,
         client_secret=payload.client_secret,
         report_settings_id=payload.report_settings_id,
+        report_kind=payload.report_kind,
         schedule_type=payload.schedule_type,
         schedule_interval=payload.schedule_interval,
         schedule_weekday=payload.schedule_weekday,
@@ -185,6 +195,24 @@ async def ingest_setting(
     return success_response(result, "HCP payroll ingestion completed successfully")
 
 
+@router.post("/settings/{setting_id}/test")
+async def test_setting(
+    setting_id: int,
+    max_rows: int = 10,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Dry run: authenticates and fetches the report without persisting anything."""
+    _require_admin(current_user)
+    try:
+        result = await preview_hcp_payroll_report(db, setting_id, max_rows=max_rows)
+    except ValueError as exc:
+        raise error_response(str(exc), 404)
+    except RuntimeError as exc:
+        raise error_response(str(exc), 502)
+    return success_response(result, "HCP payroll connection test completed successfully")
+
+
 @router.get("/snapshots/{setting_id}")
 async def list_snapshots(
     setting_id: int,
@@ -242,3 +270,101 @@ async def list_snapshot_rows(
         for item in result.scalars().all()
     ]
     return success_response(rows, "HCP payroll rows retrieved successfully")
+
+
+def _serialize_roster_snapshot(snapshot: HcpStaffRosterSnapshot) -> dict:
+    return {
+        "id": snapshot.id,
+        "source_config_id": snapshot.source_config_id,
+        "ingestion_run_id": snapshot.ingestion_run_id,
+        "report_settings_id": snapshot.report_settings_id,
+        "payload_format": snapshot.payload_format,
+        "pulled_at": snapshot.pulled_at.isoformat() if snapshot.pulled_at else None,
+        "row_count": snapshot.row_count,
+        "active_employee_count": snapshot.active_employee_count,
+        "created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
+    }
+
+
+@router.get("/staff-roster/snapshots")
+async def list_staff_roster_snapshots(
+    setting_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(current_user)
+    query = select(HcpStaffRosterSnapshot).order_by(HcpStaffRosterSnapshot.id.desc())
+    if setting_id is not None:
+        query = query.where(HcpStaffRosterSnapshot.source_config_id == setting_id)
+    result = await db.execute(query)
+    return success_response(
+        [_serialize_roster_snapshot(item) for item in result.scalars().all()],
+        "HCP staff roster snapshots retrieved successfully",
+    )
+
+
+@router.get("/staff-roster/latest")
+async def get_latest_staff_roster(
+    setting_id: Optional[int] = None,
+    active_only: bool = True,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(current_user)
+    snapshot_query = select(HcpStaffRosterSnapshot).order_by(HcpStaffRosterSnapshot.pulled_at.desc(), HcpStaffRosterSnapshot.id.desc()).limit(1)
+    if setting_id is not None:
+        snapshot_query = snapshot_query.where(HcpStaffRosterSnapshot.source_config_id == setting_id)
+    snapshot = (await db.execute(snapshot_query)).scalars().first()
+    if not snapshot:
+        raise error_response("No HCP staff roster snapshot found", 404)
+
+    rows_query = select(HcpStaffRosterRow).where(HcpStaffRosterRow.snapshot_id == snapshot.id)
+    if active_only:
+        rows_query = rows_query.where(HcpStaffRosterRow.is_active.is_(True))
+    rows_query = rows_query.order_by(HcpStaffRosterRow.row_index.asc())
+    rows = (await db.execute(rows_query)).scalars().all()
+
+    return success_response(
+        {
+            "snapshot": _serialize_roster_snapshot(snapshot),
+            "employees": [_serialize_roster_row(item) for item in rows],
+        },
+        "HCP staff roster retrieved successfully",
+    )
+
+
+def _serialize_roster_row(row: HcpStaffRosterRow) -> dict:
+    return {
+        "id": row.id,
+        "snapshot_id": row.snapshot_id,
+        "row_index": row.row_index,
+        "employee_id": row.employee_id,
+        "username": row.username,
+        "first_name": row.first_name,
+        "last_name": row.last_name,
+        "employee_status": row.employee_status,
+        "employee_type": row.employee_type,
+        "in_payroll": row.in_payroll,
+        "locked": row.locked,
+        "date_terminated": row.date_terminated,
+        "is_active": row.is_active,
+    }
+
+
+@router.get("/staff-roster/snapshots/{snapshot_id}/rows")
+async def list_staff_roster_rows(
+    snapshot_id: int,
+    active_only: bool = False,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(current_user)
+    query = select(HcpStaffRosterRow).where(HcpStaffRosterRow.snapshot_id == snapshot_id)
+    if active_only:
+        query = query.where(HcpStaffRosterRow.is_active.is_(True))
+    query = query.order_by(HcpStaffRosterRow.row_index.asc())
+    result = await db.execute(query)
+    return success_response(
+        [_serialize_roster_row(item) for item in result.scalars().all()],
+        "HCP staff roster rows retrieved successfully",
+    )

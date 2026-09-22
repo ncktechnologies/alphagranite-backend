@@ -1,4 +1,4 @@
-from src.app.hcp_payroll_parser import parse_hcp_payroll_report
+from src.app.hcp_payroll_parser import parse_hcp_payroll_report, parse_hcp_staff_roster
 
 
 def test_parse_hcp_payroll_report_handles_cost_centers_and_subtotals():
@@ -29,3 +29,27 @@ def test_parse_hcp_payroll_report_handles_cost_centers_and_subtotals():
     assert rows[2].regular_hours == 80.0
     assert rows[2].total_reg_pto_hol_wages == 1520.0
     assert rows[2].total_ot_wages == 124.38
+
+
+def test_parse_hcp_staff_roster_flags_active_employees():
+    raw_payload = '''
+"Employee Id","Username","First Name","Last Name","Employee Status","Employee Type","In Payroll","Locked","Date Terminated"
+
+"247","JHernandez","Jose Luis","Hernandez","Active","Full Time","Yes","No",""
+
+"415","MHernandez","Mary","Hernandez","Terminated","Full Time","No","Yes","2025-01-02"
+'''
+
+    rows = parse_hcp_staff_roster(raw_payload)
+
+    assert len(rows) == 2
+    assert [row.row_index for row in rows] == [1, 2]
+    assert rows[0].employee_id == "247"
+    assert rows[0].username == "JHernandez"
+    assert rows[0].first_name == "Jose Luis"
+    assert rows[0].employee_status == "Active"
+    assert rows[0].is_active is True
+    assert rows[0].date_terminated is None
+    assert rows[1].is_active is False
+    assert rows[1].date_terminated == "2025-01-02"
+    assert sum(1 for row in rows if row.is_active) == 1
