@@ -184,9 +184,54 @@ async def list_runs(
     return success_response([_serialize_run(item) for item in result.scalars().all()], "HCP payroll runs retrieved successfully")
 
 
-@router.post("/settings/{setting_id}/ingest")
+async def _resolve_active_config_id(db: AsyncSession) -> int:
+    result = await db.execute(
+        select(HcpPayrollSourceConfig)
+        .where(HcpPayrollSourceConfig.is_active.is_(True))
+        .order_by(HcpPayrollSourceConfig.id.asc())
+    )
+    config = result.scalars().first()
+    if not config:
+        raise error_response("No active HCP payroll configuration found", 404)
+    return config.id
+
+
+@router.post("/ingest")
+async def ingest_active(
+    report_kind: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Pull both saved reports for every active configuration."""
+    _require_admin(current_user)
+    result = await ingest_hcp_payroll_report(
+        db, None, triggered_by_user_id=current_user.id, report_kind=report_kind
+    )
+    return success_response(result, "HCP payroll ingestion completed successfully")
+
+
+@router.post("/test")
+async def test_active(
+    max_rows: int = 10,
+    report_kind: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Dry run against the active configuration; persists nothing."""
+    _require_admin(current_user)
+    config_id = await _resolve_active_config_id(db)
+    try:
+        result = await preview_hcp_payroll_report(db, config_id, max_rows=max_rows, report_kind=report_kind)
+    except ValueError as exc:
+        raise error_response(str(exc), 404)
+    except RuntimeError as exc:
+        raise error_response(str(exc), 502)
+    return success_response(result, "HCP payroll connection test completed successfully")
+
+
+@router.post("/settings/{config_id}/ingest")
 async def ingest_setting(
-    setting_id: int,
+    config_id: int,
     report_kind: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -194,14 +239,14 @@ async def ingest_setting(
     """Pull every configured saved report (or one kind) using a single access token."""
     _require_admin(current_user)
     result = await ingest_hcp_payroll_report(
-        db, setting_id, triggered_by_user_id=current_user.id, report_kind=report_kind
+        db, config_id, triggered_by_user_id=current_user.id, report_kind=report_kind
     )
     return success_response(result, "HCP payroll ingestion completed successfully")
 
 
-@router.post("/settings/{setting_id}/test")
+@router.post("/settings/{config_id}/test")
 async def test_setting(
-    setting_id: int,
+    config_id: int,
     max_rows: int = 10,
     report_kind: Optional[str] = None,
     current_user: User = Depends(get_current_user),
@@ -210,7 +255,7 @@ async def test_setting(
     """Dry run: authenticates and fetches the reports without persisting anything."""
     _require_admin(current_user)
     try:
-        result = await preview_hcp_payroll_report(db, setting_id, max_rows=max_rows, report_kind=report_kind)
+        result = await preview_hcp_payroll_report(db, config_id, max_rows=max_rows, report_kind=report_kind)
     except ValueError as exc:
         raise error_response(str(exc), 404)
     except RuntimeError as exc:
