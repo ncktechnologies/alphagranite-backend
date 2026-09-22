@@ -29,7 +29,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
-from src.app.utils.helpers import error_response, success_response
+from src.app.utils.helpers import error_response, success_response, utc_now
 from src.app.database.templating import Templating
 from src.app.routers.fabs import (
     _build_fab_list_query,
@@ -82,7 +82,7 @@ async def create_slabsmith(
         total_sqft_completed=slabsmith_data.total_sqft_completed,
         file_ids=None,
         status_id=1,
-        created_at=datetime.now(),
+        created_at=utc_now(),
         updated_at=None,
         updated_by=None
     )
@@ -132,7 +132,7 @@ async def update_slabsmith(
     for field, value in update_data.items():
         setattr(slabsmith, field, value)
     
-    slabsmith.updated_at = datetime.now()
+    slabsmith.updated_at = utc_now()
     slabsmith.updated_by = current_user.id
 
     # If completed, move the related FAB to cut_list stage and save completion date
@@ -142,8 +142,8 @@ async def update_slabsmith(
         if fab:
             fab.current_stage = "cut_list"
             fab.next_stage = "final_programming"
-            fab.slabsmith_completed_date = datetime.now()  # ADD THIS
-            fab.updated_at = datetime.now()
+            fab.slabsmith_completed_date = utc_now()  # ADD THIS
+            fab.updated_at = utc_now()
             fab.updated_by = current_user.id
 
     await db.commit()
@@ -168,10 +168,10 @@ async def mark_slabsmith_completed(
     
     # Mark as completed
     slabsmith.status_id = 3  # Completed status
-    slabsmith.end_date = datetime.now()
-    slabsmith.updated_at = datetime.now()
+    slabsmith.end_date = utc_now()
+    slabsmith.updated_at = utc_now()
     slabsmith.updated_by = current_user.id
-    slabsmith_completed_date = datetime.now() 
+    slabsmith_completed_date = utc_now() 
     
     # Update fab stage to next step (sales check)
     fab_result = await db.execute(select(Fab).where(Fab.id == slabsmith.fab_id))
@@ -179,8 +179,8 @@ async def mark_slabsmith_completed(
     if fab:
         fab.current_stage = "sales_ct"
         fab.next_stage = "cut_list"  # Will be cut_list or revision based on review
-        fab.slabsmith_completed_date = datetime.now()  
-        fab.updated_at = datetime.now()
+        fab.slabsmith_completed_date = utc_now()  
+        fab.updated_at = utc_now()
         fab.updated_by = current_user.id
     
     await db.commit()
@@ -225,7 +225,7 @@ async def add_file_to_slabsmith(
     else:
         slabsmith.file_ids = str(file_id)
     
-    slabsmith.updated_at = datetime.now()
+    slabsmith.updated_at = utc_now()
     slabsmith.updated_by = current_user.id
     
     await db.commit()
@@ -255,7 +255,7 @@ async def delete_file_from_slabsmith(
             file_ids_list.remove(str(file_id))
             slabsmith.file_ids = ','.join(file_ids_list) if file_ids_list else None
     
-    slabsmith.updated_at = datetime.now()
+    slabsmith.updated_at = utc_now()
     slabsmith.updated_by = current_user.id
     
     await db.commit()
@@ -318,14 +318,14 @@ async def create_sales_ct(
             no_of_revisions=None,
             current_revision_count=None,
             status_id=1,
-            created_at=datetime.now(),
+            created_at=utc_now(),
             updated_at=None,
             updated_by=None,
             # Fields from model definition
             slab_smith_type="",
             drafter_id=0,
-            start_date=datetime.now(),
-            end_date=datetime.now(),
+            start_date=utc_now(),
+            end_date=utc_now(),
             total_sqft_completed=None,
             file_ids=None
         )
@@ -369,7 +369,7 @@ async def set_review_needed_no(
     if status_id:
         sales_ct.status_id = status_id
     
-    sales_ct.updated_at = datetime.now()
+    sales_ct.updated_at = utc_now()
     sales_ct.updated_by = current_user.id
     
     # Update fab to next stage (cut list) and save completion date
@@ -378,8 +378,8 @@ async def set_review_needed_no(
     if fab:
         fab.current_stage = "cut_list"
         fab.next_stage = "final_programming"
-        fab.sales_ct_completed_date = datetime.now()  # ADD THIS
-        fab.updated_at = datetime.now()
+        fab.sales_ct_completed_date = utc_now()  # ADD THIS
+        fab.updated_at = utc_now()
         fab.updated_by = current_user.id
     
     await db.commit()
@@ -420,7 +420,7 @@ async def set_review_needed_yes(
     if file_ids:
         sales_ct.file_ids = file_ids
     
-    sales_ct.updated_at = datetime.now()
+    sales_ct.updated_at = utc_now()
     sales_ct.updated_by = current_user.id
     
     await db.commit()
@@ -461,10 +461,10 @@ async def update_revision_type(
         if fab:
             fab.current_stage = "revision"
             fab.next_stage = "sales_check"  # Revision loops back to sales check
-            fab.updated_at = datetime.now()
+            fab.updated_at = utc_now()
             fab.updated_by = current_user.id
     
-    sales_ct.updated_at = datetime.now()
+    sales_ct.updated_at = utc_now()
     sales_ct.updated_by = current_user.id
     
     await db.commit()
@@ -584,7 +584,7 @@ async def get_pending_slabsmith_fab_ids(
         if date_filter not in valid_filters:
             raise error_response("Invalid date_filter", 400)
 
-        today = datetime.now().date()
+        today = utc_now().date()
         start_this_week = today - timedelta(days=today.weekday())
 
         def month_start(d):

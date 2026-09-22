@@ -15,6 +15,7 @@ from src.app.interface.business_schemas import (
     FabResponse
 )
 from src.app.middleware.jwt_auth import get_current_user
+from src.app.utils.helpers import utc_now, to_utc
 
 router = APIRouter(
     prefix="/cut-list",
@@ -60,7 +61,7 @@ async def _transition_to_shop_if_cutlist_complete(
 
     fab.current_stage = "shop"
     fab.next_stage = None
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = user_id
     return True
 
@@ -87,7 +88,7 @@ async def schedule_shop_date(
 
         # Normalize timezone-aware datetimes -> naive
         fab.shop_date_schedule = _to_naive_dt(schedule_data.shop_date_schedule)
-        fab.updated_at = datetime.now()
+        fab.updated_at = utc_now()
         fab.updated_by = current_user.id
 
         if schedule_data.installation_date is not None:
@@ -138,7 +139,7 @@ async def schedule_shop_date(
             note=f"Shop date scheduled for {fab.shop_date_schedule.strftime('%Y-%m-%d')}",
             stage="cut_list",
             created_by=current_user.id,
-            created_at=datetime.now()
+            created_at=utc_now()
         )
         db.add(fab_note)
 
@@ -206,7 +207,7 @@ async def update_cut_list(
                 fab.current_stage = "cut_list"
                 fab.next_stage = "shop"
         
-        fab.updated_at = datetime.now()
+        fab.updated_at = utc_now()
         fab.updated_by = current_user.id
         
         # Add notes if provided
@@ -216,7 +217,7 @@ async def update_cut_list(
                 note=update_data.notes,
                 stage="cut_list",
                 created_by=current_user.id,
-                created_at=datetime.now()
+                created_at=utc_now()
             )
             db.add(fab_note)
         
@@ -339,6 +340,4 @@ async def get_cut_list_details(
     }
 
 def _to_naive_dt(value):
-    if isinstance(value, datetime) and value.tzinfo is not None:
-        return value.replace(tzinfo=None)
-    return value
+    return to_utc(value) if isinstance(value, datetime) else value

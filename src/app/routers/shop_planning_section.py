@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import List, Optional
 from sqlmodel import Session, select
 from src.app.utils.config import get_db
-from src.app.utils.helpers import success_response, error_response
+from src.app.utils.helpers import success_response, error_response, utc_now
 from src.app.interface.generated_schemas import ShopPlanningSection as ShopPlanningSectionModel
 from fastapi import APIRouter, Depends, Form, UploadFile
 
@@ -30,7 +30,7 @@ def create_shop_planning_section(
         start_date=start_date,
         end_date=end_date,
         status_id=status_id,
-        created_at=datetime.now(),
+        created_at=utc_now(),
         updated_by=created_by
     )
     db.add(section)
@@ -65,7 +65,7 @@ def update_shop_planning_section(
     section.end_date = end_date
     section.status_id = status_id
     section.updated_by = updated_by
-    section.updated_at = datetime.now()
+    section.updated_at = utc_now()
     
     db.commit()
     db.refresh(section)

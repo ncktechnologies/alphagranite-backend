@@ -8,7 +8,7 @@ from enum import Enum
 from src.app.database.job import Job, JobApplication, JobStatus, JobType, ExperienceLevel
 from src.app.database.user import User
 from src.app.utils.config import get_db
-from src.app.utils.helpers import success_response, error_response
+from src.app.utils.helpers import success_response, error_response, utc_now
 from src.app.utils.auth import get_current_user
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["Jobs"])
@@ -122,7 +122,7 @@ async def create_job(
         **job.dict(),
         created_by=current_user.id,
         company_id=current_user.company_id,  # Assuming user is associated with a company
-        created_at=datetime.utcnow()
+        created_at=utc_now()
     )
     db.add(db_job)
     db.commit()
@@ -151,7 +151,7 @@ async def update_job(
     for field, value in update_data.items():
         setattr(db_job, field, value)
     
-    db_job.updated_at = datetime.utcnow()
+    db_job.updated_at = utc_now()
     db.commit()
     db.refresh(db_job)
     return db_job
@@ -191,7 +191,7 @@ async def apply_for_job(
     job = db.query(Job).filter(
         Job.id == job_id,
         Job.status == JobStatus.PUBLISHED,
-        (Job.application_deadline.is_(None) | (Job.application_deadline >= datetime.utcnow()))
+        (Job.application_deadline.is_(None) | (Job.application_deadline >= utc_now()))
     ).first()
     
     if not job:
@@ -211,7 +211,7 @@ async def apply_for_job(
         **application.dict(),
         job_id=job_id,
         applicant_id=current_user.id,
-        applied_at=datetime.utcnow(),
+        applied_at=utc_now(),
         status="applied"
     )
     
@@ -271,7 +271,7 @@ async def update_application_status(
     
     # Update application status
     application.status = status
-    application.updated_at = datetime.utcnow()
+    application.updated_at = utc_now()
     
     if notes:
         application.notes = notes

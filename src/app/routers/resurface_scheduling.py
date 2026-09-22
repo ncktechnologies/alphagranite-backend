@@ -16,7 +16,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
-from src.app.utils.helpers import error_response, success_response
+from src.app.utils.helpers import error_response, success_response, utc_now
 from src.app.routers.fabs import get_next_stage
 
 router = APIRouter()
@@ -50,12 +50,12 @@ async def create_resurface_scheduling(
         scheduled_end_date=resurface_data.scheduled_end_date,
         total_sqft=resurface_data.total_sqft,
         status_id=1,
-        created_at=datetime.now()
+        created_at=utc_now()
     )
     
     # Update fab stage
     fab.current_stage = "resurface_scheduling"
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     
     db.add(resurface_scheduling)
@@ -103,7 +103,7 @@ async def update_resurface_scheduling(
     for key, value in update_dict.items():
         setattr(resurface_scheduling, key, value)
     
-    resurface_scheduling.updated_at = datetime.now()
+    resurface_scheduling.updated_at = utc_now()
     resurface_scheduling.updated_by = current_user.id
     
     # If is_completed is True, move FAB to the next stage
@@ -119,7 +119,7 @@ async def update_resurface_scheduling(
             #     # Otherwise move to cut_list
             #     fab.current_stage = "cut_list"
             #     fab.next_stage = "final_programming"
-            fab.updated_at = datetime.now()
+            fab.updated_at = utc_now()
             fab.updated_by = current_user.id
     
     await db.commit()

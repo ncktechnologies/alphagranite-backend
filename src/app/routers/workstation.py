@@ -8,7 +8,7 @@ from src.app.database.work_station import WorkStation
 from src.app.database.user import User
 from src.app.database.status import Status
 from src.app.interface.response_wrappers import SuccessResponse
-from src.app.utils.helpers import success_response, error_response
+from src.app.utils.helpers import success_response, error_response, utc_now
 from src.app.middleware.jwt_auth import get_current_user
 from sqlalchemy import func
 from pydantic import BaseModel
@@ -85,7 +85,7 @@ async def create_workstation(
         planning_section_id=payload.planning_section_id,
         operator_ids=payload.operator_ids or [],
         created_by=current_user.id,
-        created_at=datetime.now()
+        created_at=utc_now()
     )
     
     db.add(ws)
@@ -167,7 +167,7 @@ async def update_workstation(
                 raise HTTPException(status_code=400, detail=f"Invalid operator_ids: {invalid}")
         ws.operator_ids = payload.operator_ids
 
-    ws.updated_at = datetime.now()
+    ws.updated_at = utc_now()
     ws.updated_by = current_user.id
 
     await db.commit()
@@ -210,7 +210,7 @@ async def delete_workstation(
     
     ws.status_id = 2
     ws.is_active = False
-    ws.updated_at = datetime.now()
+    ws.updated_at = utc_now()
     ws.updated_by = current_user.id
     
     await db.commit()

@@ -16,7 +16,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
-from src.app.utils.helpers import error_response, success_response
+from src.app.utils.helpers import error_response, success_response, utc_now
 
 router = APIRouter()
 
@@ -47,7 +47,7 @@ async def create_install_completion(
     if existing.scalar_one_or_none():
         raise error_response("Install Completion already exists for this fab", 400)
     
-    now = datetime.now()
+    now = utc_now()
     resolved_install_date = install_data.install_date or install_data.completion_date or now
 
     # Create install completion
@@ -66,7 +66,7 @@ async def create_install_completion(
     
     # Update fab stage - mark as completed
     fab.current_stage = "install_completion"
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     
     db.add(install_completion)
@@ -82,7 +82,7 @@ async def create_install_completion(
         if fab:
             fab.current_stage = "install_completion"
             fab.next_stage = None  # final stage in workflow
-            fab.updated_at = datetime.now()
+            fab.updated_at = utc_now()
             fab.updated_by = current_user.id
     
     return success_response(
@@ -129,7 +129,7 @@ async def update_install_completion(
         else:
             setattr(install_completion, key, value)
     
-    install_completion.updated_at = datetime.now()
+    install_completion.updated_at = utc_now()
     install_completion.updated_by = current_user.id
     
     await db.commit()

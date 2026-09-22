@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlmodel import Field, SQLModel
+from src.app.utils.helpers import utc_now
 
 
 class ServiceLevelSetting(SQLModel, table=True):
@@ -28,6 +29,6 @@ class ServiceLevelSetting(SQLModel, table=True):
     # False for fab types where SLA is not applicable (PUNCHOUT, RESURFACE, etc.).
     is_applicable: bool = Field(default=True)
 
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
     updated_at: Optional[datetime] = Field(default=None)
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")

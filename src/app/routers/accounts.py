@@ -16,7 +16,7 @@ from src.app.interface.business_schemas import (
 from src.app.utils.permissions import PermissionChecker
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
-from src.app.utils.helpers import error_response, success_response
+from src.app.utils.helpers import error_response, success_response, utc_now
 from sqlalchemy.exc import IntegrityError
 from src.app.service.background import save_audit_event
 
@@ -61,7 +61,7 @@ async def create_account(
             address=normalized.get("address"),
             status_id=1,
             created_by=current_user.id,
-            created_at=datetime.now()
+            created_at=utc_now()
         )
         
         db.add(account)
@@ -216,7 +216,7 @@ async def update_account(
     for field, value in update_data.items():
         setattr(account, field, value)
     
-    account.updated_at = datetime.now()
+    account.updated_at = utc_now()
     account.updated_by = current_user.id
 
     await save_audit_event(

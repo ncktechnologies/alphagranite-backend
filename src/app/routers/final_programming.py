@@ -20,6 +20,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.utils.timer_guards import assert_no_active_timer_session
+from src.app.utils.helpers import utc_now, to_utc
 
 router = APIRouter(
     prefix="/final-programming",
@@ -80,7 +81,7 @@ async def create_final_programming(
         drafter_end_date=payload.drafter_end_date,
         is_completed=payload.is_completed,
         status_id=payload.status_id,
-        created_at=datetime.now(),
+        created_at=utc_now(),
         updated_at=None,
         updated_by=None,
         file_ids=payload.file_ids,
@@ -139,7 +140,7 @@ async def update_final_programming_record(
     for field, value in update_data.items():
         setattr(final_programming, field, value)
 
-    final_programming.updated_at = datetime.now()
+    final_programming.updated_at = utc_now()
     final_programming.updated_by = current_user.id
 
     await db.commit()
@@ -201,7 +202,7 @@ async def update_final_programming_by_fab_id(
     for field, value in update_data.items():
         setattr(final_programming, field, value)
 
-    final_programming.updated_at = datetime.now()
+    final_programming.updated_at = utc_now()
     final_programming.updated_by = current_user.id
 
     await db.commit()
@@ -236,7 +237,7 @@ async def manage_programming_session(
     
     action = session_data.action.lower()
     note_value = (session_data.note or "").strip() or None
-    now = datetime.now()
+    now = utc_now()
 
     active_session_result = await db.execute(
         select(FinalProgrammingSession)
@@ -456,7 +457,7 @@ async def schedule_shop_date(
     
     # Update shop date and related fields
     fab.shop_date_schedule = schedule_data.shop_date_schedule
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     
     # Update optional fields if provided
@@ -488,7 +489,7 @@ async def schedule_shop_date(
         fab.wj_miter_lnft = schedule_data.wj_miter_lnft
     
     if schedule_data.confirmed is not None and schedule_data.confirmed:
-        fab.confirmed_date = datetime.now()
+        fab.confirmed_date = utc_now()
     
     # Add note
     fab_note = FabNotes(
@@ -496,7 +497,7 @@ async def schedule_shop_date(
         note=f"Shop date scheduled from Final Programming for {schedule_data.shop_date_schedule.strftime('%Y-%m-%d')}",
         stage="final_programming",
         created_by=current_user.id,
-        created_at=datetime.now()
+        created_at=utc_now()
     )
     db.add(fab_note)
     
@@ -540,11 +541,11 @@ async def complete_final_programming(
 
     # Save actual completion date when marked complete; clear when un-completed
     if completion_data.final_programming_complete:
-        fab.final_programming_completed_date = datetime.now()
+        fab.final_programming_completed_date = utc_now()
     else:
         fab.final_programming_completed_date = None
 
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     
     # Update optional fields
@@ -554,7 +555,7 @@ async def complete_final_programming(
     if completion_data.drafter_id:
         fab.drafter_id = completion_data.drafter_id
         fab.drafter_assigned_by = current_user.id
-        fab.drafter_assigned_at = datetime.now()
+        fab.drafter_assigned_at = utc_now()
     
     # ❌ REMOVED: Do NOT change current_stage
     # if completion_data.final_programming_complete:
@@ -574,7 +575,7 @@ async def complete_final_programming(
         note=note_text,
         stage="final_programming",
         created_by=current_user.id,
-        created_at=datetime.now()
+        created_at=utc_now()
     )
     db.add(fab_note)
     
@@ -647,12 +648,13 @@ async def get_session_status(
             break
     
     # Calculate current duration in seconds (but keep variable name for backward compatibility)
-    current_time = datetime.now()
+    current_time = utc_now()
+    session_start = to_utc(session.session_start_time)
     if session.status == "active":
-        duration_seconds = int((current_time - session.session_start_time).total_seconds()) - session.total_pause_duration
+        duration_seconds = int((current_time - session_start).total_seconds()) - session.total_pause_duration
     else:  # paused
-        pause_anchor = session.current_pause_start_time or current_time
-        duration_seconds = int((pause_anchor - session.session_start_time).total_seconds()) - session.total_pause_duration
+        pause_anchor = to_utc(session.current_pause_start_time) or current_time
+        duration_seconds = int((pause_anchor - session_start).total_seconds()) - session.total_pause_duration
 
     duration_minutes = max(duration_seconds, 0)
     
@@ -730,7 +732,7 @@ async def get_final_programming_session_history(
             }
         )
 
-    now = datetime.now()
+    now = utc_now()
     session_rows: list[dict] = []
     for session in sessions:
         duration_seconds = int(session.total_time_spent or 0)

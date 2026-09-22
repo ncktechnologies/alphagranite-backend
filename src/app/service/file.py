@@ -11,6 +11,7 @@ from fastapi import UploadFile, HTTPException, status, Request
 
 from src.app.database.file import File
 from src.app.database.user import User
+from src.app.utils.helpers import utc_now
 
 
 class FileService:
@@ -116,8 +117,8 @@ class FileService:
             fab_id=fab_id,
             task_id=task_id,
             uploaded_by=user_id,
-            created_at=datetime.now(),
-            updated_at=datetime.now()
+            created_at=utc_now(),
+            updated_at=utc_now()
         )
         
         db.add(db_file)

@@ -12,6 +12,7 @@ from src.app.database.user import User
 from src.app.database.templating import Templating
 from src.app.interface.response_wrappers import SuccessResponse, success_response
 from src.app.middleware.jwt_auth import get_current_user
+from src.app.utils.helpers import utc_now
 
 router = APIRouter()
 
@@ -25,7 +26,7 @@ async def get_dashboard(
     """Get comprehensive dashboard data with KPIs, charts, and recent jobs"""
     
     # Determine date range based on time_period
-    end_date = datetime.now()
+    end_date = utc_now()
     if time_period == "today":
         start_date = end_date.replace(hour=0, minute=0, second=0, microsecond=0)
     elif time_period == "this_week":

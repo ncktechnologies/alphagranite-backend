@@ -15,6 +15,7 @@ from src.app.interface.business_schemas import (
     FabResponse
 )
 from src.app.middleware.jwt_auth import get_current_user
+from src.app.utils.helpers import utc_now
 
 router = APIRouter(
     prefix="/sales-ct",
@@ -61,7 +62,7 @@ async def update_sct_review(
     if review_data.block_drawing_approved is not None:
         fab.block_drawing_approved = review_data.block_drawing_approved
     
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     
     # Add notes if provided
@@ -71,13 +72,13 @@ async def update_sct_review(
             note=review_data.notes,
             stage="sales_ct",
             created_by=current_user.id,
-            created_at=datetime.now()
+            created_at=utc_now()
         )
         db.add(fab_note)
     
     # If SCT completed, check if SlabSmith is needed to determine next stage
     if review_data.sct_completed:
-        fab.sct_completed_date = datetime.now()
+        fab.sct_completed_date = utc_now()
         fab.current_stage = "cut_list"
         fab.next_stage = "final_programming"
     
@@ -127,8 +128,8 @@ async def send_to_drafting(
     fab.sct_completed = False
     fab.current_stage = "revision"
     fab.next_stage = "sales_ct"  # After drafting, comes back to sales_ct
-    fab.revision_completed_date = datetime.now()
-    fab.updated_at = datetime.now()
+    fab.revision_completed_date = utc_now()
+    fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     
     # Add revision notes
@@ -137,7 +138,7 @@ async def send_to_drafting(
         note=f"[REVISION REQUEST] {revision_data.notes}",
         stage="sales_ct",
         created_by=current_user.id,
-        created_at=datetime.now()
+        created_at=utc_now()
     )
     db.add(fab_note)
     
@@ -198,7 +199,7 @@ async def approve_and_send_to_slabsmith(
         fab.next_stage = "final_programming"
         message_suffix = "sent to Cut List"
     
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     
     # Add approval notes if provided
@@ -208,7 +209,7 @@ async def approve_and_send_to_slabsmith(
             note=f"[APPROVED] {approval_data.notes}",
             stage="sales_ct",
             created_by=current_user.id,
-            created_at=datetime.now()
+            created_at=utc_now()
         )
         db.add(fab_note)
     

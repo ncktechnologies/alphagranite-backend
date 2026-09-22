@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional
 from sqlmodel import SQLModel, Field
+from src.app.utils.helpers import utc_now
 
 
 class ShopCutPlan(SQLModel, table=True):
@@ -25,7 +26,7 @@ class ShopCutPlan(SQLModel, table=True):
     actual_end_date: Optional[datetime] = Field(default=None, description="Actual end date")
     work_percentage: int = Field(default=0, ge=0, le=100, description="Work completion percentage")
     notes: Optional[str] = Field(default=None, description="Additional notes")
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
     created_by: int = Field(foreign_key="users.id")
     updated_at: Optional[datetime] = Field(default=None)
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")

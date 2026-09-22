@@ -38,7 +38,7 @@ from src.app.interface.response_wrappers import SuccessResponse, success_respons
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.routers.fabs import FAB_STAGES, PUNCHOUT_REDIRECT_FAB_TYPES, _active_shop_cut_plan_visibility_filter, _get_shop_current_stage, _pending_cnc_widget_filter, _stage_filter_condition
 from src.app.service.monthly_end_of_month_status_report import send_monthly_end_of_month_status_report
-from src.app.utils.helpers import error_response
+from src.app.utils.helpers import error_response, utc_now
 
 router = APIRouter()
 
@@ -304,7 +304,7 @@ async def patch_redo_record(
     if (fab.fab_type or "").strip().lower() != "ag redo":
         raise error_response("Record is not an AG redo FAB", 400)
 
-    now = datetime.now()
+    now = utc_now()
 
     if patch.no_of_pieces is not None:
         fab.no_of_pieces = patch.no_of_pieces
@@ -762,7 +762,7 @@ def _client_layout_sections(report_key: str, data: dict) -> Optional[list[tuple[
                 "report": "End of Month Shop Status",
                 "period_start": period.get("start_date"),
                 "period_end": period.get("end_date"),
-                "generated_at": datetime.now().isoformat(),
+                "generated_at": utc_now().isoformat(),
             }
         ]
 
@@ -2206,7 +2206,7 @@ async def get_owner_shop_status_report(
         "touchup": "touch up",
     }
 
-    now_dt = datetime.now()
+    now_dt = utc_now()
     stage_fab_map: dict[str, dict[int, dict]] = defaultdict(dict)
 
     non_shop_query = (
@@ -2812,7 +2812,7 @@ async def _get_shop_production_stage_counts(
     unplanned_fabs = 0
 
     fab_entries = []
-    now_dt = datetime.now()
+    now_dt = utc_now()
     shop_stage_order = {
         "unplanned": 0,
         "cut": 1,
@@ -3062,7 +3062,7 @@ async def get_owner_stalled_install_jobs_report(
     unassigned_count = 0
     overdue_count = 0
     due_today_count = 0
-    now_dt = datetime.now()
+    now_dt = utc_now()
 
     for (
         fab_id,
@@ -3408,7 +3408,7 @@ async def get_owner_install_performance_report(
                     InstallerRateHistory.installer_id.in_(installer_ids),
                     InstallerRateHistory.is_active.is_(True),
                     or_(InstallerRateHistory.effective_to.is_(None), InstallerRateHistory.effective_to >= (start_dt or datetime.min)),
-                    InstallerRateHistory.effective_from <= (end_dt or datetime.now()),
+                    InstallerRateHistory.effective_from <= (end_dt or utc_now()),
                 )
                 .order_by(InstallerRateHistory.installer_id, InstallerRateHistory.effective_from.desc())
             )
@@ -3490,7 +3490,7 @@ async def get_owner_weekly_trends_report(
         effective_to = to_date or from_date
         start_dt, end_dt = _range_bounds(effective_from, effective_to)
     else:
-        start_dt = datetime.now() - timedelta(days=weeks * 7)
+        start_dt = utc_now() - timedelta(days=weeks * 7)
         end_dt = None
 
     week_bucket = func.date_trunc(literal_column("'week'"), Fab.created_at)
@@ -3855,7 +3855,7 @@ async def update_owner_installation_template_dashboard(
                 templating_record.notes = [request.reason]
             if request.duration is not None:
                 templating_record.duration = request.duration
-            templating_record.updated_at = datetime.now()
+            templating_record.updated_at = utc_now()
             templating_record.updated_by = current_user.id
             db.add(templating_record)
 
@@ -3887,7 +3887,7 @@ async def update_owner_installation_template_dashboard(
                     timer_session.sqft_not_templated = request.sqft_not_templated
                 if request.total_work_seconds is not None:
                     timer_session.total_work_seconds = request.total_work_seconds
-                timer_session.updated_at = datetime.now()
+                timer_session.updated_at = utc_now()
                 timer_session.updated_by = current_user.id
                 db.add(timer_session)
                 updated_timer_session = timer_session
@@ -3912,7 +3912,7 @@ async def update_owner_installation_template_dashboard(
                 install_record.is_completed = request.activity_complete
             if request.reason is not None:
                 install_record.completion_notes = request.reason
-            install_record.updated_at = datetime.now()
+            install_record.updated_at = utc_now()
             install_record.updated_by = current_user.id
             db.add(install_record)
 
@@ -3945,7 +3945,7 @@ async def update_owner_installation_template_dashboard(
                     timer_session.sqft_not_installed = request.sqft_not_installed
                 if request.total_work_seconds is not None:
                     timer_session.total_work_seconds = request.total_work_seconds
-                timer_session.updated_at = datetime.now()
+                timer_session.updated_at = utc_now()
                 timer_session.updated_by = current_user.id
                 db.add(timer_session)
                 updated_timer_session = timer_session
@@ -4683,7 +4683,7 @@ async def get_owner_installation_template_dashboard_pdf(
     period_label = f"{period_from} – {period_to}" if period.get("from_date") or period.get("to_date") else "All time"
 
     story.append(Paragraph("Installation & Template Dashboard Report", title_style))
-    story.append(Paragraph(f"Period: {period_label}  |  Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", subtitle_style))
+    story.append(Paragraph(f"Period: {period_label}  |  Generated: {utc_now().strftime('%Y-%m-%d %H:%M')}", subtitle_style))
 
     active_filters = []
     if search:
@@ -4811,7 +4811,7 @@ async def get_owner_installation_template_dashboard_pdf(
     doc.build(story)
     buf.seek(0)
 
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = utc_now().strftime("%Y%m%d_%H%M%S")
     filename = f"installation_template_dashboard_{stamp}.pdf"
     return StreamingResponse(
         buf,
@@ -5765,7 +5765,7 @@ async def patch_owner_monthly_cut_completion(
     if not fab:
         raise error_response("Monthly cut completion record not found", 404)
 
-    now = datetime.now()
+    now = utc_now()
 
     if patch.revenue is not None:
         fab.revenue = round(patch.revenue, 2)
@@ -5849,7 +5849,7 @@ async def patch_owner_monthly_install_completion(
     if completion is None:
         raise error_response("Install completion record not found for this FAB", 404)
 
-    now = datetime.now()
+    now = utc_now()
 
     if patch.sq_ft is not None:
         completion.total_sqft_installed = f"{patch.sq_ft:.2f}"
@@ -5924,7 +5924,7 @@ async def patch_owner_daily_install_completion(
     if completion is None:
         raise error_response("Install completion record not found for this FAB", 404)
 
-    now = datetime.now()
+    now = utc_now()
 
     if patch.revenue is not None:
         fab.revenue = round(patch.revenue, 2)
@@ -6877,7 +6877,7 @@ async def get_owner_service_level_report(
             for user_id, first_name, last_name in user_rows
         }
 
-    now_dt = datetime.now()
+    now_dt = utc_now()
     for (
         fab_id,
         job_number,
@@ -7243,7 +7243,7 @@ async def create_installer_rate(
 
     for rate in open_rates:
         rate.effective_to = payload.effective_from
-        rate.updated_at = datetime.now()
+        rate.updated_at = utc_now()
         rate.updated_by = current_user.id
 
     new_rate = InstallerRateHistory(
@@ -7335,7 +7335,7 @@ async def create_service_level_setting(
         at_risk_days=payload.at_risk_days,
         is_applicable=payload.is_applicable,
         updated_by=current_user.id,
-        updated_at=datetime.now(),
+        updated_at=utc_now(),
     )
     db.add(row)
     await db.commit()
@@ -7377,7 +7377,7 @@ async def update_service_level_setting(
     if payload.is_applicable is not None:
         row.is_applicable = payload.is_applicable
 
-    row.updated_at = datetime.now()
+    row.updated_at = utc_now()
     row.updated_by = current_user.id
     await db.commit()
     await db.refresh(row)
@@ -7451,7 +7451,7 @@ async def get_owner_management_packet(
 
     return success_response(
         {
-            "generated_at": datetime.now().isoformat(),
+            "generated_at": utc_now().isoformat(),
             "period": {
                 "start_date": start_date.isoformat() if start_date else None,
                 "end_date": end_date.isoformat() if end_date else None,
@@ -7637,7 +7637,7 @@ async def export_owner_report(
     else:
         return success_response(None, f"Unsupported report_key '{report_key}'", status_code=400)
 
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = utc_now().strftime("%Y%m%d_%H%M%S")
     filename = f"{key}_{stamp}.{export_format}"
 
     if export_format == "json":

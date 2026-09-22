@@ -22,7 +22,7 @@ from src.app.service.hcp_payroll_ingestion import (
     ingest_hcp_payroll_report,
     preview_hcp_payroll_report,
 )
-from src.app.utils.helpers import error_response, success_response
+from src.app.utils.helpers import error_response, success_response, utc_now
 
 router = APIRouter(prefix="/hcp-payroll", tags=["HCP Payroll"])
 
@@ -164,7 +164,7 @@ async def update_setting(
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(setting, field, value)
     setting.updated_by = current_user.id
-    setting.updated_at = datetime.now()
+    setting.updated_at = utc_now()
     await db.commit()
     await db.refresh(setting)
     return success_response(_serialize_config(setting), "HCP payroll setting updated successfully")

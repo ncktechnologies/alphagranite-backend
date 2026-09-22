@@ -31,7 +31,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.middleware.jwt_auth import get_current_user
-from src.app.utils.helpers import error_response, success_response
+from src.app.utils.helpers import error_response, success_response, utc_now
 from src.app.utils.timer_guards import assert_no_active_timer_session
 from src.app.service.background import save_audit_event
 
@@ -315,7 +315,7 @@ async def start_installer_job_timer(
         )
 
     # Create new session
-    now = datetime.now()
+    now = utc_now()
     new_session = InstallerJobTimerSession(
         job_id=job_id,
         fab_id=fab_id,
@@ -391,7 +391,7 @@ async def pause_installer_job_timer(
     installer_role = await _resolve_role_for_timer_session(db, session, installer_id, fab_id)
     _enforce_lead_only_sqft(payload, installer_role)
     
-    now = datetime.now()
+    now = utc_now()
     
     old_status = session.status
     # Calculate time for current run segment
@@ -472,7 +472,7 @@ async def resume_installer_job_timer(
     installer_role = await _resolve_role_for_timer_session(db, session, installer_id, fab_id)
     _enforce_lead_only_sqft(payload, installer_role)
     
-    now = datetime.now()
+    now = utc_now()
     
     old_status = session.status
     # Calculate pause time
@@ -557,7 +557,7 @@ async def stop_installer_job_timer(
     _enforce_lead_only_sqft(payload, installer_role)
     _enforce_required_sqft_on_stop(payload, installer_role)
     
-    now = datetime.now()
+    now = utc_now()
     
     old_status = session.status
     # Calculate remaining time
@@ -643,7 +643,7 @@ async def get_installer_job_timer_state(
     
     # Add current running time
     if latest and latest.status == "running" and latest.current_run_start_at:
-        run_time = (datetime.now() - latest.current_run_start_at).total_seconds()
+        run_time = (utc_now() - latest.current_run_start_at).total_seconds()
         total_seconds += int(run_time)
 
     latest_note = None
@@ -785,7 +785,7 @@ async def start_templater_job_timer(
         await assert_no_active_timer_session(db, templater_id)
 
     # Create new session
-    now = datetime.now()
+    now = utc_now()
     new_session = TemplaterJobTimerSession(
         job_id=job_id,
         fab_id=fab_id,
@@ -857,7 +857,7 @@ async def pause_templater_job_timer(
     if not session:
         raise error_response("No active timer found for this templater and job", 404)
     
-    now = datetime.now()
+    now = utc_now()
     
     old_status = session.status
     # Calculate time for current run segment
@@ -935,7 +935,7 @@ async def resume_templater_job_timer(
     if not session:
         raise error_response("No paused timer found for this templater and job", 404)
     
-    now = datetime.now()
+    now = utc_now()
     
     old_status = session.status
     # Calculate pause time
@@ -1010,7 +1010,7 @@ async def stop_templater_job_timer(
     if not session:
         raise error_response("No active timer found for this templater and job", 404)
     
-    now = datetime.now()
+    now = utc_now()
     
     old_status = session.status
     # Calculate remaining time
@@ -1096,7 +1096,7 @@ async def get_templater_job_timer_state(
     
     # Add current running time
     if latest and latest.status == "running" and latest.current_run_start_at:
-        run_time = (datetime.now() - latest.current_run_start_at).total_seconds()
+        run_time = (utc_now() - latest.current_run_start_at).total_seconds()
         total_seconds += int(run_time)
     
     latest_note = None

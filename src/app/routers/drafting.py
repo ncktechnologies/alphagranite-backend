@@ -28,7 +28,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
-from src.app.utils.helpers import error_response, success_response, strip_timezone, utc_now, datetime_to_iso
+from src.app.utils.helpers import error_response, success_response, strip_timezone, utc_now, datetime_to_iso, to_utc
 from src.app.utils.timer_guards import assert_no_active_timer_session
 
 logger = logging.getLogger(__name__)
@@ -37,9 +37,7 @@ router = APIRouter()
 
 
 def strip_timezone(dt: datetime) -> datetime:
-    if dt is not None and dt.tzinfo is not None:
-        return dt.replace(tzinfo=None)
-    return dt
+    return to_utc(dt) if isinstance(dt, datetime) else dt
 
 # ============ DRAFTING SESSION ENDPOINTS ============
 

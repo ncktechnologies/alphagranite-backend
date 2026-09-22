@@ -1032,7 +1032,7 @@ async def create_fab(
         next_stage=next_stage,
         status_id=1,
         created_by=current_user.id,
-        created_at=datetime.now()
+        created_at=utc_now()
     )
     
     db.add(fab)
@@ -2574,7 +2574,7 @@ async def update_fab(
         # New drafter assigned
         fab.drafter_id = fab_data.drafter_id
         fab.drafter_assigned_by = current_user.id
-        fab.drafter_assigned_at = datetime.now()
+        fab.drafter_assigned_at = utc_now()
         fab.drafting_needed = True  # Set drafting_needed to True when drafter assigned
     
     for field, value in update_data.items():
@@ -2592,7 +2592,7 @@ async def update_fab(
             slab_smith_cust_needed=getattr(fab, "slab_smith_cust_needed", None),
         )
     
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     
     # Create FabNotes entry if notes provided
@@ -2602,7 +2602,7 @@ async def update_fab(
             stage=note_stage,
             note=note_text,
             created_by=current_user.id,
-            created_at=datetime.now()
+            created_at=utc_now()
         )
         db.add(fab_note)
     
@@ -2629,7 +2629,7 @@ async def delete_fab(
     
     # Soft delete by setting status to deleted (assuming status_id 3 is deleted)
     fab.status_id = 3  # Deleted status
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     
     await db.commit()
@@ -3707,7 +3707,7 @@ async def update_fab_stage(
         slab_smith_ag_needed=fab.slab_smith_ag_needed,
         slab_smith_cust_needed=getattr(fab, "slab_smith_cust_needed", None),
     )
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     
     await db.commit()
@@ -6069,7 +6069,7 @@ async def update_fab_cost_of_stone(
         revenue_value = 0.0
     fab.gp = round(revenue_value - cost_value, 2)
 
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = current_user.id
 
     await db.commit()

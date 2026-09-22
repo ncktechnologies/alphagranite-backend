@@ -22,7 +22,7 @@ from src.app.interface.business_schemas import (
     EarliestAvailabilityItem
 )
 from src.app.middleware.jwt_auth import get_current_user
-from src.app.utils.helpers import error_response, success_response
+from src.app.utils.helpers import error_response, success_response, utc_now, to_utc
 from src.app.database.work_station import WorkStation
 from src.app.interface.generated_schemas import PlanningSection, ShopRevision
 from src.app.database.business_job import BusinessJob
@@ -89,8 +89,8 @@ async def create_shop_plans(
             for i in range(len(stages_by_seq) - 1):
                 curr = stages_by_seq[i]
                 nxt = stages_by_seq[i + 1]
-                curr_start = curr.scheduled_start.replace(tzinfo=None) if curr.scheduled_start.tzinfo else curr.scheduled_start
-                nxt_start = nxt.scheduled_start.replace(tzinfo=None) if nxt.scheduled_start.tzinfo else nxt.scheduled_start
+                curr_start = to_utc(curr.scheduled_start)
+                nxt_start = to_utc(nxt.scheduled_start)
                 if curr_start > nxt_start:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
@@ -148,8 +148,8 @@ async def create_shop_plans(
             derived_cut_type = planning_section.plan_name.lower().strip()
             derived_stage_name = planning_section.plan_name.strip()
 
-            scheduled_start = stage.scheduled_start.replace(tzinfo=None) if stage.scheduled_start and stage.scheduled_start.tzinfo else stage.scheduled_start
-            scheduled_end = stage.scheduled_end.replace(tzinfo=None) if stage.scheduled_end and stage.scheduled_end.tzinfo else stage.scheduled_end
+            scheduled_start = to_utc(stage.scheduled_start)
+            scheduled_end = to_utc(stage.scheduled_end)
             _validate_manual_schedule_interval(scheduled_start, stage.estimated_hours)
             if scheduled_end is not None and scheduled_end <= scheduled_start:
                 raise HTTPException(
@@ -189,7 +189,7 @@ async def create_shop_plans(
                     sequence=stage.sequence,
                     notes=stage.notes,
                     created_by=current_user.id,
-                    created_at=datetime.now()
+                    created_at=utc_now()
                 )
                 db.add(plan)
                 created_plans.append(plan)
@@ -198,7 +198,7 @@ async def create_shop_plans(
             fab_id=plan_data.fab_id,
             note=f"Shop cut plan created. status_id={plan_data.status_id}",
             created_by=current_user.id,
-            created_at=datetime.now()
+            created_at=utc_now()
         )
         db.add(shop_note)
 
@@ -301,7 +301,7 @@ async def get_all_shop_plans(
     if reference_date is not None:
         target_date = reference_date
     elif month is not None or year is not None:
-        now = datetime.now()
+        now = utc_now()
         target_month = month or now.month
         target_year = year or now.year
         _validate_month_year(target_month, target_year)
@@ -364,7 +364,7 @@ async def get_shop_plans_by_fab_id(
     current_user: User = Depends(get_current_user)
 ):
     """Get shop plans by FAB id (grouped by date, unscheduled first)."""
-    now = datetime.now()
+    now = utc_now()
     target_month = month or now.month
     target_year = year or now.year
     _validate_month_year(target_month, target_year)
@@ -437,7 +437,7 @@ async def get_shop_plan(
     work_percentage, total_actual_hours, total_actual_seconds = await _recalculate_shop_plan_work_percentage(
         db=db,
         plan=plan,
-        as_of=datetime.now().replace(second=0, microsecond=0),
+        as_of=utc_now().replace(second=0, microsecond=0),
     )
     
     ws_result = await db.execute(select(WorkStation).where(WorkStation.id == plan.workstation_id))
@@ -535,12 +535,12 @@ async def update_shop_plan(
             )
 
         scheduled_start = (
-            stage.scheduled_start.replace(tzinfo=None)
+            to_utc(stage.scheduled_start)
             if stage.scheduled_start and stage.scheduled_start.tzinfo
             else stage.scheduled_start
         )
         scheduled_end = (
-            stage.scheduled_end.replace(tzinfo=None)
+            to_utc(stage.scheduled_end)
             if stage.scheduled_end and stage.scheduled_end.tzinfo
             else stage.scheduled_end
         )
@@ -571,14 +571,14 @@ async def update_shop_plan(
         plan.notes = update_data.notes
         if update_data.work_percentage is not None:
             plan.work_percentage = int(update_data.work_percentage)
-        plan.updated_at = datetime.now()
+        plan.updated_at = utc_now()
         plan.updated_by = current_user.id
 
         shop_note = ShopNotes(
             fab_id=plan.fab_id,
             note=f"Shop cut plan updated. status_id={update_data.status_id}",
             created_by=current_user.id,
-            created_at=datetime.now()
+            created_at=utc_now()
         )
         db.add(shop_note)
 
@@ -700,7 +700,7 @@ async def unschedule_shop_plan(
 
         plan.scheduled_start_date = None
         plan.scheduled_end_date = None
-        plan.updated_at = datetime.now()
+        plan.updated_at = utc_now()
         plan.updated_by = current_user.id
 
         await db.commit()
@@ -746,8 +746,8 @@ async def reschedule_shop_plan(
                 detail=f"Shop plan with ID {plan_id} not found"
             )
 
-        scheduled_start = payload.scheduled_start.replace(tzinfo=None) if payload.scheduled_start.tzinfo else payload.scheduled_start
-        scheduled_end = payload.scheduled_end.replace(tzinfo=None) if payload.scheduled_end and payload.scheduled_end.tzinfo else payload.scheduled_end
+        scheduled_start = to_utc(payload.scheduled_start)
+        scheduled_end = to_utc(payload.scheduled_end)
         _validate_manual_schedule_interval(scheduled_start, plan.estimated_hours)
         if scheduled_end is not None and scheduled_end <= scheduled_start:
             raise HTTPException(
@@ -766,7 +766,7 @@ async def reschedule_shop_plan(
         )
         plan.scheduled_start_date = scheduled_start
         plan.scheduled_end_date = scheduled_end
-        plan.updated_at = datetime.now()
+        plan.updated_at = utc_now()
         plan.updated_by = current_user.id
 
         await db.commit()
@@ -875,7 +875,7 @@ async def manage_shop_cut_plan_timer(
                 detail="work_percentage is required when action is pause or stop",
             )
 
-        action_ts = _normalize_naive_dt(payload.timestamp) if payload.timestamp else datetime.now().replace(second=0, microsecond=0)
+        action_ts = _normalize_naive_dt(payload.timestamp) if payload.timestamp else utc_now().replace(second=0, microsecond=0)
 
         plan_result = await db.execute(select(ShopCutPlan).where(ShopCutPlan.id == plan_id))
         plan = plan_result.scalar_one_or_none()
@@ -909,7 +909,7 @@ async def manage_shop_cut_plan_timer(
                 current_run_start_at=action_ts,
                 total_work_seconds=0,
                 total_pause_seconds=0,
-                created_at=datetime.now(),
+                created_at=utc_now(),
                 created_by=current_user.id,
             )
             db.add(session)
@@ -942,7 +942,7 @@ async def manage_shop_cut_plan_timer(
             active_session.status = "paused"
             active_session.current_run_start_at = None
             active_session.current_pause_start_at = action_ts
-            active_session.updated_at = datetime.now()
+            active_session.updated_at = utc_now()
             active_session.updated_by = current_user.id
 
             db.add(
@@ -968,7 +968,7 @@ async def manage_shop_cut_plan_timer(
             active_session.status = "running"
             active_session.current_pause_start_at = None
             active_session.current_run_start_at = action_ts
-            active_session.updated_at = datetime.now()
+            active_session.updated_at = utc_now()
             active_session.updated_by = current_user.id
 
             db.add(
@@ -1002,7 +1002,7 @@ async def manage_shop_cut_plan_timer(
             active_session.current_run_start_at = None
             active_session.current_pause_start_at = None
             active_session.stopped_at = action_ts
-            active_session.updated_at = datetime.now()
+            active_session.updated_at = utc_now()
             active_session.updated_by = current_user.id
 
             db.add(
@@ -1042,7 +1042,7 @@ async def manage_shop_cut_plan_timer(
         operator = operator_result.scalar_one_or_none()
 
         plan.work_percentage = work_percentage
-        plan.updated_at = datetime.now()
+        plan.updated_at = utc_now()
         plan.updated_by = current_user.id
 
         await db.commit()
@@ -1099,7 +1099,7 @@ async def get_shop_cut_plan_timer_state(
     )
     latest = latest_result.scalars().first()
 
-    now_ts = datetime.now().replace(second=0, microsecond=0)
+    now_ts = utc_now().replace(second=0, microsecond=0)
     _, total_actual_hours, total_actual_seconds = await _recalculate_shop_plan_work_percentage(
         db=db,
         plan=plan,
@@ -1238,7 +1238,7 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
         work_percentage, total_actual_hours, total_actual_seconds = await _recalculate_shop_plan_work_percentage(
             db=db,
             plan=plan,
-            as_of=datetime.now().replace(second=0, microsecond=0),
+            as_of=utc_now().replace(second=0, microsecond=0),
         )
         # Calendar view should reflect the persisted plan progress updated by
         # operator task PATCH immediately, while still exposing timer totals.
@@ -1389,7 +1389,7 @@ async def _get_current_plan_stage_by_fab(db: AsyncSession, fab_ids: List[int]) -
         plans_by_fab.setdefault(plan.fab_id, []).append(plan)
 
     result: Dict[int, Optional[str]] = {}
-    now_floor = datetime.now().replace(second=0, microsecond=0)
+    now_floor = utc_now().replace(second=0, microsecond=0)
 
     for fab_id, fab_plans in plans_by_fab.items():
         current_stage_name: Optional[str] = None
@@ -1412,7 +1412,7 @@ async def _get_current_plan_stage_by_fab(db: AsyncSession, fab_ids: List[int]) -
 
 
 def _normalize_naive_dt(value: datetime) -> datetime:
-    return value.replace(tzinfo=None) if value and value.tzinfo else value
+    return to_utc(value)
 
 def _compute_lunch_adjusted_end(start: datetime, hours: float) -> datetime:
     """Return the real end time, automatically adding the 1-hour lunch gap when
@@ -1522,9 +1522,9 @@ def _format_scheduled_time_range(
     try:
         # Normalize to naive datetimes if needed
         if start.tzinfo:
-            start = start.replace(tzinfo=None)
+            start = to_utc(start)
         if end.tzinfo:
-            end = end.replace(tzinfo=None)
+            end = to_utc(end)
         
         # Format time portion (e.g., "10:00 AM", "2:30 PM")
         start_time = start.strftime("%-I:%M %p").lstrip("0")  # "10:00 AM" or "2:30 PM" (not "02:30")
@@ -1982,6 +1982,8 @@ async def suggest_shop_plan_slots(
 
 
 def _intervals_overlap(start_a: datetime, end_a: datetime, start_b: datetime, end_b: datetime) -> bool:
+    # Inputs may mix naive and aware values; normalize before comparing.
+    start_a, end_a, start_b, end_b = (to_utc(start_a), to_utc(end_a), to_utc(start_b), to_utc(end_b))
     return start_a < end_b and end_a > start_b
 
 
@@ -2189,7 +2191,7 @@ async def get_earliest_availability(
         if len(sequences) != len(set(sequences)):
             raise HTTPException(status_code=400, detail="sequence values must be unique")
 
-        start_from = _normalize_naive_dt(payload.start_from) if payload.start_from else datetime.now().replace(second=0, microsecond=0)
+        start_from = _normalize_naive_dt(payload.start_from) if payload.start_from else utc_now().replace(second=0, microsecond=0)
         start_from = _align_to_slot(start_from, payload.slot_minutes)
         start_from = _next_business_start(start_from)
         start_from = _align_to_slot(start_from, payload.slot_minutes)

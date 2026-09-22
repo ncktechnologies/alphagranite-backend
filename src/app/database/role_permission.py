@@ -1,6 +1,7 @@
 from typing import Optional
 from datetime import datetime
 from sqlmodel import SQLModel, Field, Relationship
+from src.app.utils.helpers import utc_now
 
 class RolePermission(SQLModel, table=True):
     __tablename__ = "role_permissions"
@@ -9,5 +10,5 @@ class RolePermission(SQLModel, table=True):
     permission_id: int = Field(foreign_key="permissions.id")
     role_id: int = Field(foreign_key="roles.id")
     action_menu_id: Optional[int] = Field(foreign_key="action_menus.id", default=None)
-    created_at: datetime = Field(default_factory=datetime.now)
-    updated_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)

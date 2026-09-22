@@ -1,6 +1,6 @@
 fastapi
 uvicorn[standard]
-sqlmodel
+sqlmodel==0.0.46
 asyncpg
 python-dotenv
 pytest

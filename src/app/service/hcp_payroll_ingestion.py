@@ -26,6 +26,7 @@ from src.app.hcp_payroll_parser import (
     parse_hcp_staff_roster,
 )
 from src.app.utils.config import SessionLocal
+from src.app.utils.helpers import utc_now
 
 logger = logging.getLogger("hcp_payroll_ingestion")
 
@@ -138,7 +139,7 @@ async def ingest_hcp_payroll_report(
         access_token, token_data = await _fetch_access_token(config)
         run.token_request_url = _join_url(config.base_url, f"/ta/rest/v2/companies/{config.company_id}/oauth2/token")
         run.token_response_json = token_data
-        run.token_acquired_at = datetime.now()
+        run.token_acquired_at = utc_now()
         run.token_expires_in = int(token_data.get("expires_in") or 0) if token_data.get("expires_in") is not None else None
         await db.commit()
 
@@ -154,7 +155,7 @@ async def ingest_hcp_payroll_report(
 
         run.row_count = result["row_count"]
         run.status = "completed"
-        run.finished_at = datetime.now()
+        run.finished_at = utc_now()
         await db.commit()
         await db.refresh(run)
 
@@ -162,7 +163,7 @@ async def ingest_hcp_payroll_report(
     except Exception as exc:
         run.status = "failed"
         run.error_message = str(exc)
-        run.finished_at = datetime.now()
+        run.finished_at = utc_now()
         await db.commit()
         logger.exception("Failed to ingest HCP payroll report for config %s", config.id)
         raise
@@ -230,7 +231,7 @@ async def _store_staff_roster(
         report_settings_id=config.report_settings_id,
         payload_format="csv",
         raw_payload_text=raw_report_text,
-        pulled_at=datetime.now(),
+        pulled_at=utc_now(),
         row_count=len(parsed_rows),
         active_employee_count=len(active_rows),
     )
@@ -320,7 +321,7 @@ async def _scheduler_loop() -> None:
     global _last_trigger_keys
 
     while True:
-        now = datetime.now()
+        now = utc_now()
         trigger_key = now.strftime("%Y-%m-%d %H:%M")
 
         async with SessionLocal() as db:

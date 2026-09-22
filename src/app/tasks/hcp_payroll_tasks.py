@@ -13,6 +13,7 @@ from src.app.service.hcp_payroll_ingestion import (
 )
 from src.app.tasks.celery_app import celery_app
 from src.app.utils.config import DATABASE_URL
+from src.app.utils.helpers import utc_now
 
 logger = logging.getLogger("hcp_payroll_tasks")
 
@@ -50,7 +51,7 @@ def ingest_config_task(self, source_config_id: int) -> dict:
 
 @celery_app.task(name="hcp_payroll.dispatch_due_ingestions")
 def dispatch_due_ingestions_task() -> dict:
-    now = datetime.now()
+    now = utc_now()
 
     async def _collect(session: AsyncSession) -> list[int]:
         configs = await get_active_configs(session)

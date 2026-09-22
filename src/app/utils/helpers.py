@@ -49,29 +49,25 @@ async def call_service(
         raise error_response("Internal server error", 500)
 
 def strip_timezone(dt: Optional[datetime]) -> Optional[datetime]:
+    """Normalize a datetime to aware UTC for database storage.
+
+    Name kept for backwards compatibility; SQLModel now requires aware values.
     """
-    Convert datetime to UTC and remove timezone info for database storage.
-    PostgreSQL stores timestamps without timezone by default.
-    """
-    if dt is None:
-        return None
-    
-    # If timezone-aware, convert to UTC
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(timezone.utc)
-    
-    # Remove timezone info for database storage
-    return dt.replace(tzinfo=None)
+    return to_utc(dt)
 
 # Add this utility
 def utc_now() -> datetime:
-    """Get current UTC time as naive datetime for database storage"""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
-def utc_now_aware() -> datetime:
-    """Current UTC time for columns declared TIMESTAMP WITH TIME ZONE (e.g. users)."""
+    """Current UTC time, timezone-aware (SQLModel requires aware datetimes)."""
     return datetime.now(timezone.utc)
+
+
+def to_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """Normalize any datetime to aware UTC; naive input is assumed to be UTC."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 def datetime_to_iso(dt: Optional[datetime]) -> Optional[str]:
     """

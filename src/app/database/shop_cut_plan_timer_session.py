@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlmodel import SQLModel, Field
+from src.app.utils.helpers import utc_now
 
 
 class ShopCutPlanTimerSession(SQLModel, table=True):
@@ -21,7 +22,7 @@ class ShopCutPlanTimerSession(SQLModel, table=True):
     total_pause_seconds: int = Field(default=0)
     work_percentage: int = Field(default=0)
 
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
     created_by: int = Field(foreign_key="users.id")
     updated_at: Optional[datetime] = None
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")

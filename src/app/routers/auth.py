@@ -19,7 +19,7 @@ from src.app.utils.config import ADMIN_EMAIL, SUPPORT_EMAIL
 from src.app.interface.response_wrappers import SuccessResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from src.app.service.background import send_notification, save_audit_trail
-from src.app.utils.helpers import call_service, success_response, error_response, utc_now_aware
+from src.app.utils.helpers import call_service, success_response, error_response, utc_now
 from fastapi import APIRouter, Depends, Request, BackgroundTasks, HTTPException, status
 
 # Import database session dependency
@@ -574,7 +574,7 @@ async def reset_password(
             raise error_response("No valid verification code found. Please request a new one.", 400)
 
         # Check if the verification code is expired
-        if datetime.now() > otp_record.expires_at:
+        if utc_now() > otp_record.expires_at:
             await db.delete(otp_record)
             await db.commit()
             raise error_response("Verification code has expired. Please request a new one.", 400)
@@ -616,7 +616,7 @@ async def reset_password(
                     <li><strong>User:</strong> {user.first_name} {user.last_name}</li>
                     <li><strong>Username:</strong> {user.username}</li>
                     <li><strong>Email:</strong> {user.email}</li>
-                    <li><strong>Completion Time:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</li>
+                    <li><strong>Completion Time:</strong> {utc_now().strftime('%Y-%m-%d %H:%M:%S')}</li>
                 </ul>
             </body>
         </html>
@@ -783,7 +783,7 @@ async def update_user_profile(
                     new_user_role = UserRole(
                         user_id=current_user.id,
                         role_id=profile_data.role_id,
-                        created_at=datetime.now()
+                        created_at=utc_now()
                     )
                     db.add(new_user_role)
                     await db.flush()  # Flush to ensure UserRole is created
@@ -798,7 +798,7 @@ async def update_user_profile(
             if value is not None:  # Only update fields that were included in the request
                 setattr(current_user, field, value)
 
-        current_user.updated_at = utc_now_aware()
+        current_user.updated_at = utc_now()
         db.add(current_user)
         await db.commit()
         await db.refresh(current_user)

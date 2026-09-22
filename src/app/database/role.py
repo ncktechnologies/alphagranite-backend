@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional, List, TYPE_CHECKING
 from sqlmodel import SQLModel, Field, Relationship
+from src.app.utils.helpers import utc_now
 
 if TYPE_CHECKING:
     from .permission import Permission
@@ -14,8 +15,8 @@ class Role(SQLModel, table=True):
     name: str = Field(index=True, unique=True, max_length=255)
     description: Optional[str] = Field(default=None, max_length=255)
     status: int = Field(foreign_key="status.value_id")
-    created_at: datetime = Field(default_factory=datetime.now)
-    updated_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
     # Relationships
     users: List["UserRole"] = Relationship(back_populates="role")
     

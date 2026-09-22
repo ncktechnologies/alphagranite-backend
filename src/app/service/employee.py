@@ -22,6 +22,7 @@ from src.app.utils.constants import (
     MSG_EMPLOYEE_NOT_FOUND,
 )
 from src.app.service.background import save_audit_trail, send_notification
+from src.app.utils.helpers import utc_now
 
 logger = logging.getLogger("employee_service")
 
@@ -98,8 +99,8 @@ class EmployeeService:
                 status=1,
                 is_super_admin=False,
                 is_first_login=True,
-                created_at=datetime.now(),
-                updated_at=datetime.now()
+                created_at=utc_now(),
+                updated_at=utc_now()
             )
 
             db.add(new_employee)
@@ -113,7 +114,7 @@ class EmployeeService:
                     user_role = UserRole(
                         user_id=new_employee.id,
                         role_id=data.role_id,
-                        created_at=datetime.now()
+                        created_at=utc_now()
                     )
                     db.add(user_role)
                     await db.commit()
@@ -238,7 +239,7 @@ class EmployeeService:
                     new_user_role = UserRole(
                         user_id=employee.id,
                         role_id=data.role_id,
-                        created_at=datetime.now(),
+                        created_at=utc_now(),
                     )
                     db.add(new_user_role)
                     logger.info(f"[UPDATE] Updated UserRole for user {employee.id} to role {data.role_id}")
@@ -256,7 +257,7 @@ class EmployeeService:
             employee.hcp_employee_id = final_hcp_employee_id
             logger.info(f"[UPDATE] Setting hcp_employee_id to {final_hcp_employee_id}")
         
-        employee.updated_at = datetime.now()
+        employee.updated_at = utc_now()
         
         logger.info(f"[UPDATE] home_address before commit: '{employee.home_address}'")
         
@@ -296,7 +297,7 @@ class EmployeeService:
         
         old_status = employee.status
         employee.status = status_id
-        employee.updated_at = datetime.now()
+        employee.updated_at = utc_now()
         
         try:
             db.add(employee)
@@ -355,7 +356,7 @@ class EmployeeService:
                 
                 old_status = employee.status
                 employee.status = status_id
-                employee.updated_at = datetime.now()
+                employee.updated_at = utc_now()
                 
                 db.add(employee)
                 success_ids.append(emp_id)
