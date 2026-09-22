@@ -29,7 +29,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
-from src.app.utils.helpers import error_response, success_response, utc_now
+from src.app.utils.helpers import error_response, success_response, utc_now, to_utc
 from src.app.database.templating import Templating
 from src.app.routers.fabs import (
     _build_fab_list_query,
@@ -619,9 +619,9 @@ async def get_pending_slabsmith_fab_ids(
             start = add_months(month_start(today), 1)
             end = add_months(start, 1)
         if start is not None:
-            start_dt = datetime.combine(start, datetime.min.time())
+            start_dt = to_utc(datetime.combine(start, datetime.min.time()))
             if end is not None:
-                end_dt = datetime.combine(end, datetime.min.time())
+                end_dt = to_utc(datetime.combine(end, datetime.min.time()))
                 filters.append(Fab.draft_completed_date >= start_dt)
                 filters.append(Fab.draft_completed_date < end_dt)
             else:
@@ -631,9 +631,9 @@ async def get_pending_slabsmith_fab_ids(
         raise error_response("draft_completed_start cannot be after draft_completed_end", 400)
 
     if draft_completed_start:
-        filters.append(Fab.draft_completed_date >= datetime.combine(draft_completed_start, datetime.min.time()))
+        filters.append(Fab.draft_completed_date >= to_utc(datetime.combine(draft_completed_start, datetime.min.time())))
     if draft_completed_end:
-        filters.append(Fab.draft_completed_date < datetime.combine(draft_completed_end + timedelta(days=1), datetime.min.time()))
+        filters.append(Fab.draft_completed_date < to_utc(datetime.combine(draft_completed_end + timedelta(days=1), datetime.min.time())))
 
     # FAB Type filter
     if fab_type:

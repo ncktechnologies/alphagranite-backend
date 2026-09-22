@@ -4,7 +4,7 @@ from sqlmodel import Session, select
 from src.app.utils.config import get_db
 from fastapi import APIRouter, Depends, Form
 from src.app.interface.generated_schemas import OperationWorkflow, ShopPlanningSection
-from src.app.utils.helpers import success_response, error_response, utc_now
+from src.app.utils.helpers import success_response, error_response, utc_now, to_utc
 
 router = APIRouter()
 
@@ -21,8 +21,8 @@ def create_operator_workflow(
 ):
     workflow = OperationWorkflow(
         shop_planning_sections=shop_planning_sections,
-        started_at=datetime.fromisoformat(started_at),
-        finished_at=datetime.fromisoformat(finished_at),
+        started_at=to_utc(datetime.fromisoformat(started_at)),
+        finished_at=to_utc(datetime.fromisoformat(finished_at)),
         total_sqft_done=total_sqft_done,
         reason_for_pause=reason_for_pause,
         notes=notes,
@@ -50,8 +50,8 @@ def update_operator_workflow(
     if not workflow:
         raise error_response("Operator workflow not found", 404)
     workflow.shop_planning_sections = shop_planning_sections
-    workflow.started_at = datetime.fromisoformat(started_at)
-    workflow.finished_at = datetime.fromisoformat(finished_at)
+    workflow.started_at = to_utc(datetime.fromisoformat(started_at))
+    workflow.finished_at = to_utc(datetime.fromisoformat(finished_at))
     workflow.total_sqft_done = total_sqft_done
     workflow.reason_for_pause = reason_for_pause
     workflow.notes = notes

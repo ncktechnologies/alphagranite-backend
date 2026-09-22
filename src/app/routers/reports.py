@@ -38,7 +38,7 @@ from src.app.interface.response_wrappers import SuccessResponse, success_respons
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.routers.fabs import FAB_STAGES, PUNCHOUT_REDIRECT_FAB_TYPES, _active_shop_cut_plan_visibility_filter, _get_shop_current_stage, _pending_cnc_widget_filter, _stage_filter_condition
 from src.app.service.monthly_end_of_month_status_report import send_monthly_end_of_month_status_report
-from src.app.utils.helpers import error_response, utc_now
+from src.app.utils.helpers import error_response, utc_now, to_utc
 
 router = APIRouter()
 
@@ -440,8 +440,8 @@ async def patch_redo_record(
 
 
 def _range_bounds(start_date: Optional[date], end_date: Optional[date]) -> tuple[Optional[datetime], Optional[datetime]]:
-    start_dt = datetime.combine(start_date, time.min) if start_date else None
-    end_dt = datetime.combine(end_date, time.max) if end_date else None
+    start_dt = to_utc(datetime.combine(start_date, time.min)) if start_date else None
+    end_dt = to_utc(datetime.combine(end_date, time.max)) if end_date else None
     return start_dt, end_dt
 
 
@@ -451,7 +451,7 @@ def _month_bounds(year: int, month: int) -> tuple[datetime, datetime]:
         end_dt = datetime(year + 1, 1, 1) - timedelta(microseconds=1)
     else:
         end_dt = datetime(year, month + 1, 1) - timedelta(microseconds=1)
-    return start_dt, end_dt
+    return to_utc(start_dt), to_utc(end_dt)
 
 
 def _parse_month_input(month_value: str) -> Optional[int]:
@@ -938,8 +938,8 @@ async def get_owner_weekly_fabrication_labor_cost_report(
             week_start = window["week_start"]
             week_end = window["week_end"]
             week_key = week_end.isoformat()
-            week_start_dt = datetime.combine(week_start, time.min)
-            week_end_dt = datetime.combine(week_end, time.max)
+            week_start_dt = to_utc(datetime.combine(week_start, time.min))
+            week_end_dt = to_utc(datetime.combine(week_end, time.max))
 
             cut_metrics = (
                 await db.execute(
@@ -1190,8 +1190,8 @@ async def get_owner_weekly_installer_labor_cost_report(
             week_start = window["week_start"]
             week_end = window["week_end"]
             week_key = week_end.isoformat()
-            week_start_dt = datetime.combine(week_start, time.min)
-            week_end_dt = datetime.combine(week_end, time.max)
+            week_start_dt = to_utc(datetime.combine(week_start, time.min))
+            week_end_dt = to_utc(datetime.combine(week_end, time.max))
 
             install_sqft_row = (
                 await db.execute(
@@ -2880,7 +2880,7 @@ async def _get_shop_production_stage_counts(
         stale_days = None
         if updated_at_raw:
             try:
-                updated_dt = datetime.fromisoformat(updated_at_raw)
+                updated_dt = to_utc(datetime.fromisoformat(updated_at_raw))
                 stale_days = max((now_dt.date() - updated_dt.date()).days, 0)
             except Exception:
                 stale_days = None
@@ -3407,7 +3407,7 @@ async def get_owner_install_performance_report(
                 .where(
                     InstallerRateHistory.installer_id.in_(installer_ids),
                     InstallerRateHistory.is_active.is_(True),
-                    or_(InstallerRateHistory.effective_to.is_(None), InstallerRateHistory.effective_to >= (start_dt or datetime.min)),
+                    or_(InstallerRateHistory.effective_to.is_(None), InstallerRateHistory.effective_to >= (start_dt or to_utc(datetime.min))),
                     InstallerRateHistory.effective_from <= (end_dt or utc_now()),
                 )
                 .order_by(InstallerRateHistory.installer_id, InstallerRateHistory.effective_from.desc())

@@ -38,7 +38,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.interface.response_wrappers import SuccessResponse, error_response, success_response
 from src.app.middleware.jwt_auth import get_current_user
-from src.app.utils.helpers import utc_now
+from src.app.utils.helpers import utc_now, to_utc
 
 
 
@@ -347,7 +347,7 @@ def _compute_fab_progress_fields(plans: List[dict]) -> tuple[Optional[str], floa
         scheduled_end = p.get("scheduled_end_date")
         if scheduled_end:
             try:
-                candidate_end = scheduled_end if isinstance(scheduled_end, datetime) else datetime.fromisoformat(str(scheduled_end))
+                candidate_end = scheduled_end if isinstance(scheduled_end, datetime) else to_utc(datetime.fromisoformat(str(scheduled_end)))
             except Exception:
                 candidate_end = None
         if candidate_end is None:
@@ -355,7 +355,7 @@ def _compute_fab_progress_fields(plans: List[dict]) -> tuple[Optional[str], floa
             estimated_hours = p.get("estimated_hours")
             if scheduled_start:
                 try:
-                    start_dt = datetime.fromisoformat(scheduled_start)
+                    start_dt = to_utc(datetime.fromisoformat(scheduled_start))
                     if estimated_hours is not None:
                         candidate_end = start_dt + timedelta(hours=float(estimated_hours))
                     else:
@@ -366,7 +366,7 @@ def _compute_fab_progress_fields(plans: List[dict]) -> tuple[Optional[str], floa
         # fallback to actual_end_date if needed
         if candidate_end is None and p.get("actual_end_date"):
             try:
-                candidate_end = datetime.fromisoformat(p["actual_end_date"])
+                candidate_end = to_utc(datetime.fromisoformat(p["actual_end_date"]))
             except Exception:
                 candidate_end = None
 
@@ -395,7 +395,7 @@ def _coalesce_shop_est_completion_date(
                 candidate_end = (
                     scheduled_end
                     if isinstance(scheduled_end, datetime)
-                    else datetime.fromisoformat(str(scheduled_end))
+                    else to_utc(datetime.fromisoformat(str(scheduled_end)))
                 )
             except Exception:
                 candidate_end = None
@@ -407,7 +407,7 @@ def _coalesce_shop_est_completion_date(
                 start_dt = (
                     scheduled_start
                     if isinstance(scheduled_start, datetime)
-                    else datetime.fromisoformat(str(scheduled_start))
+                    else to_utc(datetime.fromisoformat(str(scheduled_start)))
                 )
             except Exception:
                 continue
@@ -2005,7 +2005,7 @@ async def get_fabs_with_shop_est_completion(
             ecd = f.get("estimated_completion_date")
             if ecd:
                 try:
-                    dt = datetime.fromisoformat(ecd)
+                    dt = to_utc(datetime.fromisoformat(ecd))
                     month_key = dt.strftime("%Y-%m")
                     month_label = dt.strftime("%B %Y")   # e.g. "April 2026"
                     day_key = f"{dt.month}/{dt.day}/{dt.year}"  # e.g. "4/10/2026"

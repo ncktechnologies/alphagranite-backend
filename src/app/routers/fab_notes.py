@@ -14,7 +14,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.interface.response_wrappers import SuccessResponse, error_response, success_response
 from src.app.middleware.jwt_auth import get_current_user
-from src.app.utils.helpers import utc_now
+from src.app.utils.helpers import utc_now, to_utc
 
 router = APIRouter()
 
@@ -61,9 +61,9 @@ async def get_fab_notes_list(
     if created_by is not None:
         query = query.where(FabNotes.created_by == created_by)
     if date_from:
-        query = query.where(FabNotes.created_at >= datetime.combine(date_from, datetime.min.time()))
+        query = query.where(FabNotes.created_at >= to_utc(datetime.combine(date_from, datetime.min.time())))
     if date_to:
-        query = query.where(FabNotes.created_at <= datetime.combine(date_to, datetime.max.time()))
+        query = query.where(FabNotes.created_at <= to_utc(datetime.combine(date_to, datetime.max.time())))
     
     # Apply pagination and ordering
     query = query.order_by(FabNotes.created_at.desc()).offset(skip).limit(limit)

@@ -1551,7 +1551,7 @@ def _validate_month_year(month: int, year: int) -> None:
 
 
 def _build_calendar_window(view: str, reference_date: date) -> tuple[datetime, datetime]:
-    start_of_day = datetime.combine(reference_date, datetime.min.time())
+    start_of_day = to_utc(datetime.combine(reference_date, datetime.min.time()))
 
     if view == "day":
         return start_of_day, start_of_day + timedelta(days=1)
@@ -1948,7 +1948,7 @@ async def suggest_shop_plan_slots(
                     "stages": sequence_stages,
                 })
                 # Advance stage-1 starting point by one slot for the next sequence
-                stage1_start = datetime.fromisoformat(sequence_stages[0]["start"])
+                stage1_start = to_utc(datetime.fromisoformat(sequence_stages[0]["start"]))
                 first_stage_cursor = _next_business_start(
                     _align_to_slot(stage1_start + timedelta(minutes=slot_minutes), slot_minutes)
                 )
@@ -2331,7 +2331,7 @@ async def get_earliest_availability(
                     cursor = _next_business_start(cursor)
 
             if proposals:
-                dependency_start = datetime.fromisoformat(proposals[0]["end"])
+                dependency_start = to_utc(datetime.fromisoformat(proposals[0]["end"]))
 
             results.append({
                 "sequence": req.sequence,
