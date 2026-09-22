@@ -19,6 +19,8 @@ pydantic-settings
 dnspython
 openpyxl
 reportlab
+celery[redis]
+redis
 
 # test
 httpx>=0.25.0

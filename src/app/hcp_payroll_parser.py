@@ -23,6 +23,22 @@ class ParsedHcpPayrollRow:
     raw_line_text: Optional[str] = None
 
 
+@dataclass
+class ParsedHcpStaffRosterRow:
+    row_index: int
+    employee_id: Optional[str] = None
+    username: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    employee_status: Optional[str] = None
+    employee_type: Optional[str] = None
+    in_payroll: Optional[str] = None
+    locked: Optional[str] = None
+    date_terminated: Optional[str] = None
+    is_active: bool = False
+    raw_line_text: Optional[str] = None
+
+
 def _to_float(value: Any) -> Optional[float]:
     if value is None:
         return None
@@ -120,5 +136,75 @@ def parse_hcp_payroll_report(raw_payload_text: str) -> list[ParsedHcpPayrollRow]
                     raw_line_text=",".join(row),
                 )
             )
+
+    return results
+
+
+_STAFF_ROSTER_FIELD_BY_HEADER = {
+    "employee id": "employee_id",
+    "username": "username",
+    "first name": "first_name",
+    "last name": "last_name",
+    "employee status": "employee_status",
+    "employee type": "employee_type",
+    "in payroll": "in_payroll",
+    "locked": "locked",
+    "date terminated": "date_terminated",
+}
+
+_STAFF_ROSTER_DEFAULT_FIELD_ORDER = [
+    "employee_id",
+    "username",
+    "first_name",
+    "last_name",
+    "employee_status",
+    "employee_type",
+    "in_payroll",
+    "locked",
+    "date_terminated",
+]
+
+
+def parse_hcp_staff_roster(raw_payload_text: str) -> list[ParsedHcpStaffRosterRow]:
+    if not raw_payload_text:
+        return []
+
+    field_order = _STAFF_ROSTER_DEFAULT_FIELD_ORDER
+    results: list[ParsedHcpStaffRosterRow] = []
+    row_index = 0
+
+    for row in _parse_payload_rows(raw_payload_text):
+        normalized = [value.strip() for value in row]
+        if not any(normalized):
+            continue
+
+        if normalized[0].lower() in _STAFF_ROSTER_FIELD_BY_HEADER:
+            field_order = [_STAFF_ROSTER_FIELD_BY_HEADER.get(value.lower(), "") for value in normalized]
+            continue
+
+        values: dict[str, Optional[str]] = {}
+        for position, field_name in enumerate(field_order):
+            if not field_name or position >= len(normalized):
+                continue
+            values[field_name] = normalized[position] or None
+
+        row_index += 1
+        status = values.get("employee_status")
+        results.append(
+            ParsedHcpStaffRosterRow(
+                row_index=row_index,
+                employee_id=values.get("employee_id"),
+                username=values.get("username"),
+                first_name=values.get("first_name"),
+                last_name=values.get("last_name"),
+                employee_status=status,
+                employee_type=values.get("employee_type"),
+                in_payroll=values.get("in_payroll"),
+                locked=values.get("locked"),
+                date_terminated=values.get("date_terminated"),
+                is_active=(status or "").strip().lower() == "active",
+                raw_line_text=",".join(row),
+            )
+        )
 
     return results

@@ -226,6 +226,7 @@ class HcpPayrollSourceConfig(SQLModel, table=True):
     client_id: Optional[str] = Field(default=None, max_length=255)
     client_secret: Optional[str] = Field(default=None, max_length=255)
     report_settings_id: str = Field(default="89798180", max_length=100, index=True)
+    report_kind: str = Field(default="labor_cost", max_length=50, index=True)
     schedule_type: str = Field(default="weekly", max_length=50)
     schedule_interval: int = Field(default=1)
     schedule_weekday: int = Field(default=0)
@@ -294,6 +295,44 @@ class HcpPayrollReportRow(SQLModel, table=True):
     total_ot_wages: Optional[float] = Field(default=None)
     raw_line_text: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=datetime.now)
+
+
+class HcpStaffRosterSnapshot(SQLModel, table=True):
+    __tablename__ = "hcp_staff_roster_snapshots"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    source_config_id: int = Field(foreign_key="hcp_payroll_source_configs.id", index=True)
+    ingestion_run_id: int = Field(foreign_key="hcp_payroll_ingestion_runs.id", index=True)
+    report_settings_id: str = Field(max_length=100, index=True)
+    payload_format: str = Field(default="csv", max_length=50)
+    raw_payload_text: str = Field()
+    pulled_at: datetime = Field(default_factory=datetime.now, index=True)
+    row_count: int = Field(default=0)
+    active_employee_count: int = Field(default=0)
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
+class HcpStaffRosterRow(SQLModel, table=True):
+    __tablename__ = "hcp_staff_roster_rows"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    snapshot_id: int = Field(foreign_key="hcp_staff_roster_snapshots.id", index=True)
+    source_config_id: int = Field(foreign_key="hcp_payroll_source_configs.id", index=True)
+    ingestion_run_id: int = Field(foreign_key="hcp_payroll_ingestion_runs.id", index=True)
+    row_index: int = Field(index=True)
+    employee_id: Optional[str] = Field(default=None, max_length=100, index=True)
+    username: Optional[str] = Field(default=None, max_length=255, index=True)
+    first_name: Optional[str] = Field(default=None, max_length=255)
+    last_name: Optional[str] = Field(default=None, max_length=255)
+    employee_status: Optional[str] = Field(default=None, max_length=100, index=True)
+    employee_type: Optional[str] = Field(default=None, max_length=100)
+    in_payroll: Optional[str] = Field(default=None, max_length=50)
+    locked: Optional[str] = Field(default=None, max_length=50)
+    date_terminated: Optional[str] = Field(default=None, max_length=100)
+    is_active: bool = Field(default=False, index=True)
+    raw_line_text: Optional[str] = Field(default=None)
+    created_at: datetime = Field(default_factory=datetime.now)
+
 
 # --- Shop Planning Sections ---
 class ShopPlanningSection(SQLModel, table=True):

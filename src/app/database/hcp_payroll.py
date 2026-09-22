@@ -3,16 +3,15 @@ from src.app.interface.generated_schemas import (
     HcpPayrollReportRow,
     HcpPayrollReportSnapshot,
     HcpPayrollSourceConfig,
+    HcpStaffRosterRow,
+    HcpStaffRosterSnapshot,
 )
-
-HcpPayrollSourceConfig = HcpPayrollSourceConfig
-HcpPayrollIngestionRun = HcpPayrollIngestionRun
-HcpPayrollReportSnapshot = HcpPayrollReportSnapshot
-HcpPayrollReportRow = HcpPayrollReportRow
 
 __all__ = [
     "HcpPayrollSourceConfig",
     "HcpPayrollIngestionRun",
     "HcpPayrollReportSnapshot",
     "HcpPayrollReportRow",
+    "HcpStaffRosterSnapshot",
+    "HcpStaffRosterRow",
 ]

@@ -1,0 +1,287 @@
+source_table,source_column,target_table,target_column,rule,notes
+Fab_Status,fab_id,fabs,id,Direct,Preserve legacy fab_id as PK; reset fabs_id_seq after load. Idempotency key.
+Fab_Status,fab_id,business_jobs,name,Transform,Fallback job name if job_name empty: JOB-<fab_id>
+Fab_Status,account,accounts,name,Direct,Upsert accounts by name (ix_accounts_name unique). Trim/case-normalize.
+Fab_Status,job_number,business_jobs,job_number,Direct,Upsert business_jobs by job_number; FK account_id from accounts map.
+Fab_Status,job_name,business_jobs,name,Direct,
+Fab_Status,areas,fabs,input_area,Direct,fabs.input_area varchar; store raw areas text.
+Fab_Status,areas,business_jobs,description,Transform,Append areas text to job description if present.
+Fab_Status,fab_type,fab_type,name,Direct,Upsert fab_type by name.
+Fab_Status,fab_type,fabs,fab_type,Direct,fabs.fab_type is varchar (not FK); copy normalized name.
+Fab_Status,stone_type,stone_types,name,Direct,Upsert; resolve fabs.stone_type_id via map.
+Fab_Status,stone_color,stone_colors,name,Direct,Upsert; resolve fabs.stone_color_id via map (needs stone_type_id parent where possible).
+Fab_Status,stone_thickness,stone_thickness,thickness,Direct,Upsert by thickness text; resolve fabs.stone_thickness_id.
+Fab_Status,edge,edges,name,Direct,Upsert edges (edge_type defaults to Standard); resolve fabs.edge_id.
+Fab_Status,total_sqft,fabs,total_sqft,Transform,"To double precision; strip units/commas; null->0? keep null, flag."
+Fab_Status,total_sqft,business_jobs,sq_ft,Transform,"Job sq_ft = SUM(fabs.total_sqft) per job_number, not per-row copy."
+Fab_Status,number_pieces,fabs,no_of_pieces,Transform,To integer; non-numeric->null + reject log.
+Fab_Status,creation_date,fabs,created_at,Transform,CST->UTC naive; fallback now() if null.
+Fab_Status,creation_date,business_jobs,created_at,Transform,MIN(creation_date) per job_number.
+Fab_Status,creation_date,business_jobs,start_date,Transform,Date part of MIN(creation_date) per job.
+Fab_Status,template_not_needed,fabs,template_needed,Transform,Invert boolean: needed = NOT not_needed. Null->True.
+Fab_Status,template_date_scheduled,templatings,schedule_start_date,Transform,One templatings row per fab; schedule_due_date=same or +1d if missing.
+Fab_Status,template_completed,templatings,is_completed,Transform,Bool; also fabs.template_received/template_review_complete derivation.
+Fab_Status,template_completed,fabs,template_received,Transform,template_received = template_completed OR template_date_completed present.
+Fab_Status,template_date_completed,fabs,template_completed_date,Direct,
+Fab_Status,template_date_completed,templatings,actual_end_date,Direct,
+Fab_Status,template_date_completed_2,fabs,notes,Transform,Archive into fabs.notes JSONB {template_date_completed_2: val}; secondary completion stamp.
+Fab_Status,template_by,templatings,technician_id,Transform-Deferred,"Legacy name -> users.id via employee map; leave null, backlog per plan."
+Fab_Status,draft_not_needed,fabs,drafting_needed,Transform,Invert boolean.
+Fab_Status,pre_draft_review,pre_draft_reviews,draft_notes,Transform,"Create pre_draft_reviews row if any pre_draft field non-empty; draft_notes=concat(pre_draft_review, notes)."
+Fab_Status,pre_draft_review_2,pre_draft_reviews,draft_notes,Transform,Append to same row.
+Fab_Status,pre_draft_review_completed,pre_draft_reviews,is_completed,Transform,Bool.
+Fab_Status,pre_draft_review_completed,fabs,predraft_completed_date,Transform,"If completed and no date, use draft_date_completed fallback; else null."
+Fab_Status,draft_notes,draftings,draft_note,Direct,Also copy to fab_notes stage=draft.
+Fab_Status,draft_notes,fab_notes,note,Transform,"fab_notes row: stage=draft, created_by=migration user."
+Fab_Status,draft_completed,fabs,draft_completed,Direct,Bool.
+Fab_Status,draft_completed,draftings,is_completed,Direct,One draftings row per fab.
+Fab_Status,draft_date_completed,fabs,draft_completed_date,Direct,
+Fab_Status,draft_date_completed,draftings,drafter_end_date,Direct,
+Fab_Status,draft_date_completed_2,fabs,notes,Transform,Archive into notes JSONB {draft_date_completed_2}.
+Fab_Status,draft_by,draftings,drafter_id,Transform-Deferred,Name->users map; null + backlog.
+Fab_Status,draft_clock_complete,fabs,notes,Transform,Archive flag into notes JSONB {draft_clock_complete}; timer truth comes from Draft_Data sessions.
+Fab_Status,program_clock_complete,fabs,notes,Transform,Archive into notes JSONB; timer truth from FP_Data.
+Fab_Status,been_revised,fabs,revised,Transform,revised = been_revised OR being_revised OR revision_completion_date present.
+Fab_Status,being_revised,fabs,revised,Transform,See above; also drives open revisions row if true.
+Fab_Status,revision_completion_date,fabs,revision_completed_date,Direct,
+Fab_Status,slabsmith_ag_not_needed,fabs,slab_smith_ag_needed,Transform,Invert.
+Fab_Status,slabsmith_cust_not_needed,fabs,slab_smith_cust_needed,Transform,Invert.
+Fab_Status,slabsmith_notes,slab_smiths,file_ids,Transform,NOT file_ids; notes go to fab_notes stage=slabsmith. See next row.
+Fab_Status,slabsmith_notes,fab_notes,note,Transform,fab_notes stage=slabsmith.
+Fab_Status,slabsmith_complete,slab_smiths,is_completed,Transform,"One slab_smiths row per fab; slab_smith_type=CUST default, AG row only if evidence."
+Fab_Status,slabsmith_complete,fabs,slab_smith_used,Transform,slab_smith_used = slabsmith_complete OR slabsmith_completion_date present.
+Fab_Status,slabsmith_completion_date,fabs,slabsmith_completed_date,Direct,
+Fab_Status,slabsmith_completion_date,slab_smiths,slabsmith_completed_date,Direct,Also slab_smiths.end_date.
+Fab_Status,slabsmith_clock_complete,fabs,notes,Transform,Archive into notes JSONB; session truth from slab_smith_sessions only if built later.
+Fab_Status,sct_not_needed,fabs,sct_needed,Transform,Invert.
+Fab_Status,sct_notes,fab_notes,note,Transform,stage=sct.
+Fab_Status,sct_completed,fabs,sct_completed,Direct,Bool.
+Fab_Status,sct_completed,sales_cts,is_completed,Direct,One sales_cts row per fab; slab_smith_type=SCT.
+Fab_Status,sct_date_completed,fabs,sct_completed_date,Direct,Also fabs.sales_ct_completed_date = same value.
+Fab_Status,sct_date_completed,fabs,sales_ct_completed_date,Direct,"Duplicate mapping, same source."
+Fab_Status,sct_date_completed,sales_cts,end_date,Direct,
+Fab_Status,sct_by,sales_cts,drafter_id,Transform-Deferred,Name->users map; null + backlog (sales_cts.drafter_id NOT NULL -> use migration user fallback).
+Fab_Status,final_not_needed,fabs,final_programming_needed,Transform,Invert; also fabs.fp_not_needed = final_not_needed direct.
+Fab_Status,final_not_needed,fabs,fp_not_needed,Direct,
+Fab_Status,final_notes,fab_notes,note,Transform,stage=final_programming. Also final_programmings.notes JSONB {migrated: note}.
+Fab_Status,final_completed,fabs,final_programming_complete,Direct,Bool.
+Fab_Status,final_completed,final_programmings,is_completed,Direct,One final_programmings row per fab.
+Fab_Status,final_date_completed,fabs,final_programming_completed_date,Direct,
+Fab_Status,final_date_completed,final_programmings,drafter_end_date,Direct,
+Fab_Status,final_by,final_programmings,drafter_id,Transform-Deferred,Name->users map; fallback migration user (NOT NULL col).
+Fab_Status,pre_shop_review_completed,shop_plannings,completed_steps,Transform,If true then completed_steps=no_of_steps_needed else 0; one shop_plannings row per fab.
+Fab_Status,pre_shop_review,fab_notes,note,Transform,stage=shop.
+Fab_Status,shop_date_scheduled,fabs,shop_date_schedule,Direct,Primary.
+Fab_Status,shop_date_scheduled,shop_plannings,start_date,Direct,Same value.
+Fab_Status,shop_date_scheduled2,fabs,shop_est_completion_date,Transform,Secondary estimate -> shop_est_completion_date.
+Fab_Status,shop_date_scheduled2,fabs,notes,Transform,Also archive raw in notes JSONB.
+Fab_Status,resurface_sqft,resurface_schedulings,total_sqft,Transform,varchar target; keep raw text. One row per fab if any resurface field non-empty.
+Fab_Status,resurface_percent,resurface_schedulings,completed_sqft,Transform,percent->completed_sqft = total*percent/100 as text; archive raw percent in notes JSONB.
+Fab_Status,resurface_date_completed,resurface_schedulings,actual_end_date,Direct,is_completed = date present.
+Fab_Status,resurface_by,resurface_schedulings,technician_id,Transform-Deferred,Name->users; null + backlog.
+Fab_Status,cut_sqft,cut_list,total_sqft,Direct,varchar; one cut_list row per fab.
+Fab_Status,cut_sqft,shop_cut_plans,notes,Transform,Append cut context into shop_cut_plans notes for CUT workstation row.
+Fab_Status,cut_date_scheduled,cut_list,shop_schedule_date,Direct,
+Fab_Status,cut_date_scheduled,shop_cut_plans,scheduled_start_date,Direct,Workstation=CUT row.
+Fab_Status,cut_hours_scheduled,shop_cut_plans,estimated_hours,Transform,To float; CUT row.
+Fab_Status,cut_machine_scheduled,shop_planning_sections,machine,Direct,Match Machines_Cut names; fallback raw text.
+Fab_Status,cut_employee_scheduled,shop_planning_sections,operator_ids,Transform-Deferred,Name->users ids CSV; null + backlog.
+Fab_Status,cut_percent,shop_cut_plans,work_percentage,Transform,To int 0-100; CUT row.
+Fab_Status,cut_date_completed,cut_list,updated_at,Transform,Completion evidence; is_completed = cut_date_completed present AND cut_percent=100.
+Fab_Status,cut_by,cut_list,updated_by,Transform-Deferred,Name->users; fallback migration user.
+Fab_Status,wj_time,fabs,wj_time_minutes,Transform,To int minutes; non-numeric->null.
+Fab_Status,wj_linft,fabs,wj_linft,Transform,To float.
+Fab_Status,wj_linft,wj_schedulings,total_ln_ft,Transform,varchar; one wj_schedulings row per fab if any wj field set.
+Fab_Status,wj_date_scheduled,wj_schedulings,scheduled_start_date,Direct,
+Fab_Status,wj_hours_scheduled,wj_programmings,scheduled_start_date,Transform,Hours-> scheduled window start; scheduled_end_date=start+hours. One wj_programmings row per fab.
+Fab_Status,wj_machine_scheduled,shop_planning_sections,machine,Direct,WJ workstation context; match raw text.
+Fab_Status,wj_employee_scheduled,wj_schedulings,technician_id,Transform-Deferred,Name->users; null + backlog.
+Fab_Status,wj_percent,wj_schedulings,completed_ln_ft,Transform,completed = total*percent/100 as text; archive raw percent in notes.
+Fab_Status,wj_date_completed,wj_schedulings,actual_end_date,Direct,is_completed = date present.
+Fab_Status,wj_by,wj_schedulings,technician_id,Transform-Deferred,Prefer wj_employee_scheduled; wj_by as fallback; null + backlog.
+Fab_Status,edging_linft,fabs,edging_linft,Transform,To float.
+Fab_Status,edging_date_scheduled,shop_cut_plans,scheduled_start_date,Direct,Workstation=EDGING row.
+Fab_Status,edging_hours_scheduled,shop_cut_plans,estimated_hours,Transform,To float; EDGING row.
+Fab_Status,edging_machine_scheduled,shop_planning_sections,machine,Direct,Match Machines_Edging.
+Fab_Status,edging_employee_scheduled,shop_planning_sections,operator_ids,Transform-Deferred,Null + backlog.
+Fab_Status,edging_percent,shop_cut_plans,work_percentage,Transform,To int; EDGING row.
+Fab_Status,edging_date_completed,shop_cut_plans,actual_end_date,Direct,EDGING row.
+Fab_Status,edging_by,shop_cut_plans,user_id,Transform-Deferred,Name->users; fallback migration user (NOT NULL).
+Fab_Status,miter_linft,fabs,miter_linft,Transform,To float.
+Fab_Status,miter_date_scheduled,shop_cut_plans,scheduled_start_date,Direct,Workstation=MITER row.
+Fab_Status,miter_hours_scheduled,shop_cut_plans,estimated_hours,Transform,To float; MITER row.
+Fab_Status,miter_machine_scheduled,shop_planning_sections,machine,Direct,Raw text.
+Fab_Status,miter_employee_scheduled,shop_planning_sections,operator_ids,Transform-Deferred,Null + backlog.
+Fab_Status,miter_percent,shop_cut_plans,work_percentage,Transform,To int; MITER row.
+Fab_Status,miter_date_completed,shop_cut_plans,actual_end_date,Direct,MITER row.
+Fab_Status,miter_by,shop_cut_plans,user_id,Transform-Deferred,Fallback migration user.
+Fab_Status,cnc_linft,fabs,cnc_linft,Transform,To float.
+Fab_Status,cnc_date_scheduled,shop_cut_plans,scheduled_start_date,Direct,Workstation=CNC row.
+Fab_Status,cnc_hours_scheduled,shop_cut_plans,estimated_hours,Transform,To float; CNC row.
+Fab_Status,cnc_machine_scheduled,shop_planning_sections,machine,Direct,Match Machines_CNC.
+Fab_Status,cnc_employee_scheduled,shop_planning_sections,operator_ids,Transform-Deferred,Null + backlog.
+Fab_Status,cnc_percent,shop_cut_plans,work_percentage,Transform,To int; CNC row.
+Fab_Status,cnc_date_completed,shop_cut_plans,actual_end_date,Direct,CNC row.
+Fab_Status,cnc_by,shop_cut_plans,user_id,Transform-Deferred,Fallback migration user.
+Fab_Status,qc_sqft,cut_list,total_sqft,Transform,QC sqft appended to cut_list notes context; primary cut_sqft wins for total_sqft col.
+Fab_Status,qc_date_scheduled,shop_cut_plans,scheduled_start_date,Direct,Workstation=QC row.
+Fab_Status,qc_hours_scheduled,shop_cut_plans,estimated_hours,Transform,To float; QC row.
+Fab_Status,qc_machine_scheduled,shop_planning_sections,machine,Direct,Raw text.
+Fab_Status,qc_employee_scheduled,shop_planning_sections,operator_ids,Transform-Deferred,Null + backlog.
+Fab_Status,qc_percent,shop_cut_plans,work_percentage,Transform,To int; QC row.
+Fab_Status,qc_date_completed,shop_cut_plans,actual_end_date,Direct,QC row.
+Fab_Status,qc_by,shop_cut_plans,user_id,Transform-Deferred,Fallback migration user.
+Fab_Status,estimated_completion_date,fabs,shop_est_completion_date,Transform,Prefer shop_date_scheduled2; this as fallback if that null.
+Fab_Status,estimated_completion_date2,fabs,notes,Transform,Archive into notes JSONB.
+Fab_Status,first_est_completion_date,fabs,notes,Transform,Archive into notes JSONB.
+Fab_Status,completion_date,fabs,installation_date,Transform,Also install_schedulings.actual_install_date + install_completions.install_date.
+Fab_Status,completion_date,install_completions,completion_date,Direct,is_completed = completion_date present.
+Fab_Status,fab_percent,fabs,notes,Transform,Legacy formula -> archive notes JSONB {fab_percent}; do NOT trust as authority.
+Fab_Status,shop_notes,shop_notes,note,Direct,One shop_notes row per non-empty; created_by=migration user.
+Fab_Status,install_notes,fab_notes,note,Transform,stage=install.
+Fab_Status,install_notes,install_schedulings,notes,Transform,Also JSONB {migrated_install_notes}.
+Fab_Status,install_date,fabs,installation_date,Direct,Prefer completion_date; this as fallback. Also install_schedulings.scheduled_install_date.
+Fab_Status,install_date,install_schedulings,scheduled_install_date,Direct,
+Fab_Status,install_date2,fabs,notes,Transform,Archive secondary date in notes JSONB.
+Fab_Status,installer,install_schedulings,installer_id,Transform-Deferred,Name->users; null + backlog.
+Fab_Status,installer,install_completions,installer_id,Transform-Deferred,Same map; fallback migration user (NOT NULL).
+Fab_Status,install_confirmed,install_completions,is_confirmed,Transform,Bool; default False.
+Fab_Status,complete,fabs,status_id,Transform,Map to status.value_id: complete=true->COMPLETED id else IN_PROGRESS; also cut_list/shop rows is_completed derivation.
+Fab_Status,complete,cut_list,is_completed,Transform,Mirror flag.
+Fab_Status,redo_reason,revisions,revision_reason,Transform,Create revisions row if any redo_* non-empty; revision_type=SHOP default; department=redo_dept.
+Fab_Status,redo_dept,revisions,department,Direct,Also fabs.redo_department needs departments.id map; name->id else null.
+Fab_Status,redo_dept,fabs,redo_department,Transform-Deferred,Name->departments.id; null + backlog.
+Fab_Status,redo_person,revisions,person_name,Direct,Also fabs.redo_requested_by via user map deferred.
+Fab_Status,redo_person,fabs,redo_requested_by,Transform-Deferred,Name->users; null + backlog.
+Fab_Status,redo_cost,fabs,redo_total_sqft,Transform,"CAUTION: source is cost but target col is sqft; store cost text in revisions.revision_notes, set redo_total_sqft=null + flag. See note."
+Fab_Status,redo_cost,revisions,revision_notes,Transform,Archive redo_cost text here: REDO COST=<val>.
+Fab_Status,revenue,fabs,revenue,Transform,To float.
+Fab_Status,revenue,business_jobs,project_value,Transform,SUM(revenue) per job_number.
+Fab_Status,cost_of_stone,fabs,cost_of_stone,Transform,To float. Also cost_of_stones.total_cost text mirror.
+Fab_Status,cost_of_stone,cost_of_stones,total_cost,Transform,varchar; one cost_of_stones row per fab if cost fields present.
+Fab_Status,cost_entered,cost_of_stones,is_completed,Transform,Bool: cost_entered=true -> is_completed true.
+Fab_Status,gp,fabs,gp,Transform,To float.
+Fab_Status,saw_cut_lnft,fabs,saw_cut_lnft,Transform,No Caspio source; null (shop detail only).
+Fab_Status,saw_miter_lnft,fabs,saw_miter_lnft,Transform,No source; null.
+Fab_Status,wj_miter_lnft,fabs,wj_miter_lnft,Transform,No source; null.
+Fab_Status,current_stage,fabs,current_stage,Transform,Derive from completion flags if legacy empty: latest completed stage.
+Fab_Status,next_stage,fabs,next_stage,Transform,Derive as stage after current_stage.
+Draft_Data,fab_id,drafting_sessions,fab_id,Direct,Join to fabs.id; reject if orphan.
+Draft_Data,drafter,drafting_sessions,drafter_id,Transform-Deferred,Name->users; fallback migration user (NOT NULL).
+Draft_Data,session_start_time,drafting_sessions,session_start_time,Transform,CST->UTC; fallback start_time.
+Draft_Data,start_time,drafting_sessions,session_start_time,Transform,Fallback if session_start_time null.
+Draft_Data,end_time,drafting_sessions,session_end_time,Transform,"Null = open session, status=IN_PROGRESS."
+Draft_Data,new_start_time,drafting_sessions,session_start_time,Transform,Prefer latest non-null of session_start_time/new_start_time.
+Draft_Data,new_end_time,drafting_sessions,session_end_time,Transform,Prefer latest non-null of end_time/new_end_time.
+Draft_Data,draft_duration,drafting_sessions,total_time_spent,Transform,"Duration text (min/hr) -> seconds int; recompute from start/end when both present, prefer computed."
+Draft_Data,session_duration,drafting_sessions,total_time_spent,Transform,Same; prefer computed over stored.
+Draft_Data,old_duration,drafting_session_notes,note,Transform,Archive as note action=DURATION_ADJUST {old_duration}.
+Draft_Data,new_duration,drafting_session_notes,note,Transform,Archive as note action=DURATION_ADJUST {new_duration}.
+Draft_Data,state,drafting_sessions,status,Transform,Map legacy state text -> OPEN/PAUSED/COMPLETED; default COMPLETED if end_time present else IN_PROGRESS.
+Draft_Data,active_session,drafting_sessions,status,Transform,active_session true -> IN_PROGRESS overrides state.
+Draft_Data,session_start_temp,drafting_session_notes,note,Transform,Archive as note action=SESSION_TEMP.
+Draft_Data,intermediary,drafting_session_notes,note,Transform,Archive as note action=INTERMEDIARY.
+Draft_Data,display_end_time,drafting_sessions,session_end_time,Transform,Display fallback if end_time null.
+Draft_Data,test,drafting_session_notes,note,Transform,Archive; likely UI-debug col. Skip if empty.
+FP_Data,fab_id,final_programming_sessions,fab_id,Direct,Join to fabs.id.
+FP_Data,programmer,final_programming_sessions,user_id,Transform-Deferred,Name->users; fallback migration user (NOT NULL).
+FP_Data,session_start_time,final_programming_sessions,session_start_time,Transform,CST->UTC.
+FP_Data,start_time,final_programming_sessions,session_start_time,Transform,Fallback.
+FP_Data,end_time,final_programming_sessions,session_end_time,Transform,Null=open.
+FP_Data,new_start_time,final_programming_sessions,session_start_time,Transform,Prefer latest non-null.
+FP_Data,new_end_time,final_programming_sessions,session_end_time,Transform,Prefer latest non-null.
+FP_Data,programming_duration,final_programming_sessions,total_time_spent,Transform,Text->seconds; prefer computed from start/end.
+FP_Data,session_duration,final_programming_sessions,total_time_spent,Transform,Same.
+FP_Data,old_duration,final_programming_session_notes,note,Transform,Archive action=DURATION_ADJUST.
+FP_Data,state,final_programming_sessions,status,Transform,Map to session status; default by end_time presence.
+FP_Data,active_session,final_programming_sessions,status,Transform,True->IN_PROGRESS.
+FP_Data,session_start_temp,final_programming_session_notes,note,Transform,Archive.
+FP_Data,intermediary,final_programming_session_notes,note,Transform,Archive.
+FP_Data,display_end_date,final_programming_sessions,session_end_time,Transform,Fallback end.
+Shop_Data,fab_id,operator_job_timer_sessions,fab_id,Direct,Join fabs.id; job_id resolved via fabs.job_id.
+Shop_Data,fab_id,shop_cut_plan_timer_sessions,shop_cut_plan_id,Transform,"Alt path: link to shop_cut_plans row for (fab_id, activity-workstation) if activity maps to cut plan; else operator timer only."
+Shop_Data,activity,operator_job_timer_sessions,workstation_id,Transform,Activity text -> work_stations.id via name map; null + keep raw in note if unmapped.
+Shop_Data,activity,shop_cut_plans,workstation_id,Transform,Same map; used to find shop_cut_plan_id.
+Shop_Data,cut_machine,shop_planning_sections,machine,Direct,Raw text; match Machines_Cut.
+Shop_Data,edging_machine,shop_planning_sections,machine,Direct,Raw text; match Machines_Edging.
+Shop_Data,shop_employee,operator_job_timer_sessions,operator_id,Transform-Deferred,Name->users; fallback migration user (NOT NULL).
+Shop_Data,start_time,operator_job_timer_sessions,session_start_at,Transform,CST->UTC.
+Shop_Data,stop_time,operator_job_timer_sessions,stopped_at,Transform,Null=open/paused.
+Shop_Data,duration,operator_job_timer_sessions,total_work_seconds,Transform,Text->seconds; prefer computed start/stop.
+Shop_Data,measure,operator_job_timer_events,note,Transform,Archive as event note {measure}.
+Shop_Data,units,operator_job_timer_events,note,Transform,Archive as event note {units}.
+Shop_Data,percent_complete,shop_cut_plans,work_percentage,Transform,To int on matched cut-plan row; also archive event note.
+revision_info,FabID,revisions,fab_id,Direct,Join fabs.id; reject orphan.
+revision_info,RevisionType,revisions,revision_type,Transform,Normalize to SHOP/DRAFT/SCT/FINAL; default SHOP.
+revision_info,RevisionReason,revisions,revision_reason,Direct,
+revision_info,revision_date_completed,revisions,actual_end_date,Direct,is_completed = date present.
+revision_info,Account,accounts,name,Direct,Cross-check vs Fab_Status account; do not create dup accounts.
+revision_info,JobName,business_jobs,name,Direct,Cross-check only.
+revision_info,JobNumber,business_jobs,job_number,Direct,Cross-check only.
+revision_info,FabType,fabs,fab_type,Direct,Cross-check only.
+revision_info,Areas,fabs,input_area,Direct,Cross-check only.
+revision_info,StoneType,stone_types,name,Direct,Cross-check only.
+revision_info,StoneColor,stone_colors,name,Direct,Cross-check only.
+revision_info,StoneThickness,stone_thickness,thickness,Direct,Cross-check only.
+revision_info,Edge,edges,name,Direct,Cross-check only.
+revision_info,TotalSqft,fabs,total_sqft,Direct,Cross-check only; Fab_Status wins.
+revision_info,NumPieces,fabs,no_of_pieces,Direct,Cross-check only.
+revision_info,DraftNotes,revisions,revision_notes,Direct,Also pre_draft_reviews draft_notes if RevisionType=DRAFT.
+revision_info,DraftCompleted,revisions,is_completed,Transform,Bool mirror if RevisionType=DRAFT.
+revision_info,creation_date,revisions,created_at,Transform,CST->UTC.
+revision_info,SalesPerson,business_jobs,sales_person_id,Transform-Deferred,Name->users; null + backlog; set once per job.
+revision_info,SalesPerson,fabs,sales_person_id,Transform-Deferred,Same map per fab; fallback migration user? fabs.sales_person_id NOT NULL -> use migration user if unmapped.
+revision_info,Revisor,revisions,assigned_to,Transform-Deferred,Name->users; null + backlog.
+revision_info,Revisor,revisions,requested_by,Transform-Deferred,If requester unknown use migration user (NOT NULL).
+revision_info,FileData,files,file_path,Transform,"If non-empty create files row (stage=revision, fab_id, job_id); file_design=raw text ref."
+Alpha_Employees,ClockNum,users,hcp_employee_id,Transform-Deferred,ClockNum->hcp_employee_id text; First+Last->first_name/last_name; username generated; NO password migration.
+Alpha_Employees,LastName,users,last_name,Transform-Deferred,See above.
+Alpha_Employees,FirstName,users,first_name,Transform-Deferred,See above.
+Employees_Shop,ClockNum,users,hcp_employee_id,Transform-Deferred,Same; Active flag->users.status (active=1 else 0). Dept=SHOP.
+Employees_Shop,Name,users,username,Transform-Deferred,Normalize unique username; collisions get suffix.
+Employees_Shop,Active,users,status,Transform,Active true->1 else 0.
+Employees_Template,template_employee_id,users,hcp_employee_id,Transform-Deferred,Dept=TEMPLATE.
+Employees_Template,template_employee_name,users,username,Transform-Deferred,Split to first/last where possible.
+Active_Sales_Employees,sales_employee_id,users,hcp_employee_id,Transform-Deferred,Dept=SALES.
+Active_Sales_Employees,sales_employee_name,users,username,Transform-Deferred,Same split rule.
+Default_Shop_Employees,Activity,work_stations,name,Transform,Activity->work_stations.name seed; ensures operator timer workstation map hits.
+Default_Shop_Employees,Employee,shop_planning_sections,operator_ids,Transform-Deferred,Default operator per workstation; seed only.
+Fab_Types,fab_type,fab_type,name,Direct,Upsert; fab_type_id legacy ignored (new serial id).
+Machines_CNC,cnc_machine_name,work_stations,name,Direct,Upsert work_stations per machine; planning_section=CNC.
+Machines_Cut,cut_machine_name,work_stations,name,Direct,Upsert; planning_section=CUT.
+Machines_Edging,edging_machine_name,work_stations,name,Direct,Upsert; planning_section=EDGING.
+ProductionPerPerson,ClockNum,job_technician_workflows,technician_id,Transform-Archive,"Optional derived history: one workflow row per (Name,Dept,date) if desired; else archive CSV as-is. Default: Archive."
+ProductionPerPerson,SqFt,job_technician_workflows,total_sqft_done,Transform-Archive,See above.
+ProductionPerPerson,LinFt,job_technician_workflows,total_sqft_done,Transform-Archive,LinFt appended in notes JSONB.
+ProductionPerPerson,Tmestamp,job_technician_workflows,started_at,Transform-Archive,completed_at = started_at same day.
+ProductionPerPerson,Dept,job_technician_workflows,table_name,Transform-Archive,Dept text -> table_name ref.
+ProductionPerPerson,Name,job_technician_workflows,technician_id,Transform-Deferred-Archive,Name->users deferred.
+Production_Table_1,DateActual,operation_workflow,started_at,Transform-Archive,"Optional daily rollup row; default Archive (reporting table, no 1:1 target). finished_at=start+1d."
+Production_Table_1,TotalSqFt,operation_workflow,total_sqft_done,Transform-Archive,See above; machine columns archived in notes JSONB.
+Production_Table_1,Notes,operation_workflow,notes,Transform-Archive,JSONB.
+Calendar,date,(none),(none),Skip,Helper table; no target. Use for date validation only.
+Fab_Types,fab_type_id,fab_type,description,Archive,Legacy id; new serial id used. Keep as description ref if needed.
+Machines_CNC,cnc_machine_id,work_stations,name,Archive,Legacy id archived in notes; name is the key.
+Machines_Cut,cut_machine_id,work_stations,name,Archive,Legacy id archived; name is the key.
+Machines_Edging,edging_machine_id,work_stations,name,Archive,Legacy id archived; name is the key.
+Employees_Shop,LastName,users,last_name,Transform-Deferred,See Name/ClockNum mapping; split fallback.
+Employees_Shop,FirstName,users,first_name,Transform-Deferred,See above.
+revision_info,fillerblankdate,(none),(none),Skip,"Filler column, no meaning."
+Production_Table_1,SawSqFt,operation_workflow,notes,Transform-Archive,Per-machine cols archived into notes JSONB on daily rollup row.
+Production_Table_1,WJLinFt,operation_workflow,notes,Transform-Archive,Same.
+Production_Table_1,WJSqFt,operation_workflow,notes,Transform-Archive,Same.
+Production_Table_1,CutSqFt,operation_workflow,notes,Transform-Archive,Same.
+Production_Table_1,CommanduliLinFt,operation_workflow,notes,Transform-Archive,Same.
+Production_Table_1,CommanduliSqFt,operation_workflow,notes,Transform-Archive,Same.
+Production_Table_1,LCRLinFt,operation_workflow,notes,Transform-Archive,Same.
+Production_Table_1,LCRSqFt,operation_workflow,notes,Transform-Archive,Same.
+Production_Table_1,SpeedSqFt,operation_workflow,notes,Transform-Archive,Same.
+Production_Table_1,MaximaSqFt,operation_workflow,notes,Transform-Archive,Same.
+Production_Table_1,ConceptSqFt,operation_workflow,notes,Transform-Archive,Same.
+Production_Table_1,ResurfaceSqFt,operation_workflow,notes,Transform-Archive,Same.
+Production_Table_1,RegFabSqFt,operation_workflow,notes,Transform-Archive,Same.
+Production_Table_1,RegFabLinFt,operation_workflow,notes,Transform-Archive,Same.
+Production_Table_1,HWSqFt,operation_workflow,notes,Transform-Archive,Same.
+Production_Table_1,MiterSqFt,operation_workflow,notes,Transform-Archive,Same.
+Production_Table_1,MiterLinFt,operation_workflow,notes,Transform-Archive,Same.
+Production_Table_1,AvgSqFt,operation_workflow,notes,Transform-Archive,"Same (derived; recompute, archive raw)."

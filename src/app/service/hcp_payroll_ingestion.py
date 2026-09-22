@@ -17,18 +17,31 @@ from src.app.database.hcp_payroll import (
     HcpPayrollReportRow,
     HcpPayrollReportSnapshot,
     HcpPayrollSourceConfig,
+    HcpStaffRosterRow,
+    HcpStaffRosterSnapshot,
 )
-from src.app.hcp_payroll_parser import ParsedHcpPayrollRow, parse_hcp_payroll_report
+from src.app.hcp_payroll_parser import (
+    ParsedHcpPayrollRow,
+    parse_hcp_payroll_report,
+    parse_hcp_staff_roster,
+)
 from src.app.utils.config import SessionLocal
 
 logger = logging.getLogger("hcp_payroll_ingestion")
+
+DEFAULT_BASE_URL = "https://secure.saashr.com"
+STAFF_ROSTER_REPORT_KIND = "staff_roster"
 
 _scheduler_task: Optional[asyncio.Task] = None
 _last_trigger_keys: dict[int, str] = {}
 
 
+def get_default_base_url() -> str:
+    return (os.getenv("HCP_BASE_URL") or DEFAULT_BASE_URL).strip().rstrip("/") or DEFAULT_BASE_URL
+
+
 def _normalize_base_url(base_url: str) -> str:
-    return (base_url or "").strip().rstrip("/")
+    return (base_url or "").strip().rstrip("/") or get_default_base_url()
 
 
 def _join_url(base_url: str, path: str) -> str:
@@ -134,52 +147,18 @@ async def ingest_hcp_payroll_report(
         run.report_http_status = report_http_status
         run.report_content_type = report_content_type
 
-        parsed_rows = parse_hcp_payroll_report(raw_report_text)
-        snapshot = HcpPayrollReportSnapshot(
-            source_config_id=config.id,
-            ingestion_run_id=run.id,
-            report_settings_id=config.report_settings_id,
-            payload_format="text",
-            raw_payload_text=raw_report_text,
-            row_count=len(parsed_rows),
-        )
-        db.add(snapshot)
-        await db.flush()
+        if (config.report_kind or "").strip().lower() == STAFF_ROSTER_REPORT_KIND:
+            result = await _store_staff_roster(db, config, run, raw_report_text)
+        else:
+            result = await _store_labor_cost_report(db, config, run, raw_report_text)
 
-        for parsed_row in parsed_rows:
-            db.add(
-                HcpPayrollReportRow(
-                    snapshot_id=snapshot.id,
-                    source_config_id=config.id,
-                    ingestion_run_id=run.id,
-                    row_kind=parsed_row.row_kind,
-                    row_index=parsed_row.row_index,
-                    cost_center_name=parsed_row.cost_center_name,
-                    employee_first_name=parsed_row.employee_first_name,
-                    employee_last_name=parsed_row.employee_last_name,
-                    hourly_pay=parsed_row.hourly_pay,
-                    regular_hours=parsed_row.regular_hours,
-                    holiday_hours=parsed_row.holiday_hours,
-                    pto_hours=parsed_row.pto_hours,
-                    total_reg_pto_hol_wages=parsed_row.total_reg_pto_hol_wages,
-                    overtime_hours=parsed_row.overtime_hours,
-                    total_ot_wages=parsed_row.total_ot_wages,
-                    raw_line_text=parsed_row.raw_line_text,
-                )
-            )
-
-        run.row_count = len(parsed_rows)
+        run.row_count = result["row_count"]
         run.status = "completed"
         run.finished_at = datetime.now()
         await db.commit()
         await db.refresh(run)
 
-        return {
-            "status": "completed",
-            "run_id": run.id,
-            "snapshot_id": snapshot.id,
-            "row_count": len(parsed_rows),
-        }
+        return {"status": "completed", "run_id": run.id, **result}
     except Exception as exc:
         run.status = "failed"
         run.error_message = str(exc)
@@ -189,7 +168,145 @@ async def ingest_hcp_payroll_report(
         raise
 
 
-def _is_due(config: HcpPayrollSourceConfig, now: datetime) -> bool:
+async def _store_labor_cost_report(
+    db: AsyncSession,
+    config: HcpPayrollSourceConfig,
+    run: HcpPayrollIngestionRun,
+    raw_report_text: str,
+) -> dict[str, Any]:
+    parsed_rows = parse_hcp_payroll_report(raw_report_text)
+    snapshot = HcpPayrollReportSnapshot(
+        source_config_id=config.id,
+        ingestion_run_id=run.id,
+        report_settings_id=config.report_settings_id,
+        payload_format="text",
+        raw_payload_text=raw_report_text,
+        row_count=len(parsed_rows),
+    )
+    db.add(snapshot)
+    await db.flush()
+
+    for parsed_row in parsed_rows:
+        db.add(
+            HcpPayrollReportRow(
+                snapshot_id=snapshot.id,
+                source_config_id=config.id,
+                ingestion_run_id=run.id,
+                row_kind=parsed_row.row_kind,
+                row_index=parsed_row.row_index,
+                cost_center_name=parsed_row.cost_center_name,
+                employee_first_name=parsed_row.employee_first_name,
+                employee_last_name=parsed_row.employee_last_name,
+                hourly_pay=parsed_row.hourly_pay,
+                regular_hours=parsed_row.regular_hours,
+                holiday_hours=parsed_row.holiday_hours,
+                pto_hours=parsed_row.pto_hours,
+                total_reg_pto_hol_wages=parsed_row.total_reg_pto_hol_wages,
+                overtime_hours=parsed_row.overtime_hours,
+                total_ot_wages=parsed_row.total_ot_wages,
+                raw_line_text=parsed_row.raw_line_text,
+            )
+        )
+
+    return {
+        "report_kind": "labor_cost",
+        "snapshot_id": snapshot.id,
+        "row_count": len(parsed_rows),
+    }
+
+
+async def _store_staff_roster(
+    db: AsyncSession,
+    config: HcpPayrollSourceConfig,
+    run: HcpPayrollIngestionRun,
+    raw_report_text: str,
+) -> dict[str, Any]:
+    parsed_rows = parse_hcp_staff_roster(raw_report_text)
+    active_rows = [row for row in parsed_rows if row.is_active]
+
+    snapshot = HcpStaffRosterSnapshot(
+        source_config_id=config.id,
+        ingestion_run_id=run.id,
+        report_settings_id=config.report_settings_id,
+        payload_format="csv",
+        raw_payload_text=raw_report_text,
+        pulled_at=datetime.now(),
+        row_count=len(parsed_rows),
+        active_employee_count=len(active_rows),
+    )
+    db.add(snapshot)
+    await db.flush()
+
+    for parsed_row in parsed_rows:
+        db.add(
+            HcpStaffRosterRow(
+                snapshot_id=snapshot.id,
+                source_config_id=config.id,
+                ingestion_run_id=run.id,
+                row_index=parsed_row.row_index,
+                employee_id=parsed_row.employee_id,
+                username=parsed_row.username,
+                first_name=parsed_row.first_name,
+                last_name=parsed_row.last_name,
+                employee_status=parsed_row.employee_status,
+                employee_type=parsed_row.employee_type,
+                in_payroll=parsed_row.in_payroll,
+                locked=parsed_row.locked,
+                date_terminated=parsed_row.date_terminated,
+                is_active=parsed_row.is_active,
+                raw_line_text=parsed_row.raw_line_text,
+            )
+        )
+
+    return {
+        "report_kind": STAFF_ROSTER_REPORT_KIND,
+        "snapshot_id": snapshot.id,
+        "row_count": len(parsed_rows),
+        "active_employee_count": len(active_rows),
+    }
+
+
+async def get_active_configs(db: AsyncSession) -> list[HcpPayrollSourceConfig]:
+    return await _get_active_configs(db)
+
+
+async def preview_hcp_payroll_report(db: AsyncSession, source_config_id: int, max_rows: int = 10) -> dict[str, Any]:
+    """Fetch token + report and parse it without writing snapshots, for connectivity testing."""
+    config = await db.get(HcpPayrollSourceConfig, source_config_id)
+    if not config:
+        raise ValueError(f"HCP payroll source config {source_config_id} not found")
+
+    access_token, token_data = await _fetch_access_token(config)
+    raw_report_text, report_http_status, report_content_type = await _fetch_saved_report(config, access_token)
+
+    report_kind = (config.report_kind or "labor_cost").strip().lower()
+    if report_kind == STAFF_ROSTER_REPORT_KIND:
+        parsed = parse_hcp_staff_roster(raw_report_text)
+        sample = [vars(row) for row in parsed[:max_rows]]
+        active_employee_count = sum(1 for row in parsed if row.is_active)
+    else:
+        parsed = parse_hcp_payroll_report(raw_report_text)
+        sample = [vars(row) for row in parsed[:max_rows]]
+        active_employee_count = None
+
+    return {
+        "status": "ok",
+        "persisted": False,
+        "report_kind": report_kind,
+        "base_url": _normalize_base_url(config.base_url),
+        "report_settings_id": config.report_settings_id,
+        "token_type": token_data.get("token_type"),
+        "token_expires_in": token_data.get("expires_in"),
+        "report_http_status": report_http_status,
+        "report_content_type": report_content_type,
+        "row_count": len(parsed),
+        "active_employee_count": active_employee_count,
+        "raw_payload_preview": raw_report_text[:2000],
+        "sample_rows": sample,
+    }
+
+
+def is_config_due(config: HcpPayrollSourceConfig, now: datetime) -> bool:
     if not config.is_active:
         return False
     if config.schedule_type == "daily":
@@ -209,7 +326,7 @@ async def _scheduler_loop() -> None:
         async with SessionLocal() as db:
             configs = await _get_active_configs(db)
             for config in configs:
-                if not _is_due(config, now):
+                if not is_config_due(config, now):
                     continue
 
                 config_key = f"{config.id}:{trigger_key}"
