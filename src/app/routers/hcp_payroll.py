@@ -34,8 +34,8 @@ class HcpPayrollSourceConfigCreate(BaseModel):
     grant_type: str = Field(default="client_credentials")
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
-    report_settings_id: str = Field(default="89798180")
-    report_kind: str = Field(default="labor_cost")
+    payroll_settings_id: str = Field(default="89798180")
+    roster_settings_id: str = Field(default="93428419")
     schedule_type: str = Field(default="weekly")
     schedule_interval: int = Field(default=1, ge=1)
     schedule_weekday: int = Field(default=0, ge=0, le=6)
@@ -51,8 +51,8 @@ class HcpPayrollSourceConfigUpdate(BaseModel):
     grant_type: Optional[str] = None
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
-    report_settings_id: Optional[str] = None
-    report_kind: Optional[str] = None
+    payroll_settings_id: Optional[str] = None
+    roster_settings_id: Optional[str] = None
     schedule_type: Optional[str] = None
     schedule_interval: Optional[int] = Field(default=None, ge=1)
     schedule_weekday: Optional[int] = Field(default=None, ge=0, le=6)
@@ -75,8 +75,8 @@ def _serialize_config(config: HcpPayrollSourceConfig) -> dict:
         "grant_type": config.grant_type,
         "client_id": config.client_id,
         "client_secret": config.client_secret,
-        "report_settings_id": config.report_settings_id,
-        "report_kind": config.report_kind,
+        "payroll_settings_id": config.payroll_settings_id,
+        "roster_settings_id": config.roster_settings_id,
         "schedule_type": config.schedule_type,
         "schedule_interval": config.schedule_interval,
         "schedule_weekday": config.schedule_weekday,
@@ -132,8 +132,8 @@ async def create_setting(
         grant_type=payload.grant_type,
         client_id=payload.client_id,
         client_secret=payload.client_secret,
-        report_settings_id=payload.report_settings_id,
-        report_kind=payload.report_kind,
+        payroll_settings_id=payload.payroll_settings_id,
+        roster_settings_id=payload.roster_settings_id,
         schedule_type=payload.schedule_type,
         schedule_interval=payload.schedule_interval,
         schedule_weekday=payload.schedule_weekday,
@@ -187,11 +187,15 @@ async def list_runs(
 @router.post("/settings/{setting_id}/ingest")
 async def ingest_setting(
     setting_id: int,
+    report_kind: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """Pull every configured saved report (or one kind) using a single access token."""
     _require_admin(current_user)
-    result = await ingest_hcp_payroll_report(db, setting_id, triggered_by_user_id=current_user.id)
+    result = await ingest_hcp_payroll_report(
+        db, setting_id, triggered_by_user_id=current_user.id, report_kind=report_kind
+    )
     return success_response(result, "HCP payroll ingestion completed successfully")
 
 
@@ -199,13 +203,14 @@ async def ingest_setting(
 async def test_setting(
     setting_id: int,
     max_rows: int = 10,
+    report_kind: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Dry run: authenticates and fetches the report without persisting anything."""
+    """Dry run: authenticates and fetches the reports without persisting anything."""
     _require_admin(current_user)
     try:
-        result = await preview_hcp_payroll_report(db, setting_id, max_rows=max_rows)
+        result = await preview_hcp_payroll_report(db, setting_id, max_rows=max_rows, report_kind=report_kind)
     except ValueError as exc:
         raise error_response(str(exc), 404)
     except RuntimeError as exc:

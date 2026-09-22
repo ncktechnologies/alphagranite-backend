@@ -31,6 +31,7 @@ from src.app.utils.helpers import utc_now
 logger = logging.getLogger("hcp_payroll_ingestion")
 
 DEFAULT_BASE_URL = "https://secure.saashr.com"
+LABOR_COST_REPORT_KIND = "labor_cost"
 STAFF_ROSTER_REPORT_KIND = "staff_roster"
 
 _scheduler_task: Optional[asyncio.Task] = None
@@ -87,8 +88,12 @@ async def _fetch_access_token(config: HcpPayrollSourceConfig) -> tuple[str, dict
     return access_token, token_data
 
 
-async def _fetch_saved_report(config: HcpPayrollSourceConfig, access_token: str) -> tuple[str, int, str]:
-    report_url = _join_url(config.base_url, f"/ta/rest/v1/report/saved/{config.report_settings_id}")
+async def _fetch_saved_report(
+    config: HcpPayrollSourceConfig,
+    access_token: str,
+    settings_id: str,
+) -> tuple[str, int, str]:
+    report_url = _join_url(config.base_url, f"/ta/rest/v1/report/saved/{settings_id}")
 
     def _request_report() -> tuple[str, int, str]:
         request = Request(
@@ -103,13 +108,24 @@ async def _fetch_saved_report(config: HcpPayrollSourceConfig, access_token: str)
     try:
         return await asyncio.to_thread(_request_report)
     except (HTTPError, URLError) as exc:
-        raise RuntimeError(f"Failed to fetch HCP saved report: {exc}") from exc
+        raise RuntimeError(f"Failed to fetch HCP saved report {settings_id}: {exc}") from exc
+
+
+def _report_targets(config: HcpPayrollSourceConfig) -> list[tuple[str, str]]:
+    """(report_kind, settings_id) pairs to pull with a single access token."""
+    targets: list[tuple[str, str]] = []
+    if config.payroll_settings_id:
+        targets.append((LABOR_COST_REPORT_KIND, config.payroll_settings_id))
+    if config.roster_settings_id:
+        targets.append((STAFF_ROSTER_REPORT_KIND, config.roster_settings_id))
+    return targets
 
 
 async def ingest_hcp_payroll_report(
     db: AsyncSession,
     source_config_id: Optional[int] = None,
     triggered_by_user_id: Optional[int] = None,
+    report_kind: Optional[str] = None,
 ) -> dict[str, Any]:
     if source_config_id is None:
         active_configs = await _get_active_configs(db)
@@ -118,7 +134,8 @@ async def ingest_hcp_payroll_report(
         return {
             "status": "queued",
             "config_results": [
-                await ingest_hcp_payroll_report(db, config.id, triggered_by_user_id) for config in active_configs
+                await ingest_hcp_payroll_report(db, config.id, triggered_by_user_id, report_kind)
+                for config in active_configs
             ],
         }
 
@@ -126,32 +143,77 @@ async def ingest_hcp_payroll_report(
     if not config:
         raise ValueError(f"HCP payroll source config {source_config_id} not found")
 
+    targets = _report_targets(config)
+    if report_kind:
+        wanted = report_kind.strip().lower()
+        targets = [target for target in targets if target[0] == wanted]
+        if not targets:
+            raise ValueError(f"No settings_id configured for report kind '{report_kind}'")
+
+    # One token is acquired per cycle and reused for every saved report.
+    access_token, token_data = await _fetch_access_token(config)
+    token_url = _join_url(config.base_url, f"/ta/rest/v2/companies/{config.company_id}/oauth2/token")
+    token_acquired_at = utc_now()
+
+    results: list[dict[str, Any]] = []
+    for kind, settings_id in targets:
+        results.append(
+            await _ingest_single_report(
+                db,
+                config,
+                kind,
+                settings_id,
+                access_token,
+                token_data,
+                token_url,
+                token_acquired_at,
+                triggered_by_user_id,
+            )
+        )
+
+    return {
+        "status": "completed" if all(r["status"] == "completed" for r in results) else "partial",
+        "config_id": config.id,
+        "reports": results,
+    }
+
+
+async def _ingest_single_report(
+    db: AsyncSession,
+    config: HcpPayrollSourceConfig,
+    report_kind: str,
+    settings_id: str,
+    access_token: str,
+    token_data: dict[str, Any],
+    token_url: str,
+    token_acquired_at: datetime,
+    triggered_by_user_id: Optional[int],
+) -> dict[str, Any]:
     run = HcpPayrollIngestionRun(
         source_config_id=config.id,
         status="running",
         created_by=triggered_by_user_id,
+        token_request_url=token_url,
+        token_response_json=token_data,
+        token_acquired_at=token_acquired_at,
+        token_expires_in=int(token_data["expires_in"]) if token_data.get("expires_in") is not None else None,
     )
     db.add(run)
     await db.commit()
     await db.refresh(run)
 
     try:
-        access_token, token_data = await _fetch_access_token(config)
-        run.token_request_url = _join_url(config.base_url, f"/ta/rest/v2/companies/{config.company_id}/oauth2/token")
-        run.token_response_json = token_data
-        run.token_acquired_at = utc_now()
-        run.token_expires_in = int(token_data.get("expires_in") or 0) if token_data.get("expires_in") is not None else None
-        await db.commit()
-
-        raw_report_text, report_http_status, report_content_type = await _fetch_saved_report(config, access_token)
-        run.report_request_url = _join_url(config.base_url, f"/ta/rest/v1/report/saved/{config.report_settings_id}")
+        raw_report_text, report_http_status, report_content_type = await _fetch_saved_report(
+            config, access_token, settings_id
+        )
+        run.report_request_url = _join_url(config.base_url, f"/ta/rest/v1/report/saved/{settings_id}")
         run.report_http_status = report_http_status
         run.report_content_type = report_content_type
 
-        if (config.report_kind or "").strip().lower() == STAFF_ROSTER_REPORT_KIND:
-            result = await _store_staff_roster(db, config, run, raw_report_text)
+        if report_kind == STAFF_ROSTER_REPORT_KIND:
+            result = await _store_staff_roster(db, config, run, raw_report_text, settings_id)
         else:
-            result = await _store_labor_cost_report(db, config, run, raw_report_text)
+            result = await _store_labor_cost_report(db, config, run, raw_report_text, settings_id)
 
         run.row_count = result["row_count"]
         run.status = "completed"
@@ -159,14 +221,21 @@ async def ingest_hcp_payroll_report(
         await db.commit()
         await db.refresh(run)
 
-        return {"status": "completed", "run_id": run.id, **result}
+        return {"status": "completed", "run_id": run.id, "settings_id": settings_id, **result}
     except Exception as exc:
         run.status = "failed"
         run.error_message = str(exc)
         run.finished_at = utc_now()
         await db.commit()
-        logger.exception("Failed to ingest HCP payroll report for config %s", config.id)
-        raise
+        logger.exception("Failed to ingest HCP %s report for config %s", report_kind, config.id)
+        return {
+            "status": "failed",
+            "run_id": run.id,
+            "report_kind": report_kind,
+            "settings_id": settings_id,
+            "row_count": 0,
+            "error": str(exc),
+        }
 
 
 async def _store_labor_cost_report(
@@ -174,12 +243,13 @@ async def _store_labor_cost_report(
     config: HcpPayrollSourceConfig,
     run: HcpPayrollIngestionRun,
     raw_report_text: str,
+    settings_id: str,
 ) -> dict[str, Any]:
     parsed_rows = parse_hcp_payroll_report(raw_report_text)
     snapshot = HcpPayrollReportSnapshot(
         source_config_id=config.id,
         ingestion_run_id=run.id,
-        report_settings_id=config.report_settings_id,
+        report_settings_id=settings_id,
         payload_format="text",
         raw_payload_text=raw_report_text,
         row_count=len(parsed_rows),
@@ -221,6 +291,7 @@ async def _store_staff_roster(
     config: HcpPayrollSourceConfig,
     run: HcpPayrollIngestionRun,
     raw_report_text: str,
+    settings_id: str,
 ) -> dict[str, Any]:
     parsed_rows = parse_hcp_staff_roster(raw_report_text)
     active_rows = [row for row in parsed_rows if row.is_active]
@@ -228,7 +299,7 @@ async def _store_staff_roster(
     snapshot = HcpStaffRosterSnapshot(
         source_config_id=config.id,
         ingestion_run_id=run.id,
-        report_settings_id=config.report_settings_id,
+        report_settings_id=settings_id,
         payload_format="csv",
         raw_payload_text=raw_report_text,
         pulled_at=utc_now(),
@@ -271,39 +342,59 @@ async def get_active_configs(db: AsyncSession) -> list[HcpPayrollSourceConfig]:
     return await _get_active_configs(db)
 
 
-async def preview_hcp_payroll_report(db: AsyncSession, source_config_id: int, max_rows: int = 10) -> dict[str, Any]:
-    """Fetch token + report and parse it without writing snapshots, for connectivity testing."""
+async def preview_hcp_payroll_report(
+    db: AsyncSession,
+    source_config_id: int,
+    max_rows: int = 10,
+    report_kind: Optional[str] = None,
+) -> dict[str, Any]:
+    """Authenticate and fetch every configured report without persisting anything."""
     config = await db.get(HcpPayrollSourceConfig, source_config_id)
     if not config:
         raise ValueError(f"HCP payroll source config {source_config_id} not found")
 
-    access_token, token_data = await _fetch_access_token(config)
-    raw_report_text, report_http_status, report_content_type = await _fetch_saved_report(config, access_token)
+    targets = _report_targets(config)
+    if report_kind:
+        wanted = report_kind.strip().lower()
+        targets = [target for target in targets if target[0] == wanted]
+        if not targets:
+            raise ValueError(f"No settings_id configured for report kind '{report_kind}'")
 
-    report_kind = (config.report_kind or "labor_cost").strip().lower()
-    if report_kind == STAFF_ROSTER_REPORT_KIND:
-        parsed = parse_hcp_staff_roster(raw_report_text)
-        sample = [vars(row) for row in parsed[:max_rows]]
-        active_employee_count = sum(1 for row in parsed if row.is_active)
-    else:
-        parsed = parse_hcp_payroll_report(raw_report_text)
-        sample = [vars(row) for row in parsed[:max_rows]]
-        active_employee_count = None
+    access_token, token_data = await _fetch_access_token(config)
+
+    reports: list[dict[str, Any]] = []
+    for kind, settings_id in targets:
+        raw_report_text, report_http_status, report_content_type = await _fetch_saved_report(
+            config, access_token, settings_id
+        )
+        if kind == STAFF_ROSTER_REPORT_KIND:
+            parsed = parse_hcp_staff_roster(raw_report_text)
+            active_employee_count = sum(1 for row in parsed if row.is_active)
+        else:
+            parsed = parse_hcp_payroll_report(raw_report_text)
+            active_employee_count = None
+
+        reports.append(
+            {
+                "report_kind": kind,
+                "settings_id": settings_id,
+                "report_http_status": report_http_status,
+                "report_content_type": report_content_type,
+                "row_count": len(parsed),
+                "active_employee_count": active_employee_count,
+                "raw_payload_preview": raw_report_text[:2000],
+                "sample_rows": [vars(row) for row in parsed[:max_rows]],
+            }
+        )
 
     return {
         "status": "ok",
         "persisted": False,
-        "report_kind": report_kind,
         "base_url": _normalize_base_url(config.base_url),
-        "report_settings_id": config.report_settings_id,
+        "company_id": config.company_id,
         "token_type": token_data.get("token_type"),
         "token_expires_in": token_data.get("expires_in"),
-        "report_http_status": report_http_status,
-        "report_content_type": report_content_type,
-        "row_count": len(parsed),
-        "active_employee_count": active_employee_count,
-        "raw_payload_preview": raw_report_text[:2000],
-        "sample_rows": sample,
+        "reports": reports,
     }
 
 
