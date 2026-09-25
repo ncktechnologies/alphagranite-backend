@@ -33,6 +33,11 @@ from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness
 from src.app.database.stone_type import StoneType
 from src.app.database.user import User
+from src.app.database.hcp_payroll import (
+    HcpPayrollReportRow,
+    HcpPayrollReportSnapshot,
+    HcpStaffRosterSnapshot,
+)
 from src.app.interface.generated_schemas import CNCDrafting, CostOfStone, CutList, DraftingSession, InstallCompletion, InstallScheduling, PlanningSection, ResurfaceScheduling, Revision, ShopRevision, Templating
 from src.app.interface.response_wrappers import SuccessResponse, success_response
 from src.app.middleware.jwt_auth import get_current_user
@@ -664,6 +669,102 @@ def _payroll_value(overrides: dict, week_key: str, field: str, default: float = 
     return default
 
 
+async def _latest_hcp_payroll_snapshot_id(db: AsyncSession) -> Optional[int]:
+    result = await db.execute(
+        select(HcpPayrollReportSnapshot.id)
+        .order_by(HcpPayrollReportSnapshot.created_at.desc(), HcpPayrollReportSnapshot.id.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def _latest_active_employee_count(db: AsyncSession) -> Optional[int]:
+    result = await db.execute(
+        select(HcpStaffRosterSnapshot.active_employee_count)
+        .order_by(HcpStaffRosterSnapshot.pulled_at.desc(), HcpStaffRosterSnapshot.id.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def _hcp_cost_center_labor_totals(db: AsyncSession, cost_center_prefix: str) -> dict:
+    """Aggregate the most recent HCP payroll pull for cost centers starting with the given prefix.
+
+    Holiday hours are folded into regular hours per row before summing (HCP's raw
+    "Regular Hours" column excludes holiday time). Duplicate employee_id rows (or
+    rows sharing the same name when employee_id is missing) are combined so head
+    count reflects unique employees rather than raw rows. employee_id is matched
+    against users.hcp_employee_id first so two rows for the same person still
+    collapse to one head even if the raw id string differs slightly.
+    """
+    empty = {
+        "snapshot_id": None,
+        "head_count": 0,
+        "wages_basic": 0.0,
+        "overtime_wages": 0.0,
+        "total_labor_cost": 0.0,
+        "regular_hours": 0.0,
+        "overtime_hours": 0.0,
+        "total_hours": 0.0,
+    }
+
+    snapshot_id = await _latest_hcp_payroll_snapshot_id(db)
+    if snapshot_id is None:
+        return empty
+
+    rows = (
+        await db.execute(
+            select(HcpPayrollReportRow).where(
+                HcpPayrollReportRow.snapshot_id == snapshot_id,
+                HcpPayrollReportRow.row_kind == "detail",
+                func.lower(HcpPayrollReportRow.cost_center_name).like(f"{cost_center_prefix.lower()}%"),
+            )
+        )
+    ).scalars().all()
+
+    if not rows:
+        return {**empty, "snapshot_id": snapshot_id}
+
+    employee_ids = {row.employee_id for row in rows if row.employee_id}
+    user_id_by_employee_id: dict[str, int] = {}
+    if employee_ids:
+        user_rows = (
+            await db.execute(select(User.id, User.hcp_employee_id).where(User.hcp_employee_id.in_(employee_ids)))
+        ).all()
+        user_id_by_employee_id = {hcp_id: uid for uid, hcp_id in user_rows if hcp_id}
+
+    regular_hours_total = 0.0
+    overtime_hours_total = 0.0
+    wages_basic_total = 0.0
+    overtime_wages_total = 0.0
+    employee_keys: set = set()
+
+    for row in rows:
+        regular_hours_total += _to_float(row.regular_hours) + _to_float(row.holiday_hours)
+        overtime_hours_total += _to_float(row.overtime_hours)
+        wages_basic_total += _to_float(row.total_reg_pto_hol_wages)
+        overtime_wages_total += _to_float(row.total_ot_wages)
+
+        if row.employee_id and row.employee_id in user_id_by_employee_id:
+            key = ("user", user_id_by_employee_id[row.employee_id])
+        elif row.employee_id:
+            key = ("employee_id", row.employee_id)
+        else:
+            key = ("name", (row.employee_first_name or "").strip().lower(), (row.employee_last_name or "").strip().lower())
+        employee_keys.add(key)
+
+    return {
+        "snapshot_id": snapshot_id,
+        "head_count": len(employee_keys),
+        "wages_basic": round(wages_basic_total, 2),
+        "overtime_wages": round(overtime_wages_total, 2),
+        "total_labor_cost": round(wages_basic_total + overtime_wages_total, 2),
+        "regular_hours": round(regular_hours_total, 2),
+        "overtime_hours": round(overtime_hours_total, 2),
+        "total_hours": round(regular_hours_total + overtime_hours_total, 2),
+    }
+
+
 def _client_layout_sections(report_key: str, data: dict) -> Optional[list[tuple[str, list[dict]]]]:
     if report_key == "redo-analysis":
         period = data.get("period", {})
@@ -910,7 +1011,9 @@ def _report_sections(report_key: str, data: dict, layout: str = "default") -> li
 async def get_owner_weekly_fabrication_labor_cost_report(
     year: int = Query(..., ge=2000, le=2100),
     month: int = Query(..., ge=1, le=12),
-    total_employees: int = Query(40, ge=0, description="Display header value for total employees"),
+    total_employees: Optional[int] = Query(
+        None, ge=0, description="Display header value for total employees; defaults to the latest HCP roster active employee count"
+    ),
     overhead_per_week: float = Query(38512.69, ge=0, description="Default overhead amount per week"),
     week_ending_weekday: int = Query(4, ge=0, le=6, description="Week ending day: Monday=0 ... Sunday=6"),
     payroll_overrides_json: Optional[str] = Query(
@@ -919,7 +1022,8 @@ async def get_owner_weekly_fabrication_labor_cost_report(
             "Optional JSON object keyed by week-ending date (YYYY-MM-DD) for external payroll values. "
             "Supported fields: head_count, shop_management, wages_basic_shop_yard, overtime_shop_yard, "
             "cost_of_overtime_pct, total_labor_cost, regular_hours, overtime_hours, overhead_per_week. "
-            "Use _default object for defaults."
+            "Use _default object for defaults. Unset fields default to the latest HCP payroll pull "
+            "for Fabrication-prefixed cost centers."
         ),
     ),
     db: AsyncSession = Depends(get_db),
@@ -929,6 +1033,12 @@ async def get_owner_weekly_fabrication_labor_cost_report(
     payroll_overrides, payroll_error = _parse_payroll_overrides(payroll_overrides_json)
     if payroll_error:
         return success_response(None, payroll_error, status_code=400)
+
+    hcp_totals = await _hcp_cost_center_labor_totals(db, "fabrication")
+    roster_active_employee_count = await _latest_active_employee_count(db)
+    resolved_total_employees = (
+        total_employees if total_employees is not None else (roster_active_employee_count if roster_active_employee_count is not None else 40)
+    )
 
     async def _compute_month(month_num: int) -> dict:
         windows = _week_windows_for_month(year, month_num, week_ending_weekday)
@@ -975,12 +1085,12 @@ async def get_owner_weekly_fabrication_labor_cost_report(
             avg_sqft_per_day = _safe_div(completed_sqft, number_of_days)
             avg_revenue_per_day = _safe_div(gross_revenue, number_of_days)
 
-            head_count = _payroll_value(payroll_overrides, week_key, "head_count", float(total_employees))
+            head_count = _payroll_value(payroll_overrides, week_key, "head_count", float(hcp_totals["head_count"]))
             shop_management = _payroll_value(payroll_overrides, week_key, "shop_management", 0.0)
-            wages_basic_shop_yard = _payroll_value(payroll_overrides, week_key, "wages_basic_shop_yard", 0.0)
-            overtime_shop_yard = _payroll_value(payroll_overrides, week_key, "overtime_shop_yard", 0.0)
-            regular_hours = _payroll_value(payroll_overrides, week_key, "regular_hours", 0.0)
-            overtime_hours = _payroll_value(payroll_overrides, week_key, "overtime_hours", 0.0)
+            wages_basic_shop_yard = _payroll_value(payroll_overrides, week_key, "wages_basic_shop_yard", hcp_totals["wages_basic"])
+            overtime_shop_yard = _payroll_value(payroll_overrides, week_key, "overtime_shop_yard", hcp_totals["overtime_wages"])
+            regular_hours = _payroll_value(payroll_overrides, week_key, "regular_hours", hcp_totals["regular_hours"])
+            overtime_hours = _payroll_value(payroll_overrides, week_key, "overtime_hours", hcp_totals["overtime_hours"])
             week_overhead = _payroll_value(payroll_overrides, week_key, "overhead_per_week", overhead_per_week)
 
             total_labor_cost_override = _payroll_value(payroll_overrides, week_key, "total_labor_cost", -1.0)
@@ -1131,12 +1241,24 @@ async def get_owner_weekly_fabrication_labor_cost_report(
                 "end_date": month_end.isoformat(),
             },
             "display": {
-                "total_employee": total_employees,
+                "total_employee": resolved_total_employees,
                 "default_overhead_per_week": round(overhead_per_week, 2),
                 "week_ending_weekday": week_ending_weekday,
             },
             "payroll_source": {
-                "mode": "external_overrides",
+                "mode": "hcp_payroll",
+                "hcp_payroll_snapshot_id": hcp_totals["snapshot_id"],
+                "hcp_payroll_cost_center_prefix": "Fabrication",
+                "hcp_payroll_defaults": {
+                    "head_count": hcp_totals["head_count"],
+                    "wages_basic_shop_yard": hcp_totals["wages_basic"],
+                    "overtime_shop_yard": hcp_totals["overtime_wages"],
+                    "total_labor_cost": hcp_totals["total_labor_cost"],
+                    "regular_hours": hcp_totals["regular_hours"],
+                    "overtime_hours": hcp_totals["overtime_hours"],
+                    "total_hours": hcp_totals["total_hours"],
+                },
+                "roster_active_employee_count": roster_active_employee_count,
                 "override_fields": [
                     "head_count",
                     "shop_management",
@@ -1162,7 +1284,9 @@ async def get_owner_weekly_fabrication_labor_cost_report(
 async def get_owner_weekly_installer_labor_cost_report(
     year: int = Query(..., ge=2000, le=2100),
     month: int = Query(..., ge=1, le=12),
-    total_employees: int = Query(40, ge=0, description="Display header value for total employees"),
+    total_employees: Optional[int] = Query(
+        None, ge=0, description="Display header value for total employees; defaults to the latest HCP roster active employee count"
+    ),
     overhead_per_week: float = Query(18512.69, ge=0, description="Default overhead amount per week"),
     week_ending_weekday: int = Query(4, ge=0, le=6, description="Week ending day: Monday=0 ... Sunday=6"),
     payroll_overrides_json: Optional[str] = Query(
@@ -1171,7 +1295,8 @@ async def get_owner_weekly_installer_labor_cost_report(
             "Optional JSON object keyed by week-ending date (YYYY-MM-DD) for external payroll values. "
             "Supported fields: sub_contractor_head_count, wages_sub_contractor, head_count, "
             "wages_basic_installer, overtime_installer, overtime_pct, total_labor_cost, "
-            "regular_hours, overtime_hours, overhead_per_week. Use _default object for defaults."
+            "regular_hours, overtime_hours, overhead_per_week. Use _default object for defaults. "
+            "Unset fields default to the latest HCP payroll pull for Install-prefixed cost centers."
         ),
     ),
     db: AsyncSession = Depends(get_db),
@@ -1181,6 +1306,12 @@ async def get_owner_weekly_installer_labor_cost_report(
     payroll_overrides, payroll_error = _parse_payroll_overrides(payroll_overrides_json)
     if payroll_error:
         return success_response(None, payroll_error, status_code=400)
+
+    hcp_totals = await _hcp_cost_center_labor_totals(db, "install")
+    roster_active_employee_count = await _latest_active_employee_count(db)
+    resolved_total_employees = (
+        total_employees if total_employees is not None else (roster_active_employee_count if roster_active_employee_count is not None else 40)
+    )
 
     async def _compute_month(month_num: int) -> dict:
         windows = _week_windows_for_month(year, month_num, week_ending_weekday)
@@ -1229,11 +1360,11 @@ async def get_owner_weekly_installer_labor_cost_report(
 
             sub_contractor_head_count = _payroll_value(payroll_overrides, week_key, "sub_contractor_head_count", 0.0)
             wages_sub_contractor = _payroll_value(payroll_overrides, week_key, "wages_sub_contractor", 0.0)
-            total_head_count = _payroll_value(payroll_overrides, week_key, "head_count", float(total_employees))
-            wages_basic_installer = _payroll_value(payroll_overrides, week_key, "wages_basic_installer", 0.0)
-            overtime_installer = _payroll_value(payroll_overrides, week_key, "overtime_installer", 0.0)
-            regular_hours = _payroll_value(payroll_overrides, week_key, "regular_hours", 0.0)
-            overtime_hours = _payroll_value(payroll_overrides, week_key, "overtime_hours", 0.0)
+            total_head_count = _payroll_value(payroll_overrides, week_key, "head_count", float(hcp_totals["head_count"]))
+            wages_basic_installer = _payroll_value(payroll_overrides, week_key, "wages_basic_installer", hcp_totals["wages_basic"])
+            overtime_installer = _payroll_value(payroll_overrides, week_key, "overtime_installer", hcp_totals["overtime_wages"])
+            regular_hours = _payroll_value(payroll_overrides, week_key, "regular_hours", hcp_totals["regular_hours"])
+            overtime_hours = _payroll_value(payroll_overrides, week_key, "overtime_hours", hcp_totals["overtime_hours"])
             week_overhead = _payroll_value(payroll_overrides, week_key, "overhead_per_week", overhead_per_week)
 
             total_labor_cost_override = _payroll_value(payroll_overrides, week_key, "total_labor_cost", -1.0)
@@ -1384,12 +1515,24 @@ async def get_owner_weekly_installer_labor_cost_report(
                 "end_date": month_end.isoformat(),
             },
             "display": {
-                "total_employee": total_employees,
+                "total_employee": resolved_total_employees,
                 "default_overhead_per_week": round(overhead_per_week, 2),
                 "week_ending_weekday": week_ending_weekday,
             },
             "payroll_source": {
-                "mode": "external_overrides",
+                "mode": "hcp_payroll",
+                "hcp_payroll_snapshot_id": hcp_totals["snapshot_id"],
+                "hcp_payroll_cost_center_prefix": "Install",
+                "hcp_payroll_defaults": {
+                    "head_count": hcp_totals["head_count"],
+                    "wages_basic_installer": hcp_totals["wages_basic"],
+                    "overtime_installer": hcp_totals["overtime_wages"],
+                    "total_labor_cost": hcp_totals["total_labor_cost"],
+                    "regular_hours": hcp_totals["regular_hours"],
+                    "overtime_hours": hcp_totals["overtime_hours"],
+                    "total_hours": hcp_totals["total_hours"],
+                },
+                "roster_active_employee_count": roster_active_employee_count,
                 "override_fields": [
                     "sub_contractor_head_count",
                     "wages_sub_contractor",
@@ -7515,7 +7658,7 @@ async def export_owner_report(
     top_n: int = Query(10, ge=1, le=50),
     year: Optional[int] = Query(None, ge=2000, le=2100),
     month: Optional[int] = Query(None, ge=1, le=12),
-    total_employees: int = Query(40, ge=0),
+    total_employees: Optional[int] = Query(None, ge=0),
     overhead_per_week: float = Query(38512.69, ge=0),
     week_ending_weekday: int = Query(4, ge=0, le=6),
     payroll_overrides_json: Optional[str] = Query(None),
