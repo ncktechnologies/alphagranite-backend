@@ -1153,7 +1153,7 @@ async def get_owner_weekly_fabrication_labor_cost_report(
         None,
         description=(
             "Optional JSON object keyed by week-ending date (YYYY-MM-DD) for external payroll values. "
-            "Supported fields: head_count, shop_management, wages_basic_shop_yard, overtime_shop_yard, "
+            "Supported fields: head_count, wages_basic_shop_yard, overtime_shop_yard, "
             "cost_of_overtime_pct, total_labor_cost, regular_hours, overtime_hours, overhead_per_week. "
             "Use _default object for defaults. Unset fields default to that week's HCP payroll pull "
             "for Fabrication-prefixed cost centers."
@@ -1180,6 +1180,7 @@ async def get_owner_weekly_fabrication_labor_cost_report(
     async def _compute_month(month_num: int) -> dict:
         windows = _week_windows_for_month(year, month_num, week_ending_weekday)
         weekly_rows: list[dict] = []
+        week_overheads: list[float] = []
 
         for window in windows:
             week_key = window["week_end"].isoformat()
@@ -1226,7 +1227,6 @@ async def get_owner_weekly_fabrication_labor_cost_report(
             avg_revenue_per_day = _safe_div(gross_revenue, number_of_days)
 
             head_count = _payroll_value(payroll_overrides, week_key, "head_count", float(hcp_totals["head_count"]))
-            shop_management = _payroll_value(payroll_overrides, week_key, "shop_management", 0.0)
             wages_basic_shop_yard = _payroll_value(payroll_overrides, week_key, "wages_basic_shop_yard", hcp_totals["wages_basic"])
             overtime_shop_yard = _payroll_value(payroll_overrides, week_key, "overtime_shop_yard", hcp_totals["overtime_wages"])
             regular_hours = _payroll_value(payroll_overrides, week_key, "regular_hours", hcp_totals["regular_hours"])
@@ -1252,7 +1252,7 @@ async def get_owner_weekly_fabrication_labor_cost_report(
             shop_labor_per_hour = _safe_div(total_labor_cost, total_hours)
             shop_overhead_per_hour = _safe_div(week_overhead, total_hours)
             shop_labor_overhead_per_hour = shop_labor_per_hour + shop_overhead_per_hour
-            manpower_cost_per_hour = shop_labor_per_hour
+            manpower_cost_per_hour = _safe_div(shop_labor_overhead_per_hour, head_count)
 
             sqft_per_labor_hour = _safe_div(completed_sqft, total_hours)
             shop_productivity_sqft_per_hour = _safe_div(cut_sqft_saw, total_hours)
@@ -1269,14 +1269,12 @@ async def get_owner_weekly_fabrication_labor_cost_report(
                     "week_ending": week_key,
                     "number_of_days": number_of_days,
                     "cut_sqft_saw": round(cut_sqft_saw, 2),
-                    "wj_sqft": 0.0,
                     "completed_sqft": round(completed_sqft, 2),
                     "average_sqft_per_day": round(avg_sqft_per_day, 2),
                     "gross_revenue": round(gross_revenue, 2),
                     "gross_profit": round(gross_profit, 2),
                     "average_revenue_per_day": round(avg_revenue_per_day, 2),
                     "total_head_count_inc_yard": round(head_count, 2),
-                    "shop_management": round(shop_management, 2),
                     "wages_basic_shop_yard": round(wages_basic_shop_yard, 2),
                     "overtime_shop_yard": round(overtime_shop_yard, 2),
                     "cost_of_overtime_pct": round(cost_of_overtime_pct, 2),
@@ -1298,10 +1296,10 @@ async def get_owner_weekly_fabrication_labor_cost_report(
                     "gross_profit_per_sf_completed": round(gross_profit_per_sf_completed, 2),
                     "gross_profit_less_shop_total_cost_psf": round(gross_profit_less_shop_total_cost_psf, 2),
                     "gross_revenue_per_sqft_fabricated": round(gross_revenue_per_sqft_fabricated, 2),
-                    "overhead_per_week": round(week_overhead, 2),
                     "hcp_payroll_snapshot_id": hcp_totals.get("snapshot_id"),
                 }
             )
+            week_overheads.append(float(week_overhead))
 
         week_count = len(weekly_rows)
         # Average head count over weeks that have payroll so weeks without an HCP pull don't drag it to zero.
@@ -1311,11 +1309,9 @@ async def get_owner_weekly_fabrication_labor_cost_report(
             "number_of_weeks": week_count,
             "number_of_days": int(sum(_to_float(row["number_of_days"]) for row in weekly_rows)),
             "cut_sqft_saw": round(sum(_to_float(row["cut_sqft_saw"]) for row in weekly_rows), 2),
-            "wj_sqft": round(sum(_to_float(row["wj_sqft"]) for row in weekly_rows), 2),
             "completed_sqft": round(sum(_to_float(row["completed_sqft"]) for row in weekly_rows), 2),
             "gross_revenue": round(sum(_to_float(row["gross_revenue"]) for row in weekly_rows), 2),
             "gross_profit": round(sum(_to_float(row["gross_profit"]) for row in weekly_rows), 2),
-            "shop_management": round(sum(_to_float(row["shop_management"]) for row in weekly_rows), 2),
             "wages_basic_shop_yard": round(sum(_to_float(row["wages_basic_shop_yard"]) for row in weekly_rows), 2),
             "overtime_shop_yard": round(sum(_to_float(row["overtime_shop_yard"]) for row in weekly_rows), 2),
             "total_labor_cost": round(sum(_to_float(row["total_labor_cost"]) for row in weekly_rows), 2),
@@ -1323,7 +1319,7 @@ async def get_owner_weekly_fabrication_labor_cost_report(
             "overtime_hours": round(sum(_to_float(row["overtime_hours"]) for row in weekly_rows), 2),
             "total_hours": round(sum(_to_float(row["total_hours"]) for row in weekly_rows), 2),
             "total_head_count_inc_yard": round(_safe_div(sum(staffed_head_counts), len(staffed_head_counts)), 2),
-            "overhead_per_week": round(sum(_to_float(row["overhead_per_week"]) for row in weekly_rows), 2),
+            "overhead_per_week": round(sum(week_overheads), 2),
         }
 
         totals["average_sqft_per_day"] = round(_safe_div(totals["completed_sqft"], totals["number_of_days"]), 2)
@@ -1333,7 +1329,7 @@ async def get_owner_weekly_fabrication_labor_cost_report(
         totals["shop_labor_per_hour"] = round(_safe_div(totals["total_labor_cost"], totals["total_hours"]), 2)
         totals["shop_overhead_per_hour"] = round(_safe_div(totals["overhead_per_week"], totals["total_hours"]), 2)
         totals["shop_labor_overhead_per_hour"] = round(totals["shop_labor_per_hour"] + totals["shop_overhead_per_hour"], 2)
-        totals["manpower_cost_per_hour"] = totals["shop_labor_per_hour"]
+        totals["manpower_cost_per_hour"] = round(_safe_div(totals["shop_labor_overhead_per_hour"], totals["total_head_count_inc_yard"]), 2)
         totals["sqft_per_labor_hour"] = round(_safe_div(totals["completed_sqft"], totals["total_hours"]), 2)
         totals["shop_productivity_sqft_per_hour"] = round(_safe_div(totals["cut_sqft_saw"], totals["total_hours"]), 2)
         totals["labor_cost_per_sq_ft"] = round(_safe_div(totals["total_labor_cost"], totals["completed_sqft"]), 2)
@@ -1407,7 +1403,6 @@ async def get_owner_weekly_fabrication_labor_cost_report(
                 "roster_active_employee_count": roster_active_employee_count,
                 "override_fields": [
                     "head_count",
-                    "shop_management",
                     "wages_basic_shop_yard",
                     "overtime_shop_yard",
                     "cost_of_overtime_pct",
