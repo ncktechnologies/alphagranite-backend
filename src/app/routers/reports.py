@@ -41,7 +41,7 @@ from src.app.database.hcp_payroll import (
 from src.app.interface.generated_schemas import CNCDrafting, CostOfStone, CutList, DraftingSession, InstallCompletion, InstallScheduling, PlanningSection, ResurfaceScheduling, Revision, ShopRevision, Templating
 from src.app.interface.response_wrappers import SuccessResponse, success_response
 from src.app.middleware.jwt_auth import get_current_user
-from src.app.routers.fabs import FAB_STAGES, PUNCHOUT_REDIRECT_FAB_TYPES, _active_shop_cut_plan_visibility_filter, _get_shop_current_stage, _pending_cnc_widget_filter, _stage_filter_condition
+from src.app.routers.fabs import CUT_PLAN_NAMES, FAB_STAGES, PUNCHOUT_REDIRECT_FAB_TYPES, _active_shop_cut_plan_visibility_filter, _cut_plan_key_expr, _get_shop_current_stage, _pending_cnc_widget_filter, _stage_filter_condition
 from src.app.service.hcp_payroll_ingestion import pay_period_for_pull
 from src.app.service.monthly_end_of_month_status_report import send_monthly_end_of_month_status_report
 from src.app.utils.helpers import error_response, utc_now, to_utc
@@ -1105,6 +1105,41 @@ def _report_sections(report_key: str, data: dict, layout: str = "default") -> li
     return [("data", [{"payload": json.dumps(data)}])]
 
 
+def _fully_completed_shop_plans_subquery(name: str, plan_names: Optional[list[str]] = None):
+    """One row per fab whose shop cut plans (optionally only those in plan_names) are all at 100% and finished.
+
+    completed_at is the most recent actual_end_date across those plans; it decides which week the fab lands in.
+    """
+    plan_done = and_(ShopCutPlan.work_percentage >= 100, ShopCutPlan.actual_end_date.isnot(None))
+    query = select(
+        ShopCutPlan.fab_id.label("fab_id"),
+        func.max(ShopCutPlan.actual_end_date).label("completed_at"),
+    )
+    if plan_names is not None:
+        query = query.join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id).where(
+            func.lower(func.trim(PlanningSection.plan_name)).in_(plan_names)
+        )
+    return (
+        query.group_by(ShopCutPlan.fab_id)
+        .having(func.count(ShopCutPlan.id) == func.count(case((plan_done, ShopCutPlan.id))))
+        .subquery(name)
+    )
+
+
+def _install_completed_fabs_subquery():
+    """One row per fab with an install completion date; completed_at is the latest one and decides the fab's week."""
+    return (
+        select(
+            InstallCompletion.fab_id.label("fab_id"),
+            func.max(InstallCompletion.completion_date).label("completed_at"),
+            func.sum(_safe_numeric_col(InstallCompletion.total_sqft_installed)).label("sqft_installed"),
+        )
+        .where(InstallCompletion.completion_date.isnot(None))
+        .group_by(InstallCompletion.fab_id)
+        .subquery("install_completed_fabs")
+    )
+
+
 @router.get("/reports/owner/weekly-fabrication-labor-cost", response_model=SuccessResponse[dict])
 async def get_owner_weekly_fabrication_labor_cost_report(
     year: int = Query(..., ge=2000, le=2100),
@@ -1138,6 +1173,10 @@ async def get_owner_weekly_fabrication_labor_cost_report(
         total_employees if total_employees is not None else (roster_active_employee_count if roster_active_employee_count is not None else 40)
     )
 
+    # Cut: fabs whose CUT - SAW and CUT - WJ plans are all done. Completed: fabs whose every shop plan is done.
+    cut_fabs = _fully_completed_shop_plans_subquery("cut_wj_completed_fabs", CUT_PLAN_NAMES)
+    completed_fabs = _fully_completed_shop_plans_subquery("shop_completed_fabs")
+
     async def _compute_month(month_num: int) -> dict:
         windows = _week_windows_for_month(year, month_num, week_ending_weekday)
         weekly_rows: list[dict] = []
@@ -1151,9 +1190,12 @@ async def get_owner_weekly_fabrication_labor_cost_report(
 
             cut_metrics = (
                 await db.execute(
-                    select(func.sum(_safe_numeric_col(Fab.saw_cut_lnft)), func.sum(_safe_numeric_col(Fab.total_sqft))).where(
-                        Fab.shop_date_schedule >= week_start_dt,
-                        Fab.shop_date_schedule <= week_end_dt,
+                    select(func.sum(_safe_numeric_col(Fab.total_sqft)))
+                    .select_from(cut_fabs)
+                    .join(Fab, Fab.id == cut_fabs.c.fab_id)
+                    .where(
+                        cut_fabs.c.completed_at >= week_start_dt,
+                        cut_fabs.c.completed_at <= week_end_dt,
                     )
                 )
             ).first()
@@ -1161,20 +1203,20 @@ async def get_owner_weekly_fabrication_labor_cost_report(
             completion_metrics = (
                 await db.execute(
                     select(
-                        func.sum(_safe_numeric_col(InstallCompletion.total_sqft_installed)),
+                        func.sum(_safe_numeric_col(Fab.total_sqft)),
                         func.sum(_safe_numeric_col(Fab.revenue)),
                         func.sum(_safe_numeric_col(Fab.gp)),
                     )
-                    .join(Fab, Fab.id == InstallCompletion.fab_id, isouter=True)
+                    .select_from(completed_fabs)
+                    .join(Fab, Fab.id == completed_fabs.c.fab_id)
                     .where(
-                        InstallCompletion.is_completed.is_(True),
-                        InstallCompletion.completion_date >= week_start_dt,
-                        InstallCompletion.completion_date <= week_end_dt,
+                        completed_fabs.c.completed_at >= week_start_dt,
+                        completed_fabs.c.completed_at <= week_end_dt,
                     )
                 )
             ).first()
 
-            cut_sqft_saw = _to_float(cut_metrics[0] if cut_metrics and cut_metrics[0] is not None else (cut_metrics[1] if cut_metrics else 0.0))
+            cut_sqft_saw = _to_float(cut_metrics[0] if cut_metrics else 0.0)
             completed_sqft = _to_float(completion_metrics[0] if completion_metrics else 0.0)
             gross_revenue = _to_float(completion_metrics[1] if completion_metrics else 0.0)
             gross_profit = _to_float(completion_metrics[2] if completion_metrics else 0.0)
@@ -1523,6 +1565,8 @@ async def get_owner_weekly_installer_labor_cost_report(
     )
 
     today = date.today()
+    # Every metric comes from the fabs whose install completion date falls in the week.
+    installed_fabs = _install_completed_fabs_subquery()
 
     async def _compute_month(month_num: int) -> dict:
         windows = _week_windows_for_month(year, month_num, week_ending_weekday)
@@ -1540,11 +1584,15 @@ async def get_owner_weekly_installer_labor_cost_report(
             week_end_dt = to_utc(datetime.combine(window["overlap_end"], time.max))
             hcp_totals = hcp_weekly.get(week_key, EMPTY_HCP_LABOR_TOTALS)
 
+            week_fab_ids = select(installed_fabs.c.fab_id).where(
+                installed_fabs.c.completed_at >= week_start_dt,
+                installed_fabs.c.completed_at <= week_end_dt,
+            )
+
             install_sqft_row = (
                 await db.execute(
                     select(func.sum(_safe_numeric_col(InstallScheduling.total_sqft))).where(
-                        InstallScheduling.scheduled_install_date >= week_start_dt,
-                        InstallScheduling.scheduled_install_date <= week_end_dt,
+                        InstallScheduling.fab_id.in_(week_fab_ids),
                     )
                 )
             ).first()
@@ -1552,15 +1600,16 @@ async def get_owner_weekly_installer_labor_cost_report(
             completion_metrics = (
                 await db.execute(
                     select(
-                        func.sum(_safe_numeric_col(InstallCompletion.total_sqft_installed)),
+                        # Fall back to the fab's square footage when the installer didn't record sqft installed.
+                        func.sum(func.coalesce(installed_fabs.c.sqft_installed, _safe_numeric_col(Fab.total_sqft))),
                         func.sum(_safe_numeric_col(Fab.revenue)),
                         func.sum(_safe_numeric_col(Fab.gp)),
                     )
-                    .join(Fab, Fab.id == InstallCompletion.fab_id, isouter=True)
+                    .select_from(installed_fabs)
+                    .join(Fab, Fab.id == installed_fabs.c.fab_id, isouter=True)
                     .where(
-                        InstallCompletion.is_completed.is_(True),
-                        InstallCompletion.completion_date >= week_start_dt,
-                        InstallCompletion.completion_date <= week_end_dt,
+                        installed_fabs.c.completed_at >= week_start_dt,
+                        installed_fabs.c.completed_at <= week_end_dt,
                     )
                 )
             ).first()
@@ -2108,12 +2157,12 @@ async def get_owner_redo_analysis_report(
         .where(
             ShopCutPlan.work_percentage >= 100,
             ShopCutPlan.actual_end_date.isnot(None),
-            normalized_plan.in_(["cut", "wj"]),
+            normalized_plan.in_(CUT_PLAN_NAMES),
             ShopCutPlan.actual_end_date >= start_dt,
             ShopCutPlan.actual_end_date <= end_dt,
         )
         .group_by(ShopCutPlan.fab_id)
-        .having(func.count(func.distinct(normalized_plan)) == 2)
+        .having(func.count(func.distinct(_cut_plan_key_expr())) == 2)
         .subquery("cut_wj_completed_fabs_subquery")
     )
 
@@ -2413,11 +2462,11 @@ async def get_owner_redo_analysis_report(
             .where(
                 ShopCutPlan.work_percentage >= 100,
                 ShopCutPlan.actual_end_date.isnot(None),
-                normalized_plan.in_(["cut", "wj"]),
+                normalized_plan.in_(CUT_PLAN_NAMES),
                 func.extract("year", ShopCutPlan.actual_end_date) == annual_year,
             )
             .group_by(month_bucket_expr, ShopCutPlan.fab_id)
-            .having(func.count(func.distinct(normalized_plan)) == 2)
+            .having(func.count(func.distinct(_cut_plan_key_expr())) == 2)
         )
     ).all()
 
@@ -2537,7 +2586,9 @@ async def get_owner_shop_status_report(
     allowed_shop_plan_stages = {
         "cnc": "cnc",
         "cut": "cut",
+        "cut saw": "cut",
         "wj": "wj",
+        "cut wj": "wj",
         "miter": "miter",
         "edging": "edging",
         "resurfacing": "resurfacing",
@@ -3155,7 +3206,9 @@ async def _get_shop_production_stage_counts(
     shop_stage_order = {
         "unplanned": 0,
         "cut": 1,
+        "cut - saw": 1,
         "wj": 2,
+        "cut - wj": 2,
         "cnc": 3,
         "miter": 4,
         "hand work": 5,
@@ -5963,7 +6016,7 @@ async def get_monthly_cut_completion_report(
         .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
         .where(
             ShopCutPlan.fab_id == Fab.id,
-            func.lower(func.trim(PlanningSection.plan_name)).in_(["cut", "wj"]),
+            func.lower(func.trim(PlanningSection.plan_name)).in_(CUT_PLAN_NAMES),
         )
         .exists()
     )
@@ -6549,7 +6602,7 @@ async def get_owner_turnaround_times_report(
             func.max(ShopCutPlan.actual_end_date).label("cut_end_date"),
         )
         .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
-        .where(func.lower(func.trim(PlanningSection.plan_name)).in_(["cut", "wj"]))
+        .where(func.lower(func.trim(PlanningSection.plan_name)).in_(CUT_PLAN_NAMES))
         .group_by(ShopCutPlan.fab_id)
         .subquery()
     )

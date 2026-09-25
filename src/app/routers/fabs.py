@@ -86,6 +86,31 @@ def _normalize_shop_plan_name(plan_name: Optional[str]) -> str:
     return "".join(character for character in (plan_name or "").upper() if character.isalnum())
 
 
+# Lowercased planning section names for the two cut stages; legacy "cut"/"wj" kept until every environment is renamed.
+CUT_SAW_PLAN_NAMES = ("cut - saw", "cut")
+CUT_WJ_PLAN_NAMES = ("cut - wj", "wj")
+CUT_PLAN_NAMES = [*CUT_SAW_PLAN_NAMES, *CUT_WJ_PLAN_NAMES]
+
+
+def _cut_plan_key(plan_name: Optional[str]) -> Optional[str]:
+    """Map a planning section name to "cut" (saw) or "wj", or None when it isn't a cut stage."""
+    normalized = (plan_name or "").strip().lower()
+    if normalized in CUT_SAW_PLAN_NAMES:
+        return "cut"
+    if normalized in CUT_WJ_PLAN_NAMES:
+        return "wj"
+    return None
+
+
+def _cut_plan_key_expr():
+    """SQL counterpart of _cut_plan_key on PlanningSection.plan_name."""
+    normalized = func.lower(func.trim(PlanningSection.plan_name))
+    return sa.case(
+        (normalized.in_(CUT_SAW_PLAN_NAMES), "cut"),
+        (normalized.in_(CUT_WJ_PLAN_NAMES), "wj"),
+    )
+
+
 def _find_missing_shop_plan_data_points(
     fab: Fab,
     update_data: dict,
@@ -179,7 +204,7 @@ def _effective_cut_list_filter():
         .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
         .where(
             ShopCutPlan.fab_id == Fab.id,
-            func.lower(func.trim(PlanningSection.plan_name)).in_(["cut", "wj"]),
+            func.lower(func.trim(PlanningSection.plan_name)).in_(CUT_PLAN_NAMES),
         )
         .exists()
     )
@@ -189,7 +214,7 @@ def _effective_cut_list_filter():
         .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
         .where(
             ShopCutPlan.fab_id == Fab.id,
-            func.lower(func.trim(PlanningSection.plan_name)).in_(["cut", "wj"]),
+            func.lower(func.trim(PlanningSection.plan_name)).in_(CUT_PLAN_NAMES),
             func.coalesce(ShopCutPlan.work_percentage, 0) < 100,
         )
         .exists()
@@ -474,16 +499,16 @@ async def _transition_completed_cutlist_fabs_to_shop(
             .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
             .where(
                 Fab.current_stage == "cut_list",
-                func.lower(func.trim(PlanningSection.plan_name)).in_(["cut", "wj"]),
+                func.lower(func.trim(PlanningSection.plan_name)).in_(CUT_PLAN_NAMES),
             )
         )
     ).all()
 
     completed_sections_by_fab: dict[int, set[str]] = defaultdict(set)
     for fab_id, plan_name, work_percentage in rows:
-        normalized_name = (plan_name or "").strip().lower()
-        if normalized_name in {"cut", "wj"} and int(work_percentage or 0) >= 100:
-            completed_sections_by_fab[fab_id].add(normalized_name)
+        cut_key = _cut_plan_key(plan_name)
+        if cut_key and int(work_percentage or 0) >= 100:
+            completed_sections_by_fab[fab_id].add(cut_key)
 
     eligible_fab_ids = [
         fab_id
