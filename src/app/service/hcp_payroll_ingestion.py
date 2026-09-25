@@ -3,7 +3,7 @@ import io
 import logging
 import os
 import json
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
 from urllib.error import HTTPError, URLError
@@ -109,6 +109,17 @@ async def _fetch_saved_report(
         return await asyncio.to_thread(_request_report)
     except (HTTPError, URLError) as exc:
         raise RuntimeError(f"Failed to fetch HCP saved report {settings_id}: {exc}") from exc
+
+
+def pay_period_for_pull(pulled_at: datetime) -> tuple[date, date]:
+    """Mon-Sun week an HCP pull covers: the last full week before the pull.
+
+    Pulls run Monday at midnight for the previous week, so a Monday pull maps to
+    the Sunday before it; an ad-hoc mid-week pull maps to the last completed week.
+    """
+    pulled_date = pulled_at.date()
+    period_end = pulled_date - timedelta(days=pulled_date.weekday() + 1)
+    return period_end - timedelta(days=6), period_end
 
 
 def _report_targets(config: HcpPayrollSourceConfig) -> list[tuple[str, str]]:
@@ -246,6 +257,8 @@ async def _store_labor_cost_report(
     settings_id: str,
 ) -> dict[str, Any]:
     parsed_rows = parse_hcp_payroll_report(raw_report_text)
+    pulled_at = utc_now()
+    period_start, period_end = pay_period_for_pull(pulled_at)
     snapshot = HcpPayrollReportSnapshot(
         source_config_id=config.id,
         ingestion_run_id=run.id,
@@ -253,6 +266,9 @@ async def _store_labor_cost_report(
         payload_format="text",
         raw_payload_text=raw_report_text,
         row_count=len(parsed_rows),
+        period_start=period_start,
+        period_end=period_end,
+        created_at=pulled_at,
     )
     db.add(snapshot)
     await db.flush()
@@ -296,6 +312,8 @@ async def _store_staff_roster(
 ) -> dict[str, Any]:
     parsed_rows = parse_hcp_staff_roster(raw_report_text)
     active_rows = [row for row in parsed_rows if row.is_active]
+    pulled_at = utc_now()
+    period_start, period_end = pay_period_for_pull(pulled_at)
 
     snapshot = HcpStaffRosterSnapshot(
         source_config_id=config.id,
@@ -303,9 +321,11 @@ async def _store_staff_roster(
         report_settings_id=settings_id,
         payload_format="csv",
         raw_payload_text=raw_report_text,
-        pulled_at=utc_now(),
+        pulled_at=pulled_at,
         row_count=len(parsed_rows),
         active_employee_count=len(active_rows),
+        period_start=period_start,
+        period_end=period_end,
     )
     db.add(snapshot)
     await db.flush()

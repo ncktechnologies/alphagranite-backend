@@ -282,6 +282,8 @@ async def list_snapshots(
             "report_title": item.report_title,
             "payload_format": item.payload_format,
             "row_count": item.row_count,
+            "period_start": item.period_start.isoformat() if item.period_start else None,
+            "period_end": item.period_end.isoformat() if item.period_end else None,
             "created_at": item.created_at.isoformat() if item.created_at else None,
         }
         for item in result.scalars().all()
@@ -333,6 +335,8 @@ def _serialize_roster_snapshot(snapshot: HcpStaffRosterSnapshot) -> dict:
         "pulled_at": snapshot.pulled_at.isoformat() if snapshot.pulled_at else None,
         "row_count": snapshot.row_count,
         "active_employee_count": snapshot.active_employee_count,
+        "period_start": snapshot.period_start.isoformat() if snapshot.period_start else None,
+        "period_end": snapshot.period_end.isoformat() if snapshot.period_end else None,
         "created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
     }
 

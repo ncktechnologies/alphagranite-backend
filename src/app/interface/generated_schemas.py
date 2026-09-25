@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional, List
 from sqlmodel import SQLModel, Field, Column
 from sqlalchemy.dialects.postgresql import JSONB
@@ -272,6 +272,9 @@ class HcpPayrollReportSnapshot(SQLModel, table=True):
     payload_format: str = Field(default="text", max_length=50)
     raw_payload_text: str = Field()
     row_count: int = Field(default=0)
+    # Mon-Sun week the pull covers (the week before the pull).
+    period_start: Optional[date] = Field(default=None)
+    period_end: Optional[date] = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=utc_now)
 
 
@@ -311,6 +314,9 @@ class HcpStaffRosterSnapshot(SQLModel, table=True):
     pulled_at: datetime = Field(default_factory=utc_now, index=True)
     row_count: int = Field(default=0)
     active_employee_count: int = Field(default=0)
+    # Mon-Sun week the pull covers (the week before the pull).
+    period_start: Optional[date] = Field(default=None)
+    period_end: Optional[date] = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=utc_now)
 
 
