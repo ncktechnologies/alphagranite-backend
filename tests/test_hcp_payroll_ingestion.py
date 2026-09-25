@@ -28,7 +28,45 @@ def test_parse_hcp_payroll_report_handles_cost_centers_and_subtotals():
     assert rows[2].cost_center_name == "Fabrication"
     assert rows[2].regular_hours == 80.0
     assert rows[2].total_reg_pto_hol_wages == 1520.0
-    assert rows[2].total_ot_wages == 124.38
+
+
+def test_parse_hcp_payroll_report_handles_unquoted_employee_id_and_thousands_separator():
+    """Real HCP exports add an undeclared Employee Id column and leave dollar
+    amounts >= $1,000 unquoted, so a naive CSV split shifts every later column.
+    """
+    raw_payload = '''
+"","First Name","Last Name","Hourly Pay","Regular Hours","Holiday Hours","PTO Hours","Total REG/PTO/HOL Wages","Overtime Hours","Total OT Wages"
+
+" Cost Center Name (1)","CAD"
+
+,516,Joshua,McVey,$38.00,39.89,,,$1,515.82,,$0
+,44,Erick,Santoyo,$25.50,40.00,,,$1,020.00,0.30,$11.48
+"Subtotal"
+,,,,,79.89,,,$2,535.82,0.30,$11.48
+'''
+
+    rows = parse_hcp_payroll_report(raw_payload)
+
+    assert len(rows) == 3
+    assert rows[0].employee_first_name == "Joshua"
+    assert rows[0].employee_last_name == "McVey"
+    assert rows[0].hourly_pay == 38.0
+    assert rows[0].regular_hours == 39.89
+    assert rows[0].total_reg_pto_hol_wages == 1515.82
+    assert rows[0].overtime_hours is None
+    assert rows[0].total_ot_wages == 0.0
+
+    assert rows[1].employee_first_name == "Erick"
+    assert rows[1].employee_last_name == "Santoyo"
+    assert rows[1].total_reg_pto_hol_wages == 1020.0
+    assert rows[1].overtime_hours == 0.30
+    assert rows[1].total_ot_wages == 11.48
+
+    assert rows[2].row_kind == "subtotal"
+    assert rows[2].regular_hours == 79.89
+    assert rows[2].total_reg_pto_hol_wages == 2535.82
+    assert rows[2].overtime_hours == 0.30
+    assert rows[2].total_ot_wages == 11.48
 
 
 def test_parse_hcp_staff_roster_flags_active_employees():

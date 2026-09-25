@@ -1,5 +1,6 @@
 import csv
 import io
+import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
@@ -55,6 +56,16 @@ def _to_float(value: Any) -> Optional[float]:
         return None
 
 
+_THOUSANDS_SEPARATOR_DOLLAR = re.compile(r"\$\d{1,3}(?:,\d{3})+\.\d{2}")
+
+
+def _merge_unquoted_thousands_separators(text: str) -> str:
+    """Collapse "$1,515.82" -> "$1515.82" so an unquoted comma inside a dollar
+    amount isn't mistaken for a CSV field separator (HCP does not quote these).
+    """
+    return _THOUSANDS_SEPARATOR_DOLLAR.sub(lambda m: m.group(0).replace(",", ""), text)
+
+
 def _parse_payload_rows(raw_payload_text: str) -> list[list[str]]:
     lines = [line for line in (raw_payload_text or "").splitlines() if line.strip()]
     parsed_rows: list[list[str]] = []
@@ -68,6 +79,33 @@ def _parse_payload_rows(raw_payload_text: str) -> list[list[str]]:
     return parsed_rows
 
 
+_PAYROLL_FIELD_BY_HEADER = {
+    "first name": "employee_first_name",
+    "last name": "employee_last_name",
+    "hourly pay": "hourly_pay",
+    "regular hours": "regular_hours",
+    "holiday hours": "holiday_hours",
+    "pto hours": "pto_hours",
+    "total reg/pto/hol wages": "total_reg_pto_hol_wages",
+    "overtime hours": "overtime_hours",
+    "total ot wages": "total_ot_wages",
+}
+
+# Column order when no header row is present in the payload (legacy fallback).
+_PAYROLL_DEFAULT_FIELD_ORDER = [
+    None,
+    "employee_first_name",
+    "employee_last_name",
+    "hourly_pay",
+    "regular_hours",
+    "holiday_hours",
+    "pto_hours",
+    "total_reg_pto_hol_wages",
+    "overtime_hours",
+    "total_ot_wages",
+]
+
+
 def parse_hcp_payroll_report(raw_payload_text: str) -> list[ParsedHcpPayrollRow]:
     if not raw_payload_text:
         return []
@@ -79,9 +117,10 @@ def parse_hcp_payroll_report(raw_payload_text: str) -> list[ParsedHcpPayrollRow]
         except ET.ParseError:
             pass
 
-    parsed_rows = _parse_payload_rows(raw_payload_text)
+    parsed_rows = _parse_payload_rows(_merge_unquoted_thousands_separators(raw_payload_text))
     current_cost_center: Optional[str] = None
     pending_subtotal = False
+    field_order = _PAYROLL_DEFAULT_FIELD_ORDER
     results: list[ParsedHcpPayrollRow] = []
 
     for row_index, row in enumerate(parsed_rows, start=1):
@@ -90,17 +129,34 @@ def parse_hcp_payroll_report(raw_payload_text: str) -> list[ParsedHcpPayrollRow]
             continue
 
         first_cell = normalized[0] if len(normalized) > 0 else ""
-        second_cell = normalized[1] if len(normalized) > 1 else ""
-        third_cell = normalized[2] if len(normalized) > 2 else ""
 
         if first_cell.lower().startswith("cost center name"):
-            current_cost_center = second_cell or current_cost_center
+            current_cost_center = normalized[1] if len(normalized) > 1 else current_cost_center
             pending_subtotal = False
+            continue
+
+        if any(cell.lower() in _PAYROLL_FIELD_BY_HEADER for cell in normalized):
+            # Column layout (e.g. an extra Employee Id column) varies by export; read it from the header.
+            field_order = [_PAYROLL_FIELD_BY_HEADER.get(cell.lower()) for cell in normalized]
             continue
 
         if first_cell.lower() == "subtotal":
             pending_subtotal = True
             continue
+
+        values: dict[str, str] = {}
+        # HCP sometimes emits an extra (undeclared) column, e.g. Employee Id,
+        # right after the leading blank cell. Align the header's field order to
+        # the row from the position right after that leading cell so every
+        # later column still lands correctly regardless of that extra field.
+        offset = max(0, len(normalized) - len(field_order))
+        for position, field_name in enumerate(field_order):
+            if not field_name:
+                continue
+            source_index = position + offset if position >= 1 else position
+            if source_index >= len(normalized):
+                continue
+            values[field_name] = normalized[source_index]
 
         if pending_subtotal:
             pending_subtotal = False
@@ -109,30 +165,30 @@ def parse_hcp_payroll_report(raw_payload_text: str) -> list[ParsedHcpPayrollRow]
                     row_kind="subtotal",
                     row_index=row_index,
                     cost_center_name=current_cost_center,
-                    regular_hours=_to_float(normalized[4]) if len(normalized) > 4 else None,
-                    total_reg_pto_hol_wages=_to_float(normalized[7]) if len(normalized) > 7 else None,
-                    overtime_hours=_to_float(normalized[8]) if len(normalized) > 8 else None,
-                    total_ot_wages=_to_float(normalized[9]) if len(normalized) > 9 else None,
+                    regular_hours=_to_float(values.get("regular_hours")),
+                    total_reg_pto_hol_wages=_to_float(values.get("total_reg_pto_hol_wages")),
+                    overtime_hours=_to_float(values.get("overtime_hours")),
+                    total_ot_wages=_to_float(values.get("total_ot_wages")),
                     raw_line_text=",".join(row),
                 )
             )
             continue
 
-        if current_cost_center and second_cell and third_cell:
+        if current_cost_center and values.get("employee_first_name") and values.get("employee_last_name"):
             results.append(
                 ParsedHcpPayrollRow(
                     row_kind="detail",
                     row_index=row_index,
                     cost_center_name=current_cost_center,
-                    employee_first_name=second_cell,
-                    employee_last_name=third_cell,
-                    hourly_pay=_to_float(normalized[3]) if len(normalized) > 3 else None,
-                    regular_hours=_to_float(normalized[4]) if len(normalized) > 4 else None,
-                    holiday_hours=_to_float(normalized[5]) if len(normalized) > 5 else None,
-                    pto_hours=_to_float(normalized[6]) if len(normalized) > 6 else None,
-                    total_reg_pto_hol_wages=_to_float(normalized[7]) if len(normalized) > 7 else None,
-                    overtime_hours=_to_float(normalized[8]) if len(normalized) > 8 else None,
-                    total_ot_wages=_to_float(normalized[9]) if len(normalized) > 9 else None,
+                    employee_first_name=values.get("employee_first_name"),
+                    employee_last_name=values.get("employee_last_name"),
+                    hourly_pay=_to_float(values.get("hourly_pay")),
+                    regular_hours=_to_float(values.get("regular_hours")),
+                    holiday_hours=_to_float(values.get("holiday_hours")),
+                    pto_hours=_to_float(values.get("pto_hours")),
+                    total_reg_pto_hol_wages=_to_float(values.get("total_reg_pto_hol_wages")),
+                    overtime_hours=_to_float(values.get("overtime_hours")),
+                    total_ot_wages=_to_float(values.get("total_ot_wages")),
                     raw_line_text=",".join(row),
                 )
             )
