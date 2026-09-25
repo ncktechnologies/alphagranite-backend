@@ -12,6 +12,7 @@ class ParsedHcpPayrollRow:
     row_kind: str
     row_index: int
     cost_center_name: Optional[str] = None
+    employee_id: Optional[str] = None
     employee_first_name: Optional[str] = None
     employee_last_name: Optional[str] = None
     hourly_pay: Optional[float] = None
@@ -80,6 +81,7 @@ def _parse_payload_rows(raw_payload_text: str) -> list[list[str]]:
 
 
 _PAYROLL_FIELD_BY_HEADER = {
+    "employee id": "employee_id",
     "first name": "employee_first_name",
     "last name": "employee_last_name",
     "hourly pay": "hourly_pay",
@@ -158,6 +160,11 @@ def parse_hcp_payroll_report(raw_payload_text: str) -> list[ParsedHcpPayrollRow]
                 continue
             values[field_name] = normalized[source_index]
 
+        if "employee_id" not in values and offset >= 1 and len(normalized) > 1:
+            # Header doesn't declare the column, but it's always the extra field
+            # right after the leading blank cell when present.
+            values["employee_id"] = normalized[1]
+
         if pending_subtotal:
             pending_subtotal = False
             results.append(
@@ -180,6 +187,7 @@ def parse_hcp_payroll_report(raw_payload_text: str) -> list[ParsedHcpPayrollRow]
                     row_kind="detail",
                     row_index=row_index,
                     cost_center_name=current_cost_center,
+                    employee_id=values.get("employee_id") or None,
                     employee_first_name=values.get("employee_first_name"),
                     employee_last_name=values.get("employee_last_name"),
                     hourly_pay=_to_float(values.get("hourly_pay")),

@@ -306,6 +306,7 @@ async def list_snapshot_rows(
             "row_kind": item.row_kind,
             "row_index": item.row_index,
             "cost_center_name": item.cost_center_name,
+            "employee_id": item.employee_id,
             "employee_first_name": item.employee_first_name,
             "employee_last_name": item.employee_last_name,
             "hourly_pay": item.hourly_pay,

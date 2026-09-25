@@ -266,6 +266,7 @@ async def _store_labor_cost_report(
                 row_kind=parsed_row.row_kind,
                 row_index=parsed_row.row_index,
                 cost_center_name=parsed_row.cost_center_name,
+                employee_id=parsed_row.employee_id,
                 employee_first_name=parsed_row.employee_first_name,
                 employee_last_name=parsed_row.employee_last_name,
                 hourly_pay=parsed_row.hourly_pay,

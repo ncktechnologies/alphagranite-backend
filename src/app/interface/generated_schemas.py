@@ -285,6 +285,7 @@ class HcpPayrollReportRow(SQLModel, table=True):
     row_kind: str = Field(max_length=50, index=True)
     row_index: int = Field(index=True)
     cost_center_name: Optional[str] = Field(default=None, max_length=255, index=True)
+    employee_id: Optional[str] = Field(default=None, max_length=100, index=True)
     employee_first_name: Optional[str] = Field(default=None, max_length=255, index=True)
     employee_last_name: Optional[str] = Field(default=None, max_length=255, index=True)
     hourly_pay: Optional[float] = Field(default=None)

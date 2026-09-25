@@ -48,6 +48,7 @@ def test_parse_hcp_payroll_report_handles_unquoted_employee_id_and_thousands_sep
     rows = parse_hcp_payroll_report(raw_payload)
 
     assert len(rows) == 3
+    assert rows[0].employee_id == "516"
     assert rows[0].employee_first_name == "Joshua"
     assert rows[0].employee_last_name == "McVey"
     assert rows[0].hourly_pay == 38.0
@@ -56,6 +57,7 @@ def test_parse_hcp_payroll_report_handles_unquoted_employee_id_and_thousands_sep
     assert rows[0].overtime_hours is None
     assert rows[0].total_ot_wages == 0.0
 
+    assert rows[1].employee_id == "44"
     assert rows[1].employee_first_name == "Erick"
     assert rows[1].employee_last_name == "Santoyo"
     assert rows[1].total_reg_pto_hol_wages == 1020.0
@@ -67,6 +69,36 @@ def test_parse_hcp_payroll_report_handles_unquoted_employee_id_and_thousands_sep
     assert rows[2].total_reg_pto_hol_wages == 2535.82
     assert rows[2].overtime_hours == 0.30
     assert rows[2].total_ot_wages == 11.48
+
+
+def test_parse_hcp_payroll_report_handles_declared_employee_id_column():
+    """When HCP does declare the Employee Id column in the header, row length
+    matches the header exactly (no offset), and mapping still works.
+    """
+    raw_payload = '''
+"","Employee Id","First Name","Last Name","Hourly Pay","Regular Hours","Holiday Hours","PTO Hours","Total REG/PTO/HOL Wages","Overtime Hours","Total OT Wages"
+
+" Cost Center Name (1)","CAD"
+
+,516,Joshua,McVey,$38.00,39.89,,,$1,515.82,,$0
+,44,Erick,Santoyo,$25.50,40.00,,,$1,020.00,0.30,$11.48
+'''
+
+    rows = parse_hcp_payroll_report(raw_payload)
+
+    assert len(rows) == 2
+    assert rows[0].employee_id == "516"
+    assert rows[0].employee_first_name == "Joshua"
+    assert rows[0].employee_last_name == "McVey"
+    assert rows[0].total_reg_pto_hol_wages == 1515.82
+    assert rows[0].overtime_hours is None
+
+    assert rows[1].employee_id == "44"
+    assert rows[1].employee_first_name == "Erick"
+    assert rows[1].employee_last_name == "Santoyo"
+    assert rows[1].total_reg_pto_hol_wages == 1020.0
+    assert rows[1].overtime_hours == 0.30
+    assert rows[1].total_ot_wages == 11.48
 
 
 def test_parse_hcp_staff_roster_flags_active_employees():
