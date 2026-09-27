@@ -22,7 +22,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
-from src.app.utils.helpers import error_response, success_response, utc_now
+from src.app.utils.helpers import error_response, success_response, utc_now, to_utc
 from src.app.database.fab_notes import FabNotes
 
 router = APIRouter()
@@ -35,12 +35,10 @@ def _to_date(dt: Optional[datetime]) -> Optional[date]:
     return None
 
 def _to_naive_utc(dt: Optional[datetime]) -> Optional[datetime]:
-    """Convert aware datetime (e.g. 2026-02-16T10:00:00Z) to naive UTC for DB writes."""
+    """Normalize to aware UTC for DB writes; naive input is assumed UTC."""
     if not isinstance(dt, datetime):
         return dt
-    if dt.tzinfo is None:
-        return dt
-    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return to_utc(dt)
 
 
 # helper to keep Fab.total_sqft in sync with Templating

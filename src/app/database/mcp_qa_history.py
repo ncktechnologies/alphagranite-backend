@@ -3,6 +3,7 @@ from typing import Optional
 
 from sqlalchemy import Column, Text
 from sqlmodel import Field, SQLModel
+from src.app.utils.helpers import utc_now
 
 
 class MCPQAHistory(SQLModel, table=True):
@@ -26,4 +27,4 @@ class MCPQAHistory(SQLModel, table=True):
     provider: Optional[str] = Field(default=None)
     model: Optional[str] = Field(default=None)
     feedback: Optional[int] = Field(default=None, index=True)
-    created_at: datetime = Field(default_factory=datetime.now, index=True)
+    created_at: datetime = Field(default_factory=utc_now, index=True)

@@ -13,7 +13,7 @@ from src.app.database.fab import Fab
 from src.app.database.user import User
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.middleware.jwt_auth import get_current_user
-from src.app.utils.helpers import error_response, success_response
+from src.app.utils.helpers import error_response, success_response, utc_now
 
 
 router = APIRouter(prefix="/audit-trails", tags=["Audit Trails"])
@@ -365,7 +365,7 @@ async def get_audit_summary(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Any:
-    since = datetime.now() - timedelta(hours=last_hours)
+    since = utc_now() - timedelta(hours=last_hours)
 
     total_result = await db.execute(select(func.count(AuditTrail.id)).where(AuditTrail.created_at >= since))
     total = total_result.scalar() or 0
@@ -420,7 +420,7 @@ async def get_audit_summary(
         "window": {
             "last_hours": last_hours,
             "since": since.isoformat(),
-            "until": datetime.now().isoformat(),
+            "until": utc_now().isoformat(),
         },
         "total_events": total,
         "top_operations": top_operations,

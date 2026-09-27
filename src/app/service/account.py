@@ -2,6 +2,7 @@ from datetime import datetime
 from src.app.database.user import User
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.app.utils.constants import MAX_LOGIN_ATTEMPTS
+from src.app.utils.helpers import utc_now
 
 
 class AccountService:
@@ -16,7 +17,7 @@ class AccountService:
         # Check if account needs to be locked
         if user.failed_login_attempts >= MAX_LOGIN_ATTEMPTS:
             user.is_locked = True
-            user.locked_at = datetime.utcnow()
+            user.locked_at = utc_now()
 
         # Persist changes
         db.add(user)

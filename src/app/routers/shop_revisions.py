@@ -138,7 +138,7 @@ async def create_shop_revision(
         if not assigned_to_user:
             raise error_response("Assigned user not found", 404)
 
-    now = datetime.now()
+    now = utc_now()
     revision = ShopRevision(
         fab_id=revision_data.fab_id,
         revision_note=revision_data.revision_note,
@@ -391,7 +391,7 @@ async def complete_shop_revision(
     if not revision:
         raise error_response("Shop revision not found", 404)
 
-    now = datetime.now()
+    now = utc_now()
     if revision_data and revision_data.revision_note:
         revision.revision_note = revision_data.revision_note
     if revision_data and revision_data.shop_revision_type is not None:

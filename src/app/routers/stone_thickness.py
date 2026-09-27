@@ -13,7 +13,7 @@ from src.app.interface.business_schemas import (
 from src.app.utils.permissions import PermissionChecker
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
-from src.app.utils.helpers import error_response, success_response
+from src.app.utils.helpers import error_response, success_response, utc_now
 
 router = APIRouter()
 
@@ -38,7 +38,7 @@ async def create_stone_thickness(
         description=thickness_data.description,
         status_id=1,  # Active status
         created_by=current_user.id,
-        created_at=datetime.now()
+        created_at=utc_now()
     )
     
     db.add(stone_thickness)
@@ -133,7 +133,7 @@ async def update_stone_thickness(
     for field, value in update_data.items():
         setattr(stone_thickness, field, value)
     
-    stone_thickness.updated_at = datetime.now()
+    stone_thickness.updated_at = utc_now()
     stone_thickness.updated_by = current_user.id
     
     await db.commit()

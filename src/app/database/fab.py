@@ -3,6 +3,7 @@ from typing import Optional, List
 from sqlmodel import SQLModel, Field, Column
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy import DateTime
+from src.app.utils.helpers import utc_now
 
 
 class Fab(SQLModel, table=True):
@@ -82,7 +83,7 @@ class Fab(SQLModel, table=True):
     current_stage: Optional[str] = Field(max_length=255, default=None)
     next_stage: Optional[str] = Field(max_length=255, default=None)
     status_id: int = Field(foreign_key="status.value_id")
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
     created_by: int = Field(foreign_key="users.id")
     updated_at: Optional[datetime] = None
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")

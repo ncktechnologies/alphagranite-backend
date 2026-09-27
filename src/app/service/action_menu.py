@@ -4,7 +4,7 @@ from sqlalchemy.exc import IntegrityError
 from typing import List, Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.app.utils.helpers import error_response
+from src.app.utils.helpers import error_response, utc_now
 from src.app.database.permission import Permission
 from src.app.database.action_menu import ActionMenu
 
@@ -48,8 +48,8 @@ class ActionMenuService:
             new_action_menu = ActionMenu(
                 name=name,
                 code=code,
-                created_at=datetime.now(),
-                updated_at=datetime.now()
+                created_at=utc_now(),
+                updated_at=utc_now()
             )
             
             db.add(new_action_menu)
@@ -137,7 +137,7 @@ class ActionMenuService:
             if code is not None:
                 action_menu.code = code
             
-            action_menu.updated_at = datetime.now()
+            action_menu.updated_at = utc_now()
             
             await db.commit()
             await db.refresh(action_menu)
@@ -234,8 +234,8 @@ class PermissionService:
                 can_read=can_read,
                 can_update=can_update,
                 can_delete=can_delete,
-                created_at=datetime.now(),
-                updated_at=datetime.now()
+                created_at=utc_now(),
+                updated_at=utc_now()
             )
             
             db.add(new_permission)
@@ -339,7 +339,7 @@ class PermissionService:
             if can_delete is not None:
                 permission.can_delete = can_delete
             
-            permission.updated_at = datetime.now()
+            permission.updated_at = utc_now()
             
             await db.commit()
             await db.refresh(permission)

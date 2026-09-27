@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.app.database import get_db
 from src.app.interface.generated_schemas import PlanningSection as PlanningSectionSchema
 from src.app.interface.response_wrappers import SuccessResponse
-from src.app.utils.helpers import success_response, error_response
+from src.app.utils.helpers import success_response, error_response, utc_now
 from src.app.database.work_station import WorkStation
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.database.user import User
@@ -77,7 +77,7 @@ async def create_planning_section(
         is_active=payload.is_active,
         status_id=payload.status_id,
         created_by=created_by,
-        created_at=datetime.now(),
+        created_at=utc_now(),
     )
     db.add(section)
     await db.commit()
@@ -114,7 +114,7 @@ async def update_planning_section(
         section.is_active = payload.is_active
     section.status_id = payload.status_id
     section.updated_by = updated_by
-    section.updated_at = datetime.now()
+    section.updated_at = utc_now()
 
     await db.commit()
     await db.refresh(section)

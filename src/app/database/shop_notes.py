@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional
 from sqlmodel import SQLModel, Field
+from src.app.utils.helpers import utc_now
 
 
 class ShopNotes(SQLModel, table=True):
@@ -9,7 +10,7 @@ class ShopNotes(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     fab_id: int = Field(foreign_key="fabs.id")
     note: str = Field(description="Shop note content")
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
     created_by: int = Field(foreign_key="users.id")
     updated_at: Optional[datetime] = Field(default=None)
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")

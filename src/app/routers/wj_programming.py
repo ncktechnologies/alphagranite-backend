@@ -16,7 +16,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
-from src.app.utils.helpers import error_response, success_response
+from src.app.utils.helpers import error_response, success_response, utc_now
 
 router = APIRouter()
 
@@ -55,12 +55,12 @@ async def create_wj_programming(
         scheduled_end_date=wj_data.scheduled_end_date,
         total_ln_ft=wj_data.total_ln_ft,
         status_id=1,
-        created_at=datetime.now()
+        created_at=utc_now()
     )
     
     # Update fab stage
     fab.current_stage = "wj_programmings"
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     
     db.add(wj_programming)
@@ -108,7 +108,7 @@ async def update_wj_programming(
     for key, value in update_dict.items():
         setattr(wj_programming, key, value)
     
-    wj_programming.updated_at = datetime.now()
+    wj_programming.updated_at = utc_now()
     wj_programming.updated_by = current_user.id
     
     await db.commit()

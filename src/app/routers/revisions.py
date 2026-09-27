@@ -16,7 +16,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
-from src.app.utils.helpers import error_response, success_response
+from src.app.utils.helpers import error_response, success_response, utc_now
 
 router = APIRouter()
 
@@ -52,12 +52,12 @@ async def create_revision(
             scheduled_end_date=revision_data.scheduled_end_date,
             revision_notes=revision_data.revision_notes,
             status_id=1,
-            created_at=datetime.now()
+            created_at=utc_now()
         )
 
         # Update fab stage
         fab.current_stage = "revision"
-        fab.updated_at = datetime.now()
+        fab.updated_at = utc_now()
         fab.updated_by = current_user.id
 
         db.add(revision)
@@ -110,7 +110,7 @@ async def update_revision(
     for key, value in update_dict.items():
         setattr(revision, key, value)
     
-    revision.updated_at = datetime.now()
+    revision.updated_at = utc_now()
     revision.updated_by = current_user.id
     
     # If revision is completed, update fab stage to sales_ct
@@ -121,7 +121,7 @@ async def update_revision(
         if fab:
             fab.current_stage = "sales_ct"
             fab.next_stage = "cut_list"
-            fab.updated_at = datetime.now()
+            fab.updated_at = utc_now()
             fab.updated_by = current_user.id
     
     await db.commit()

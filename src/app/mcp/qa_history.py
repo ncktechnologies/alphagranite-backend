@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.database import SessionLocal
 from src.app.database.mcp_qa_history import MCPQAHistory
+from src.app.utils.helpers import utc_now
 
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,7 @@ async def store_qa_history(
                 answer_json=serialized_answer,
                 provider=(provider or None),
                 model=(model or None),
-                created_at=datetime.now(),
+                created_at=utc_now(),
             )
             session.add(record)
             await session.commit()

@@ -18,16 +18,34 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # One set of credentials per company; a fixed settings_id per saved report.
     op.add_column(
         "hcp_payroll_source_configs",
-        sa.Column("report_kind", sa.String(length=50), nullable=False, server_default="labor_cost"),
+        sa.Column("payroll_settings_id", sa.String(length=100), nullable=False, server_default="89798180"),
+    )
+    op.add_column(
+        "hcp_payroll_source_configs",
+        sa.Column("roster_settings_id", sa.String(length=100), nullable=False, server_default="93428419"),
+    )
+    op.execute(
+        "UPDATE hcp_payroll_source_configs "
+        "SET payroll_settings_id = report_settings_id "
+        "WHERE report_settings_id IS NOT NULL AND report_settings_id <> ''"
     )
     op.create_index(
-        op.f("ix_hcp_payroll_source_configs_report_kind"),
+        op.f("ix_hcp_payroll_source_configs_payroll_settings_id"),
         "hcp_payroll_source_configs",
-        ["report_kind"],
+        ["payroll_settings_id"],
         unique=False,
     )
+    op.create_index(
+        op.f("ix_hcp_payroll_source_configs_roster_settings_id"),
+        "hcp_payroll_source_configs",
+        ["roster_settings_id"],
+        unique=False,
+    )
+    op.drop_index(op.f("ix_hcp_payroll_source_configs_report_settings_id"), table_name="hcp_payroll_source_configs")
+    op.drop_column("hcp_payroll_source_configs", "report_settings_id")
 
     op.create_table(
         "hcp_staff_roster_snapshots",
@@ -87,5 +105,18 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_table("hcp_staff_roster_rows")
     op.drop_table("hcp_staff_roster_snapshots")
-    op.drop_index(op.f("ix_hcp_payroll_source_configs_report_kind"), table_name="hcp_payroll_source_configs")
-    op.drop_column("hcp_payroll_source_configs", "report_kind")
+    op.add_column(
+        "hcp_payroll_source_configs",
+        sa.Column("report_settings_id", sa.String(length=100), nullable=False, server_default="89798180"),
+    )
+    op.execute("UPDATE hcp_payroll_source_configs SET report_settings_id = payroll_settings_id")
+    op.create_index(
+        op.f("ix_hcp_payroll_source_configs_report_settings_id"),
+        "hcp_payroll_source_configs",
+        ["report_settings_id"],
+        unique=False,
+    )
+    op.drop_index(op.f("ix_hcp_payroll_source_configs_roster_settings_id"), table_name="hcp_payroll_source_configs")
+    op.drop_index(op.f("ix_hcp_payroll_source_configs_payroll_settings_id"), table_name="hcp_payroll_source_configs")
+    op.drop_column("hcp_payroll_source_configs", "roster_settings_id")
+    op.drop_column("hcp_payroll_source_configs", "payroll_settings_id")

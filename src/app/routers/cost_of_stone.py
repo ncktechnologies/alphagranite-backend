@@ -16,7 +16,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
-from src.app.utils.helpers import error_response, success_response
+from src.app.utils.helpers import error_response, success_response, utc_now
 
 router = APIRouter()
 
@@ -51,12 +51,12 @@ async def create_cost_of_stone(
         cost_per_sqft=cost_data.cost_per_sqft,
         waste_percentage=cost_data.waste_percentage,
         status_id=1,
-        created_at=datetime.now()
+        created_at=utc_now()
     )
     
     # Update fab stage
     fab.current_stage = "cost_of_stones"
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     
     db.add(cost_of_stone)
@@ -104,7 +104,7 @@ async def update_cost_of_stone(
     for key, value in update_dict.items():
         setattr(cost_of_stone, key, value)
     
-    cost_of_stone.updated_at = datetime.now()
+    cost_of_stone.updated_at = utc_now()
     cost_of_stone.updated_by = current_user.id
     
     await db.commit()

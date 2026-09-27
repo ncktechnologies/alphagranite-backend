@@ -3,6 +3,7 @@ from sqlmodel import Session
 from datetime import datetime
 from src.app.database.cut_list import CutList
 from src.app.service.background import send_email
+from src.app.utils.helpers import utc_now
 
 class CutListService:
 
@@ -18,7 +19,7 @@ class CutListService:
             cut_list.installation_date = installation_date
         if ln_ft_map is not None:
             cut_list.Ln_ft_map = ln_ft_map
-        cut_list.updated_at = datetime.now()
+        cut_list.updated_at = utc_now()
         cut_list.updated_by = updated_by
         self.db.commit()
         self.db.refresh(cut_list)
@@ -48,7 +49,7 @@ class CutListService:
         if not cut_list:
             return None
         cut_list.shop_schedule_date = shop_schedule_date
-        cut_list.updated_at = datetime.now()
+        cut_list.updated_at = utc_now()
         cut_list.updated_by = updated_by
         self.db.commit()
         self.db.refresh(cut_list)
@@ -85,7 +86,7 @@ class CutListService:
         if not cut_list:
             return None
         cut_list.status_id = 2  # confirmed
-        cut_list.updated_at = datetime.now()
+        cut_list.updated_at = utc_now()
         cut_list.updated_by = updated_by
         self.db.commit()
         self.db.refresh(cut_list)

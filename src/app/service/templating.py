@@ -4,6 +4,7 @@ from sqlmodel import Session, select
 from src.app.service.background import send_email
 from src.app.database.templating import Templating
 from src.app.database import fab as fab_models, job as job_models
+from src.app.utils.helpers import utc_now
 
 class TemplatingService:
     def mark_templated_received_and_move_to_predraft(self, fab_id: int, updated_by: int):
@@ -13,7 +14,7 @@ class TemplatingService:
         if not templating:
             return None
         templating.is_templating_received = True
-        templating.updated_at = datetime.now()
+        templating.updated_at = utc_now()
         templating.updated_by = updated_by
         # Move FAB to predraft review state
         fab = self.db.exec(
@@ -21,7 +22,7 @@ class TemplatingService:
         ).first()
         if fab:
             fab.curremt_stage = "pre_draft_review"
-            fab.updated_at = datetime.now()
+            fab.updated_at = utc_now()
             fab.updated_by = updated_by
             self.db.add(fab)
         self.db.add(templating)
@@ -39,7 +40,7 @@ class TemplatingService:
             fab.curremt_stage = "drafting"
         else:
             fab.curremt_stage = "pre_draft_review"
-        fab.updated_at = datetime.now()
+        fab.updated_at = utc_now()
         fab.updated_by = updated_by
         if notes:
             fab.notes = notes
@@ -56,7 +57,7 @@ class TemplatingService:
             return None
         templating.is_redrafting = True
         templating.redraft_notes = redraft_notes
-        templating.updated_at = datetime.now()
+        templating.updated_at = utc_now()
         templating.updated_by = updated_by
         self.db.add(templating)
         self.db.commit()
@@ -75,8 +76,8 @@ class TemplatingService:
             technician_id=technician_id,
             total_sqft=total_sqft,
             status_id=1,  # e.g. scheduled
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
+            created_at=utc_now(),
+            updated_at=utc_now(),
             updated_by=created_by,
             notes=notes
         )
@@ -100,7 +101,7 @@ class TemplatingService:
         if not templating:
             return None
         templating.is_templating_received = True
-        templating.updated_at = datetime.now()
+        templating.updated_at = utc_now()
         templating.updated_by = updated_by
         self.db.commit()
         self.db.refresh(templating)
@@ -123,7 +124,7 @@ class TemplatingService:
         templating.technician_id = new_technician_id
         templating.schedule_start_date = new_start
         templating.schedule_due_date = new_due
-        templating.updated_at = datetime.now()
+        templating.updated_at = utc_now()
         templating.updated_by = updated_by
         self.db.commit()
         self.db.refresh(templating)

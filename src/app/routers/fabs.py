@@ -38,7 +38,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.interface.response_wrappers import SuccessResponse, error_response, success_response
 from src.app.middleware.jwt_auth import get_current_user
-from src.app.utils.helpers import utc_now
+from src.app.utils.helpers import utc_now, to_utc
 
 
 
@@ -84,6 +84,31 @@ SHOP_PLAN_REQUIREMENTS = {
 
 def _normalize_shop_plan_name(plan_name: Optional[str]) -> str:
     return "".join(character for character in (plan_name or "").upper() if character.isalnum())
+
+
+# Lowercased planning section names for the two cut stages; legacy "cut"/"wj" kept until every environment is renamed.
+CUT_SAW_PLAN_NAMES = ("cut - saw", "cut")
+CUT_WJ_PLAN_NAMES = ("cut - wj", "wj")
+CUT_PLAN_NAMES = [*CUT_SAW_PLAN_NAMES, *CUT_WJ_PLAN_NAMES]
+
+
+def _cut_plan_key(plan_name: Optional[str]) -> Optional[str]:
+    """Map a planning section name to "cut" (saw) or "wj", or None when it isn't a cut stage."""
+    normalized = (plan_name or "").strip().lower()
+    if normalized in CUT_SAW_PLAN_NAMES:
+        return "cut"
+    if normalized in CUT_WJ_PLAN_NAMES:
+        return "wj"
+    return None
+
+
+def _cut_plan_key_expr():
+    """SQL counterpart of _cut_plan_key on PlanningSection.plan_name."""
+    normalized = func.lower(func.trim(PlanningSection.plan_name))
+    return sa.case(
+        (normalized.in_(CUT_SAW_PLAN_NAMES), "cut"),
+        (normalized.in_(CUT_WJ_PLAN_NAMES), "wj"),
+    )
 
 
 def _find_missing_shop_plan_data_points(
@@ -179,7 +204,7 @@ def _effective_cut_list_filter():
         .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
         .where(
             ShopCutPlan.fab_id == Fab.id,
-            func.lower(func.trim(PlanningSection.plan_name)).in_(["cut", "wj"]),
+            func.lower(func.trim(PlanningSection.plan_name)).in_(CUT_PLAN_NAMES),
         )
         .exists()
     )
@@ -189,7 +214,7 @@ def _effective_cut_list_filter():
         .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
         .where(
             ShopCutPlan.fab_id == Fab.id,
-            func.lower(func.trim(PlanningSection.plan_name)).in_(["cut", "wj"]),
+            func.lower(func.trim(PlanningSection.plan_name)).in_(CUT_PLAN_NAMES),
             func.coalesce(ShopCutPlan.work_percentage, 0) < 100,
         )
         .exists()
@@ -347,7 +372,7 @@ def _compute_fab_progress_fields(plans: List[dict]) -> tuple[Optional[str], floa
         scheduled_end = p.get("scheduled_end_date")
         if scheduled_end:
             try:
-                candidate_end = scheduled_end if isinstance(scheduled_end, datetime) else datetime.fromisoformat(str(scheduled_end))
+                candidate_end = scheduled_end if isinstance(scheduled_end, datetime) else to_utc(datetime.fromisoformat(str(scheduled_end)))
             except Exception:
                 candidate_end = None
         if candidate_end is None:
@@ -355,7 +380,7 @@ def _compute_fab_progress_fields(plans: List[dict]) -> tuple[Optional[str], floa
             estimated_hours = p.get("estimated_hours")
             if scheduled_start:
                 try:
-                    start_dt = datetime.fromisoformat(scheduled_start)
+                    start_dt = to_utc(datetime.fromisoformat(scheduled_start))
                     if estimated_hours is not None:
                         candidate_end = start_dt + timedelta(hours=float(estimated_hours))
                     else:
@@ -366,7 +391,7 @@ def _compute_fab_progress_fields(plans: List[dict]) -> tuple[Optional[str], floa
         # fallback to actual_end_date if needed
         if candidate_end is None and p.get("actual_end_date"):
             try:
-                candidate_end = datetime.fromisoformat(p["actual_end_date"])
+                candidate_end = to_utc(datetime.fromisoformat(p["actual_end_date"]))
             except Exception:
                 candidate_end = None
 
@@ -395,7 +420,7 @@ def _coalesce_shop_est_completion_date(
                 candidate_end = (
                     scheduled_end
                     if isinstance(scheduled_end, datetime)
-                    else datetime.fromisoformat(str(scheduled_end))
+                    else to_utc(datetime.fromisoformat(str(scheduled_end)))
                 )
             except Exception:
                 candidate_end = None
@@ -407,7 +432,7 @@ def _coalesce_shop_est_completion_date(
                 start_dt = (
                     scheduled_start
                     if isinstance(scheduled_start, datetime)
-                    else datetime.fromisoformat(str(scheduled_start))
+                    else to_utc(datetime.fromisoformat(str(scheduled_start)))
                 )
             except Exception:
                 continue
@@ -474,16 +499,16 @@ async def _transition_completed_cutlist_fabs_to_shop(
             .join(PlanningSection, PlanningSection.id == ShopCutPlan.planning_section_id)
             .where(
                 Fab.current_stage == "cut_list",
-                func.lower(func.trim(PlanningSection.plan_name)).in_(["cut", "wj"]),
+                func.lower(func.trim(PlanningSection.plan_name)).in_(CUT_PLAN_NAMES),
             )
         )
     ).all()
 
     completed_sections_by_fab: dict[int, set[str]] = defaultdict(set)
     for fab_id, plan_name, work_percentage in rows:
-        normalized_name = (plan_name or "").strip().lower()
-        if normalized_name in {"cut", "wj"} and int(work_percentage or 0) >= 100:
-            completed_sections_by_fab[fab_id].add(normalized_name)
+        cut_key = _cut_plan_key(plan_name)
+        if cut_key and int(work_percentage or 0) >= 100:
+            completed_sections_by_fab[fab_id].add(cut_key)
 
     eligible_fab_ids = [
         fab_id
@@ -1032,7 +1057,7 @@ async def create_fab(
         next_stage=next_stage,
         status_id=1,
         created_by=current_user.id,
-        created_at=datetime.now()
+        created_at=utc_now()
     )
     
     db.add(fab)
@@ -2005,7 +2030,7 @@ async def get_fabs_with_shop_est_completion(
             ecd = f.get("estimated_completion_date")
             if ecd:
                 try:
-                    dt = datetime.fromisoformat(ecd)
+                    dt = to_utc(datetime.fromisoformat(ecd))
                     month_key = dt.strftime("%Y-%m")
                     month_label = dt.strftime("%B %Y")   # e.g. "April 2026"
                     day_key = f"{dt.month}/{dt.day}/{dt.year}"  # e.g. "4/10/2026"
@@ -2574,7 +2599,7 @@ async def update_fab(
         # New drafter assigned
         fab.drafter_id = fab_data.drafter_id
         fab.drafter_assigned_by = current_user.id
-        fab.drafter_assigned_at = datetime.now()
+        fab.drafter_assigned_at = utc_now()
         fab.drafting_needed = True  # Set drafting_needed to True when drafter assigned
     
     for field, value in update_data.items():
@@ -2592,7 +2617,7 @@ async def update_fab(
             slab_smith_cust_needed=getattr(fab, "slab_smith_cust_needed", None),
         )
     
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     
     # Create FabNotes entry if notes provided
@@ -2602,7 +2627,7 @@ async def update_fab(
             stage=note_stage,
             note=note_text,
             created_by=current_user.id,
-            created_at=datetime.now()
+            created_at=utc_now()
         )
         db.add(fab_note)
     
@@ -2629,7 +2654,7 @@ async def delete_fab(
     
     # Soft delete by setting status to deleted (assuming status_id 3 is deleted)
     fab.status_id = 3  # Deleted status
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     
     await db.commit()
@@ -3707,7 +3732,7 @@ async def update_fab_stage(
         slab_smith_ag_needed=fab.slab_smith_ag_needed,
         slab_smith_cust_needed=getattr(fab, "slab_smith_cust_needed", None),
     )
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     
     await db.commit()
@@ -6069,7 +6094,7 @@ async def update_fab_cost_of_stone(
         revenue_value = 0.0
     fab.gp = round(revenue_value - cost_value, 2)
 
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = current_user.id
 
     await db.commit()

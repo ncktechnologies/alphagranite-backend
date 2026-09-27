@@ -21,6 +21,6 @@
 #     start_date: Optional[datetime] = None
 #     end_date: Optional[datetime] = None
 #     status_id: int = Field(foreign_key="status.value_id")
-#     created_at: datetime = Field(default_factory=datetime.now)
+#     created_at: datetime = Field(default_factory=utc_now)
 #     updated_at: Optional[datetime] = None
 #     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")

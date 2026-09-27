@@ -91,6 +91,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import Request
 from datetime import datetime, timedelta
 
+from src.app.utils.helpers import utc_now
+
 INACTIVITY_TIMEOUT = timedelta(hours=8)
 
 # Public routes that should NOT require authentication
@@ -132,13 +134,14 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
         last_activity = user.updated_at or user.created_at
-        if last_activity and datetime.now() - last_activity > INACTIVITY_TIMEOUT:
+        # Timestamps may come back tz-aware or naive depending on the column type.
+        if last_activity and datetime.now(last_activity.tzinfo) - last_activity > INACTIVITY_TIMEOUT:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Token expired due to inactivity",
             )
 
-        user.updated_at = datetime.now()
+        user.updated_at = utc_now()
         await db.commit()
         return user
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")

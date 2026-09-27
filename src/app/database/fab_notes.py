@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional
 from sqlmodel import SQLModel, Field, Column, Text
+from src.app.utils.helpers import utc_now
 
 
 class FabNotes(SQLModel, table=True):
@@ -15,6 +16,6 @@ class FabNotes(SQLModel, table=True):
     stage: str = Field(max_length=255, index=True, description="Workflow stage when note was added")
     note: str = Field(sa_column=Column(Text), description="Note content")
     created_by: int = Field(foreign_key="users.id")
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
     updated_at: Optional[datetime] = None
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")

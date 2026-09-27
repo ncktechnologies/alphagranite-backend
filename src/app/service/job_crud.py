@@ -69,7 +69,7 @@ async def create_job(
         invoice_note=job_dict.get("invoice_note"),
         status_id=job_dict.get("status_id", 1),
         created_by=user_id,
-        created_at=datetime.now()
+        created_at=utc_now()
     )
     
     db.add(job)
@@ -376,7 +376,7 @@ async def update_job(
     for field, value in update_data.items():
         setattr(job, field, value)
     
-    job.updated_at = datetime.now()
+    job.updated_at = utc_now()
     job.updated_by = user_id
 
     await save_audit_event(
@@ -470,7 +470,7 @@ async def delete_job(
         "name": job.name,
     }
     job.status_id = 3  # Deleted status
-    job.updated_at = datetime.now()
+    job.updated_at = utc_now()
     job.updated_by = user_id
 
     await save_audit_event(
@@ -589,7 +589,7 @@ async def toggle_job_invoice_flag(
     
     # Toggle the flag
     job.need_to_invoice = not job.need_to_invoice
-    job.updated_at = datetime.now()
+    job.updated_at = utc_now()
     job.updated_by = user_id
     
     # Update invoice note if provided

@@ -20,7 +20,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
-from src.app.utils.helpers import error_response, success_response
+from src.app.utils.helpers import error_response, success_response, utc_now
 
 router = APIRouter()
 
@@ -83,12 +83,12 @@ async def create_install_scheduling(
         scheduled_end_date=install_data.scheduled_end_date,
         total_sqft=install_data.total_sqft,
         status_id=1,
-        created_at=datetime.now()
+        created_at=utc_now()
     )
     
     # Update fab stage
     fab.current_stage = "install_scheduling"
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = current_user.id
     
     db.add(install_scheduling)
@@ -171,7 +171,7 @@ async def update_install_scheduling(
     for key, value in update_dict.items():
         setattr(install_scheduling, key, value)
     
-    install_scheduling.updated_at = datetime.now()
+    install_scheduling.updated_at = utc_now()
     install_scheduling.updated_by = current_user.id
     
     # Update FAB's current_stage to install_completion when install scheduling is updated
@@ -181,7 +181,7 @@ async def update_install_scheduling(
     if fab:
         fab.current_stage = "install_completion"
         fab.next_stage = None  # install_completion is typically the final stage
-        fab.updated_at = datetime.now()
+        fab.updated_at = utc_now()
         fab.updated_by = current_user.id
     
     await db.commit()
@@ -287,13 +287,13 @@ async def unmark_install_scheduling(
         raise error_response("Install Scheduling is not marked as completed", 400)
 
     install_scheduling.is_completed = False
-    install_scheduling.updated_at = datetime.now()
+    install_scheduling.updated_at = utc_now()
     install_scheduling.updated_by = current_user.id
 
     # Revert the FAB stage back to install_scheduling
     fab = (await db.execute(select(Fab).where(Fab.id == fab_id))).scalar_one_or_none()
     if fab:
-        fab.updated_at = datetime.now()
+        fab.updated_at = utc_now()
         fab.updated_by = current_user.id
 
     await db.commit()
@@ -334,7 +334,7 @@ async def unmark_install_completion(
         raise error_response("Install Completion is not marked as completed", 400)
 
     install_completion.is_completed = False
-    install_completion.updated_at = datetime.now()
+    install_completion.updated_at = utc_now()
     install_completion.updated_by = current_user.id
 
     # Revert the FAB stage back to install_completion
@@ -342,7 +342,7 @@ async def unmark_install_completion(
     if fab:
         fab.current_stage = "install_completion"
         fab.next_stage = None  # It's the last stage
-        fab.updated_at = datetime.now()
+        fab.updated_at = utc_now()
         fab.updated_by = current_user.id
 
     await db.commit()

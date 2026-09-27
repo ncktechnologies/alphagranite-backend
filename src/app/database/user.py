@@ -4,6 +4,7 @@ from typing import Optional, List, TYPE_CHECKING
 from sqlmodel import SQLModel, Field, Relationship
 from sqlalchemy.orm import relationship as sa_relationship
 from sqlalchemy import Column
+from src.app.utils.helpers import utc_now
 
 if TYPE_CHECKING:
     from .user_role import UserRole
@@ -25,8 +26,8 @@ class User(SQLModel, table=True):
     first_name: str = Field(max_length=255)
     last_name: str = Field(max_length=255)
     department: int = Field(default=1, foreign_key="departments.id")
-    created_at: datetime = Field(default_factory=datetime.now)
-    updated_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
     status: int = Field(default=1)
     is_super_admin: bool = Field(default=False)
     password: str = Field(max_length=255)

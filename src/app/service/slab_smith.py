@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Optional, List
 from src.app.database.slab_smith import SlabSmith
 from src.app.service.background import send_email
+from src.app.utils.helpers import utc_now
 
 class SlabSmithService:
     def __init__(self, db: Session):
@@ -14,9 +15,9 @@ class SlabSmithService:
             drafter_id=drafter_id,
             slab_smith_type=slab_smith_type,
             status_id=1,  # started
-            start_date=datetime.now(),
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
+            start_date=utc_now(),
+            created_at=utc_now(),
+            updated_at=utc_now(),
             updated_by=created_by
         )
         self.db.add(slab_smith)
@@ -40,7 +41,7 @@ class SlabSmithService:
             return None
         slab_smith.total_sqft_completed = total_sqft_completed
         slab_smith.file_ids = ','.join(map(str, file_ids))
-        slab_smith.updated_at = datetime.now()
+        slab_smith.updated_at = utc_now()
         slab_smith.updated_by = updated_by
         if note:
             slab_smith.note = note
@@ -53,8 +54,8 @@ class SlabSmithService:
         if not slab_smith:
             return None
         slab_smith.status_id = 2  # completed
-        slab_smith.end_date = datetime.now()
-        slab_smith.updated_at = datetime.now()
+        slab_smith.end_date = utc_now()
+        slab_smith.updated_at = utc_now()
         slab_smith.updated_by = updated_by
         self.db.commit()
         self.db.refresh(slab_smith)

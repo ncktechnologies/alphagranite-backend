@@ -15,7 +15,7 @@ from src.app.interface.business_schemas import (
 from src.app.utils.permissions import PermissionChecker
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
-from src.app.utils.helpers import success_response, error_response
+from src.app.utils.helpers import success_response, error_response, utc_now
 
 router = APIRouter()
 
@@ -58,7 +58,7 @@ async def create_stone_type(
             description=stone_type_data.description,
             status_id=1,
             created_by=created_by,
-            created_at=datetime.now()
+            created_at=utc_now()
         )
 
     stone_type = build_stone_type()
@@ -172,7 +172,7 @@ async def update_stone_type(
     for field, value in update_data.items():
         setattr(stone_type, field, value)
     
-    stone_type.updated_at = datetime.now()
+    stone_type.updated_at = utc_now()
     stone_type.updated_by = current_user.id
     
     await db.commit()

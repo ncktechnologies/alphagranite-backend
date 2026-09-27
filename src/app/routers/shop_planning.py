@@ -4,7 +4,7 @@ from sqlmodel import Session, select
 from src.app.utils.config import get_db
 from fastapi import APIRouter, Depends, Form
 from src.app.interface.generated_schemas import ShopPlanning
-from src.app.utils.helpers import success_response, error_response
+from src.app.utils.helpers import success_response, error_response, utc_now
 
 router = APIRouter()
 
@@ -47,7 +47,7 @@ def update_shop_planning(
     shop_plan.planning_section_ids = planning_section_ids
     shop_plan.start_datetime = start_datetime
     shop_plan.updated_by = updated_by
-    shop_plan.updated_at = datetime.now()
+    shop_plan.updated_at = utc_now()
     db.commit()
     db.refresh(shop_plan)
     return success_response(shop_plan, "Shop planning updated successfully")

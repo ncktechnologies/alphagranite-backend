@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional, List, TYPE_CHECKING
 from sqlmodel import SQLModel, Field, Relationship
+from src.app.utils.helpers import utc_now
 
 if TYPE_CHECKING:
     from .role import Role
@@ -15,8 +16,8 @@ class Permission(SQLModel, table=True):
     can_update: bool = Field(default=False)
     can_delete: bool = Field(default=False)
     can_read: bool = Field(default=False)
-    created_at: datetime = Field(default_factory=datetime.now)
-    updated_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
     
     # Roles relationship removed to avoid implicit many-to-many
     # configuration in models. Services should load roles/permissions

@@ -2,6 +2,7 @@ from typing import Optional, List, Any
 from datetime import datetime
 from sqlalchemy import JSON, Column
 from sqlmodel import SQLModel, Field
+from src.app.utils.helpers import utc_now
 
 class AuditTrail(SQLModel, table=True):
     __tablename__ = "audit_trails"
@@ -22,4 +23,4 @@ class AuditTrail(SQLModel, table=True):
     device_id: Optional[str] = Field(default=None, max_length=255)
     ip_address: Optional[str] = Field(default=None, max_length=45)
     browser: Optional[str] = Field(default=None, max_length=255)
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)

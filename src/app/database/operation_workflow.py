@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional
 from sqlmodel import SQLModel, Field
+from src.app.utils.helpers import utc_now
 
 
 class OperationWorkflow(SQLModel, table=True):
@@ -13,6 +14,6 @@ class OperationWorkflow(SQLModel, table=True):
     total_sqft_done: str = Field(max_length=255)
     reason_for_pause: str
     notes: Optional[str] = Field(default=None, max_length=255)
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
     updated_at: Optional[datetime] = None
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")

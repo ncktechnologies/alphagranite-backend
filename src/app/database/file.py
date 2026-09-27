@@ -1,6 +1,7 @@
 from typing import Optional
 from datetime import datetime
 from sqlmodel import SQLModel, Field
+from src.app.utils.helpers import utc_now
 
 class File(SQLModel, table=True):
     __tablename__ = "files"
@@ -9,8 +10,8 @@ class File(SQLModel, table=True):
     name: str = Field(max_length=255)
     file_path: str = Field(max_length=255)
     file_type: str = Field(max_length=255)
-    created_at: datetime = Field(default_factory=datetime.now)
-    updated_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
     file_size: str = Field(max_length=255)
     job_id: Optional[int] = Field(default=None, foreign_key="business_jobs.id", index=True)
     fab_id: Optional[int] = Field(default=None, foreign_key="fabs.id", index=True)

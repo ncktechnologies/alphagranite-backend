@@ -19,7 +19,7 @@ from src.app.interface.generated_schemas import (
 )
 from src.app.service.drafting import DraftingService
 from src.app.service.templating import TemplatingService
-from src.app.utils.helpers import success_response, error_response
+from src.app.utils.helpers import success_response, error_response, utc_now, to_utc
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File as FastAPIFile, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
@@ -79,7 +79,7 @@ def set_predraft_redraft(fab_id: int, redraft_notes: str, db: Session = Depends(
     if not fab:
         raise error_response("FAB not found", 404)
     fab.state = "templating"
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = updated_by
     db.commit()
     db.refresh(fab)
@@ -102,7 +102,7 @@ class TechnicianClockInput(BaseModel):
         if isinstance(v, str):
             # Handle ISO format with or without 'Z' and remove spaces
             v = v.replace('. ', '.')
-            return datetime.fromisoformat(v.replace('Z', '+00:00')).replace(tzinfo=None)
+            return to_utc(datetime.fromisoformat(v.replace('Z', '+00:00')))
         return v
 
 @router.post("/technician/clock")
@@ -218,7 +218,7 @@ def add_update_shop_schedule(
     fab.shop_schedule_date = shop_schedule_date
     if move_to_final_programming:
         fab.state = "final_programming"
-    fab.updated_at = datetime.now()
+    fab.updated_at = utc_now()
     fab.updated_by = updated_by
     db.commit()
     db.refresh(fab)
@@ -283,8 +283,8 @@ async def add_files_to_final_programming(
             file_size=str(len(contents)),
             stage="final_programming",
             uploaded_by=current_user.id,
-            created_at=datetime.now(),
-            updated_at=datetime.now()
+            created_at=utc_now(),
+            updated_at=utc_now()
         )
         
         db.add(file_record)
@@ -301,7 +301,7 @@ async def add_files_to_final_programming(
             "mime_type": file.content_type,
             "uploaded_by": current_user.id,
             "uploaded_by_name": f"{current_user.first_name} {current_user.last_name}".strip() or current_user.username,
-            "uploaded_at": datetime.now().isoformat()
+            "uploaded_at": utc_now().isoformat()
         })
     
     # Update fp.file_ids with new IDs
@@ -349,7 +349,7 @@ async def delete_file_from_final_programming(
     file_record = file_result.scalar_one_or_none()
     
     if file_record:
-        file_record.deleted_at = datetime.now()
+        file_record.deleted_at = utc_now()
     
     await db.commit()
     await db.refresh(fp)
@@ -374,7 +374,7 @@ def update_final_programming(
         fp.note = note
     if status:
         fp.status = status
-    fp.updated_at = datetime.now()
+    fp.updated_at = utc_now()
     fp.updated_by = updated_by
     db.commit()
     db.refresh(fp)
@@ -393,7 +393,7 @@ def update_cutlist_details(
         raise error_response("CutList not found", 404)
     cutlist.no_of_pieces = no_of_pieces
     cutlist.total_sqft = total_sqft
-    cutlist.updated_at = datetime.now()
+    cutlist.updated_at = utc_now()
     cutlist.updated_by = updated_by
     db.commit()
     db.refresh(cutlist)
@@ -412,7 +412,7 @@ def set_sct_review_no(
     sct.revenue = revenue
     sct.status_id = 2
     sct.review_needed = False
-    sct.updated_at = datetime.now()
+    sct.updated_at = utc_now()
     sct.updated_by = updated_by
     db.commit()
     db.refresh(sct)
@@ -436,7 +436,7 @@ def set_sct_review_yes(
         new_file_ids = [f"file_{i+len(file_ids)+1}" for i, _ in enumerate(files)]
         file_ids.extend(new_file_ids)
     sct.file_ids = ",".join(file_ids)
-    sct.updated_at = datetime.now()
+    sct.updated_at = utc_now()
     sct.updated_by = updated_by
     db.commit()
     db.refresh(sct)
@@ -459,13 +459,13 @@ def update_sct_revision(
     sct.revision_history.append({
         "type": revision_type,
         "status": revision_status,
-        "date": datetime.now().isoformat(),
+        "date": utc_now().isoformat(),
         "note": draft_note
     })
     sct.revision_type = revision_type
     sct.revision_status = revision_status
     sct.draft_note = draft_note
-    sct.updated_at = datetime.now()
+    sct.updated_at = utc_now()
     sct.updated_by = updated_by
     db.commit()
     db.refresh(sct)
@@ -484,8 +484,8 @@ async def mark_slabsmith_completed(
         raise error_response("SlabSmith not found", 404)
     
     slabsmith.status_id = 3  # Completed status
-    slabsmith.end_date = datetime.now()
-    slabsmith.updated_at = datetime.now()
+    slabsmith.end_date = utc_now()
+    slabsmith.updated_at = utc_now()
     slabsmith.updated_by = current_user.id
     
     # Update fab stage to sales_ct and set slabsmith_completed_date
@@ -494,8 +494,8 @@ async def mark_slabsmith_completed(
     if fab:
         fab.current_stage = "sales_ct"
         fab.next_stage = "cut_list"
-        fab.slabsmith_completed_date = datetime.now()
-        fab.updated_at = datetime.now()
+        fab.slabsmith_completed_date = utc_now()
+        fab.updated_at = utc_now()
         fab.updated_by = current_user.id
     
     await db.commit()
@@ -568,8 +568,8 @@ async def add_files_to_slabsmith(
             file_design=file_design,
             stage_name=stage_name,
             uploaded_by=current_user.id,
-            created_at=datetime.now(),
-            updated_at=datetime.now()
+            created_at=utc_now(),
+            updated_at=utc_now()
         )
         
         db.add(file_record)
@@ -588,7 +588,7 @@ async def add_files_to_slabsmith(
             "stage_name": stage_name,
             "uploaded_by": current_user.id,
             "uploaded_by_name": f"{current_user.first_name} {current_user.last_name}".strip() or current_user.username,
-            "uploaded_at": datetime.now().isoformat()
+            "uploaded_at": utc_now().isoformat()
         })
     
     # Update slabsmith.file_ids with new IDs
@@ -636,7 +636,7 @@ async def delete_file_from_slabsmith(
     file_record = file_result.scalar_one_or_none()
     
     if file_record:
-        file_record.deleted_at = datetime.now()
+        file_record.deleted_at = utc_now()
     
     await db.commit()
     await db.refresh(slabsmith)
@@ -715,8 +715,8 @@ async def add_files_to_drafting(
             file_size=str(len(contents)),
             stage=stage,
             uploaded_by=current_user.id,
-            created_at=datetime.now(),
-            updated_at=datetime.now()
+            created_at=utc_now(),
+            updated_at=utc_now()
         )
         
         db.add(file_record)
@@ -736,7 +736,7 @@ async def add_files_to_drafting(
             "stage_name": stage_name,
             "uploaded_by": current_user.id,
             "uploaded_by_name": f"{current_user.first_name} {current_user.last_name}".strip() or current_user.username,
-            "created_at": datetime.now().isoformat()
+            "created_at": utc_now().isoformat()
         })
     
     existing_file_ids = drafting.file_ids.split(",") if drafting.file_ids else []
@@ -784,7 +784,7 @@ async def delete_file_from_drafting(
     file_record = file_result.scalar_one_or_none()
     
     if file_record:
-        file_record.deleted_at = datetime.now()
+        file_record.deleted_at = utc_now()
     
     await db.commit()
     await db.refresh(drafting)

@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlmodel import Field, SQLModel
+from src.app.utils.helpers import utc_now
 
 
 class OperatorJobTimerEvent(SQLModel, table=True):
@@ -15,5 +16,5 @@ class OperatorJobTimerEvent(SQLModel, table=True):
     workstation_id: Optional[int] = Field(default=None, foreign_key="work_stations.id", index=True)
 
     action: str = Field(max_length=20)
-    event_at: datetime = Field(default_factory=datetime.now)
+    event_at: datetime = Field(default_factory=utc_now)
     note: Optional[str] = None

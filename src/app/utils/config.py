@@ -1,5 +1,6 @@
 import os
 import pathlib
+from datetime import timezone
 from dotenv import load_dotenv
 from functools import lru_cache
 from typing import AsyncGenerator
@@ -8,6 +9,30 @@ from pydantic_settings import BaseSettings
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 load_dotenv()
+
+
+def _coerce_naive_datetimes_to_utc() -> None:
+    """Treat naive datetimes as UTC instead of raising.
+
+    SQLModel >= 0.0.25 rejects naive datetimes outright; this keeps legacy call
+    sites working while the codebase standardises on aware UTC values.
+    """
+    try:
+        from sqlmodel.sql.sqltypes import UTCDateTime
+    except ImportError:
+        return
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if value.utcoffset() is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    UTCDateTime.process_bind_param = process_bind_param
+
+
+_coerce_naive_datetimes_to_utc()
 
 # Base directory for the project
 BASE_DIR = pathlib.Path(__file__).parent.parent.parent.parent

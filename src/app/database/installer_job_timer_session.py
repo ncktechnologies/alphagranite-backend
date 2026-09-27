@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlmodel import Field, SQLModel
+from src.app.utils.helpers import utc_now
 
 
 class InstallerJobTimerSession(SQLModel, table=True):
@@ -24,7 +25,7 @@ class InstallerJobTimerSession(SQLModel, table=True):
     sqft_installed: Optional[float] = Field(default=None)
     sqft_not_installed: Optional[float] = Field(default=None)
 
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
     created_by: int = Field(foreign_key="users.id")
     updated_at: Optional[datetime] = None
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
