@@ -26,7 +26,7 @@ from src.app.hcp_payroll_parser import (
     parse_hcp_staff_roster,
 )
 from src.app.utils.config import SessionLocal
-from src.app.utils.helpers import utc_now
+from src.app.utils.helpers import app_now
 
 logger = logging.getLogger("hcp_payroll_ingestion")
 
@@ -164,7 +164,7 @@ async def ingest_hcp_payroll_report(
     # One token is acquired per cycle and reused for every saved report.
     access_token, token_data = await _fetch_access_token(config)
     token_url = _join_url(config.base_url, f"/ta/rest/v2/companies/{config.company_id}/oauth2/token")
-    token_acquired_at = utc_now()
+    token_acquired_at = app_now()
 
     results: list[dict[str, Any]] = []
     for kind, settings_id in targets:
@@ -228,7 +228,7 @@ async def _ingest_single_report(
 
         run.row_count = result["row_count"]
         run.status = "completed"
-        run.finished_at = utc_now()
+        run.finished_at = app_now()
         await db.commit()
         await db.refresh(run)
 
@@ -236,7 +236,7 @@ async def _ingest_single_report(
     except Exception as exc:
         run.status = "failed"
         run.error_message = str(exc)
-        run.finished_at = utc_now()
+        run.finished_at = app_now()
         await db.commit()
         logger.exception("Failed to ingest HCP %s report for config %s", report_kind, config.id)
         return {
@@ -257,7 +257,7 @@ async def _store_labor_cost_report(
     settings_id: str,
 ) -> dict[str, Any]:
     parsed_rows = parse_hcp_payroll_report(raw_report_text)
-    pulled_at = utc_now()
+    pulled_at = app_now()
     period_start, period_end = pay_period_for_pull(pulled_at)
     snapshot = HcpPayrollReportSnapshot(
         source_config_id=config.id,
@@ -312,7 +312,7 @@ async def _store_staff_roster(
 ) -> dict[str, Any]:
     parsed_rows = parse_hcp_staff_roster(raw_report_text)
     active_rows = [row for row in parsed_rows if row.is_active]
-    pulled_at = utc_now()
+    pulled_at = app_now()
     period_start, period_end = pay_period_for_pull(pulled_at)
 
     snapshot = HcpStaffRosterSnapshot(
@@ -433,7 +433,7 @@ async def _scheduler_loop() -> None:
     global _last_trigger_keys
 
     while True:
-        now = utc_now()
+        now = app_now()
         trigger_key = now.strftime("%Y-%m-%d %H:%M")
 
         async with SessionLocal() as db:

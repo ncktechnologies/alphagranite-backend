@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlmodel import Field, SQLModel
-from src.app.utils.helpers import utc_now
+from src.app.utils.helpers import app_now
 
 
 class InstallerJobTimerEvent(SQLModel, table=True):
@@ -15,5 +15,5 @@ class InstallerJobTimerEvent(SQLModel, table=True):
     installer_id: int = Field(foreign_key="users.id", index=True)
 
     action: str = Field(max_length=20)
-    event_at: datetime = Field(default_factory=utc_now)
+    event_at: datetime = Field(default_factory=app_now)
     note: Optional[str] = None

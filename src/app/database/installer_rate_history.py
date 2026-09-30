@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlmodel import Field, SQLModel
-from src.app.utils.helpers import utc_now
+from src.app.utils.helpers import app_now
 
 
 class InstallerRateHistory(SQLModel, table=True):
@@ -15,7 +15,7 @@ class InstallerRateHistory(SQLModel, table=True):
     effective_to: Optional[datetime] = Field(default=None, index=True)
     is_active: bool = Field(default=True, index=True)
 
-    created_at: datetime = Field(default_factory=utc_now)
+    created_at: datetime = Field(default_factory=app_now)
     created_by: int = Field(foreign_key="users.id")
     updated_at: Optional[datetime] = Field(default=None)
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")

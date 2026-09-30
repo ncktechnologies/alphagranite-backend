@@ -277,12 +277,6 @@ def test_installer_period_totals_is_blank_without_data():
     assert all(totals[key] is None for key in _INSTALLER_METRIC_KEYS)
 
 
-class _FrozenDate(date):
-    @classmethod
-    def today(cls):
-        return cls(2026, 9, 25)
-
-
 class _EmptyResult:
     def first(self):
         return (None, None, None)
@@ -311,7 +305,7 @@ async def test_installer_report_blanks_future_weeks_and_builds_annual_months(mon
     async def _roster(*_args, **_kwargs):
         return 40
 
-    monkeypatch.setattr(reports, "date", _FrozenDate)
+    monkeypatch.setattr(reports, "app_today", lambda: date(2026, 9, 25))
     monkeypatch.setattr(reports, "_hcp_weekly_labor_totals", _weekly)
     monkeypatch.setattr(reports, "_hcp_active_employee_count_for_month", _roster)
 

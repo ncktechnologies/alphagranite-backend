@@ -13,7 +13,7 @@ from src.app.database.file import File
 from src.app.database.status import Status
 from src.app.utils.config import API_BASE_URL
 from src.app.database.user_role import UserRole
-from src.app.utils.helpers import error_response, utc_now
+from src.app.utils.helpers import error_response, app_now
 from src.app.database.permission import Permission
 from src.app.database.action_menu import ActionMenu
 from src.app.service.background import save_audit_trail
@@ -88,8 +88,8 @@ class RoleService:
                 name=name,
                 description=description,
                 status=status,
-                created_at=utc_now(),
-                updated_at=utc_now()
+                created_at=app_now(),
+                updated_at=app_now()
             )
             
             db.add(new_role)
@@ -116,8 +116,8 @@ class RoleService:
                     can_read=amp["can_read"],
                     can_update=amp["can_update"],
                     can_delete=amp["can_delete"],
-                    created_at=utc_now(),
-                    updated_at=utc_now()
+                    created_at=app_now(),
+                    updated_at=app_now()
                 )
                 db.add(permission)
                 await db.flush()  # Get permission ID
@@ -128,8 +128,8 @@ class RoleService:
                     role_id=new_role.id,
                     permission_id=permission.id,
                     action_menu_id=action_menu_id,
-                    created_at=utc_now(),
-                    updated_at=utc_now()
+                    created_at=app_now(),
+                    updated_at=app_now()
                 )
                 db.add(role_permission)
             
@@ -157,7 +157,7 @@ class RoleService:
                     user_role = UserRole(
                         user_id=user_id,
                         role_id=new_role.id,
-                        created_at=utc_now()
+                        created_at=app_now()
                     )
                     db.add(user_role)
             
@@ -239,7 +239,7 @@ class RoleService:
         if status is not None:
             role.status = status
         
-        role.updated_at = utc_now()
+        role.updated_at = app_now()
         # role.updated_by = current_user_id
         
         # Handle permissions update via action_menu_permissions
@@ -280,7 +280,7 @@ class RoleService:
                     existing_permission.can_read = can_read
                     existing_permission.can_update = can_update
                     existing_permission.can_delete = can_delete
-                    existing_permission.updated_at = utc_now()
+                    existing_permission.updated_at = app_now()
                     permission = existing_permission
                 else:
                     # Create new permission
@@ -291,8 +291,8 @@ class RoleService:
                         can_read=can_read,
                         can_update=can_update,
                         can_delete=can_delete,
-                        created_at=utc_now(),
-                        updated_at=utc_now()
+                        created_at=app_now(),
+                        updated_at=app_now()
                     )
                     db.add(permission)
                     await db.flush()  # Flush to get permission.id
@@ -302,8 +302,8 @@ class RoleService:
                     role_id=role_id,
                     permission_id=permission.id,
                     action_menu_id=action_menu_id,
-                    created_at=utc_now(),
-                    updated_at=utc_now()
+                    created_at=app_now(),
+                    updated_at=app_now()
                 )
                 db.add(role_permission)
     
@@ -326,8 +326,8 @@ class RoleService:
                 role_permission = RolePermission(
                     role_id=role_id,
                     permission_id=permission_id,
-                    created_at=utc_now(),
-                    updated_at=utc_now()
+                    created_at=app_now(),
+                    updated_at=app_now()
                 )
                 db.add(role_permission)
     
@@ -389,7 +389,7 @@ class RoleService:
                 user_role = UserRole(
                     user_id=user_id,
                     role_id=role_id,
-                    created_at=utc_now()
+                    created_at=app_now()
                 )
                 db.add(user_role)
 
@@ -398,7 +398,7 @@ class RoleService:
                 await db.execute(
                     update(User)
                     .where(User.id.in_(new_member_ids))
-                    .values(role_id=role_id, updated_at=utc_now())
+                    .values(role_id=role_id, updated_at=app_now())
                 )
 
             removed_member_ids = existing_member_ids - new_member_ids
@@ -414,7 +414,7 @@ class RoleService:
                 await db.execute(
                     update(User)
                     .where(User.id == removed_user_id)
-                    .values(role_id=fallback_role_id, updated_at=utc_now())
+                    .values(role_id=fallback_role_id, updated_at=app_now())
                 )
     
         await db.commit()
@@ -463,7 +463,7 @@ class RoleService:
             # Update status
             old_status = role.status
             role.status = status_id
-            role.updated_at = utc_now()
+            role.updated_at = app_now()
             
             db.add(role)
             await db.commit()
@@ -1232,7 +1232,7 @@ class RoleService:
             # Update status to inactive (2)
             old_status = user.status
             user.status = 2  # 2 = Inactive
-            user.updated_at = utc_now()
+            user.updated_at = app_now()
             
             db.add(user)
             await db.commit()

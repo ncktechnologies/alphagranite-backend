@@ -13,7 +13,7 @@ from src.app.database.business_job import BusinessJob
 from src.app.database.account import Account
 from src.app.database.user import User
 from src.app.interface.business_schemas import JobCreate, JobUpdate
-from src.app.utils.helpers import utc_now
+from src.app.utils.helpers import app_now
 from src.app.service.background import save_audit_event
 
 async def create_job(
@@ -69,7 +69,7 @@ async def create_job(
         invoice_note=job_dict.get("invoice_note"),
         status_id=job_dict.get("status_id", 1),
         created_by=user_id,
-        created_at=utc_now()
+        created_at=app_now()
     )
     
     db.add(job)
@@ -376,7 +376,7 @@ async def update_job(
     for field, value in update_data.items():
         setattr(job, field, value)
     
-    job.updated_at = utc_now()
+    job.updated_at = app_now()
     job.updated_by = user_id
 
     await save_audit_event(
@@ -470,7 +470,7 @@ async def delete_job(
         "name": job.name,
     }
     job.status_id = 3  # Deleted status
-    job.updated_at = utc_now()
+    job.updated_at = app_now()
     job.updated_by = user_id
 
     await save_audit_event(
@@ -589,7 +589,7 @@ async def toggle_job_invoice_flag(
     
     # Toggle the flag
     job.need_to_invoice = not job.need_to_invoice
-    job.updated_at = utc_now()
+    job.updated_at = app_now()
     job.updated_by = user_id
     
     # Update invoice note if provided
@@ -618,8 +618,8 @@ async def mark_job_invoiced(
         raise HTTPException(status_code=404, detail="Job not found")
     
     job.need_to_invoice = False
-    job.invoiced_at = invoiced_at or utc_now()
-    job.updated_at = utc_now()
+    job.invoiced_at = invoiced_at or app_now()
+    job.updated_at = app_now()
     job.updated_by = user_id
 
     await db.commit()

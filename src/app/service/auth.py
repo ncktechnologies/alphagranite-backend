@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
-from src.app.utils.helpers import utc_now
+from src.app.utils.helpers import app_now
 
 # Load environment variables from .env file
 load_dotenv()
@@ -62,14 +62,14 @@ class AuthService:
 
     def create_access_token(self, data: dict, expires_delta: Optional[timedelta] = None):
         to_encode = data.copy()
-        issued_at = utc_now()
+        issued_at = app_now()
         to_encode.update({"iat": issued_at, "type": "access"})
         encoded_jwt = jwt.encode(to_encode, self.SECRET_KEY, algorithm=self.ALGORITHM)
         return encoded_jwt
 
     def create_refresh_token(self, data: dict, expires_delta: Optional[timedelta] = None):
         to_encode = data.copy()
-        expire = utc_now() + (expires_delta or timedelta(days=self.REFRESH_TOKEN_EXPIRE_DAYS))
+        expire = app_now() + (expires_delta or timedelta(days=self.REFRESH_TOKEN_EXPIRE_DAYS))
         to_encode.update({"exp": expire, "type": "refresh"})
         encoded_jwt = jwt.encode(to_encode, self.SECRET_KEY, algorithm=self.ALGORITHM)
         return encoded_jwt
@@ -222,7 +222,7 @@ class AuthService:
         # Get user permissions for action menus (existing functionality)
         user_permissions = await self.get_user_permissions(user.id, db_session)
 
-        user.updated_at = utc_now()
+        user.updated_at = app_now()
         await db_session.commit()
 
         # Create tokens with claims
@@ -270,7 +270,7 @@ class AuthService:
             "sub": user.username,
             "user_id": user.id,
             "reset_token": reset_token,
-            "exp": utc_now() + timedelta(minutes=30),  # Token expires in 30 minutes
+            "exp": app_now() + timedelta(minutes=30),  # Token expires in 30 minutes
         }
 
         # Note: not storing reset token in DB in this simplified implementation
@@ -284,7 +284,7 @@ class AuthService:
             payload = jwt.decode(token, self.SECRET_KEY, algorithms=[self.ALGORITHM])
             
             # Check if token has expired
-            if datetime.fromtimestamp(payload["exp"]) < utc_now():
+            if datetime.fromtimestamp(payload["exp"]) < app_now():
                 return False, "Token has expired", None
                 
             # Get user from database
@@ -298,7 +298,7 @@ class AuthService:
                 return False, "User not found", None
                 
             # In a real application, you'd verify the reset_token against what's stored in the database
-            # if user.reset_token != payload.get("reset_token") or user.reset_token_expires < utc_now():
+            # if user.reset_token != payload.get("reset_token") or user.reset_token_expires < app_now():
             #     return False, "Invalid or expired token", None
                 
             return True, None, user_id
@@ -325,7 +325,7 @@ class AuthService:
         # Update password in database
         user.password = hashed_password
         user.is_first_login = False  # User has changed password, so no longer first login
-        user.updated_at = utc_now()
+        user.updated_at = app_now()
         db_session.add(user)
         await db_session.commit()
 
@@ -368,7 +368,7 @@ class AuthService:
             password_reset_otp = PasswordResetOTP(
                 user_id=user.id,
                 otp=otp,
-                expires_at=utc_now() + timedelta(minutes=10),
+                expires_at=app_now() + timedelta(minutes=10),
                 attempts=0
             )
             db.add(password_reset_otp)
@@ -416,7 +416,7 @@ class AuthService:
                 return False, "No OTP request found. Please request a new OTP.", user.id
 
             # Check if OTP is expired
-            if utc_now() > otp_record.expires_at:
+            if app_now() > otp_record.expires_at:
                 await db.delete(otp_record)
                 await db.commit()
                 return False, "OTP has expired. Please request a new one.", user.id
@@ -463,7 +463,7 @@ class AuthService:
             # Hash password using get_password_hash (handles bcrypt 72-byte limit)
             user.password = self.get_password_hash(new_password)
             user.is_first_login = False
-            user.updated_at = utc_now()
+            user.updated_at = app_now()
             db.add(user)
             await db.commit()
             await db.refresh(user)

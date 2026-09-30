@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends, File as FileUpload, Form, HTTPException, Request, UploadFile, status
 from sqlalchemy import select
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 
 from src.app.database import get_db
 from src.app.database.user import User
@@ -25,7 +25,7 @@ from src.app.interface.business_schemas import (
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.service.file import FileService
 from src.app.interface.response_wrappers import SuccessResponse
-from src.app.utils.helpers import error_response, success_response, strip_timezone, utc_now
+from src.app.utils.helpers import error_response, success_response, strip_timezone, app_now, APP_TZ
 from src.app.utils.timer_guards import assert_no_active_timer_session
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ async def manage_cnc_session(
         raise error_response("Drafter not found", 404)
 
     action = session_data.action.lower()
-    timestamp = session_data.timestamp or strip_timezone(utc_now())
+    timestamp = session_data.timestamp or strip_timezone(app_now())
 
     # Get active session for this fab
     active_session_result = await db.execute(
@@ -109,7 +109,7 @@ async def manage_cnc_session(
             session_start_time=strip_timezone(session_data.session_start_time) if session_data.session_start_time else strip_timezone(timestamp),
             cumulative_sqft_drafted=session_data.sqft_drafted or "0",
             work_percentage_done=session_data.work_percentage_done or 0,
-            created_at=strip_timezone(utc_now()),
+            created_at=strip_timezone(app_now()),
         )
         db.add(session)
         await db.flush()
@@ -122,7 +122,7 @@ async def manage_cnc_session(
             note=session_data.note,
             sqft_drafted=session_data.sqft_drafted,
             work_percentage_done=session_data.work_percentage_done,
-            created_at=strip_timezone(utc_now()),
+            created_at=strip_timezone(app_now()),
         )
         db.add(note)
         message = "CNC session started"
@@ -140,7 +140,7 @@ async def manage_cnc_session(
 
         active_session.status = "paused"
         active_session.current_pause_start_time = strip_timezone(timestamp)
-        active_session.updated_at = strip_timezone(utc_now())
+        active_session.updated_at = strip_timezone(app_now())
 
         if session_data.sqft_drafted:
             active_session.cumulative_sqft_drafted = session_data.sqft_drafted
@@ -157,7 +157,7 @@ async def manage_cnc_session(
             note=session_data.note,
             sqft_drafted=session_data.sqft_drafted,
             work_percentage_done=session_data.work_percentage_done,
-            created_at=strip_timezone(utc_now()),
+            created_at=strip_timezone(app_now()),
         )
         db.add(note)
         message = "CNC session paused"
@@ -174,15 +174,15 @@ async def manage_cnc_session(
         if active_session.current_pause_start_time:
             pause_start = strip_timezone(active_session.current_pause_start_time)
             if pause_start.tzinfo is None:
-                pause_start = pause_start.replace(tzinfo=timezone.utc)
+                pause_start = pause_start.replace(tzinfo=APP_TZ)
             ts = timestamp
             if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
+                ts = ts.replace(tzinfo=APP_TZ)
             active_session.total_pause_duration += int((ts - pause_start).total_seconds())
 
         active_session.status = "drafting"
         active_session.current_pause_start_time = None
-        active_session.updated_at = strip_timezone(utc_now())
+        active_session.updated_at = strip_timezone(app_now())
 
         session = active_session
 
@@ -194,7 +194,7 @@ async def manage_cnc_session(
             note=session_data.note,
             sqft_drafted=session_data.sqft_drafted,
             work_percentage_done=session_data.work_percentage_done,
-            created_at=strip_timezone(utc_now()),
+            created_at=strip_timezone(app_now()),
         )
         db.add(note)
         message = "CNC session resumed"
@@ -207,7 +207,7 @@ async def manage_cnc_session(
             active_session.current_pause_start_time = strip_timezone(timestamp)
 
         active_session.status = "on_hold"
-        active_session.updated_at = strip_timezone(utc_now())
+        active_session.updated_at = strip_timezone(app_now())
 
         if session_data.sqft_drafted:
             active_session.cumulative_sqft_drafted = session_data.sqft_drafted
@@ -224,7 +224,7 @@ async def manage_cnc_session(
             note=session_data.note,
             sqft_drafted=session_data.sqft_drafted,
             work_percentage_done=session_data.work_percentage_done,
-            created_at=strip_timezone(utc_now()),
+            created_at=strip_timezone(app_now()),
         )
         db.add(note)
         message = "CNC session put on hold"
@@ -245,7 +245,7 @@ async def manage_cnc_session(
         active_session.status = "completed"
         active_session.session_end_time = end_time
         active_session.current_pause_start_time = None
-        active_session.updated_at = strip_timezone(utc_now())
+        active_session.updated_at = strip_timezone(app_now())
 
         if session_data.sqft_drafted:
             active_session.cumulative_sqft_drafted = session_data.sqft_drafted
@@ -262,7 +262,7 @@ async def manage_cnc_session(
             note=session_data.note,
             sqft_drafted=session_data.sqft_drafted,
             work_percentage_done=session_data.work_percentage_done,
-            created_at=strip_timezone(utc_now()),
+            created_at=strip_timezone(app_now()),
         )
         db.add(note)
         message = f"CNC session ended. Total time: {active_session.total_time_spent} seconds"
@@ -338,7 +338,7 @@ async def get_current_cnc_session(
 
     total_time = session.total_time_spent
     if session.status == "drafting":
-        current_elapsed = int((utc_now() - session.session_start_time).total_seconds())
+        current_elapsed = int((app_now() - session.session_start_time).total_seconds())
         total_time = current_elapsed - session.total_pause_duration
 
     last_action_time = notes[-1].timestamp if notes else session.session_start_time
@@ -476,7 +476,7 @@ async def create_cnc_drafting(
             existing.scheduled_start_date = strip_timezone(item.scheduled_start_date)
             existing.scheduled_end_date = strip_timezone(item.scheduled_end_date)
             existing.total_sqft_required_to_draft = str(item.total_sqft_required_to_draft)
-            existing.updated_at = strip_timezone(utc_now())
+            existing.updated_at = strip_timezone(app_now())
             existing.updated_by = current_user.id
             cnc = existing
             updated_count += 1
@@ -489,7 +489,7 @@ async def create_cnc_drafting(
                 total_sqft_required_to_draft=str(item.total_sqft_required_to_draft),
                 status_id=1,
                 is_completed=False,
-                created_at=strip_timezone(utc_now()),
+                created_at=strip_timezone(app_now()),
             )
             db.add(cnc)
             created_count += 1
@@ -565,15 +565,15 @@ async def update_cnc_drafting(
         cnc.is_completed = True
         cnc.status_id = 3
         if "drafter_end_date" not in update_data:
-            cnc.drafter_end_date = strip_timezone(utc_now())
+            cnc.drafter_end_date = strip_timezone(app_now())
 
         if _should_move_fab_to_shop_after_cnc_completion(fab, cnc_completed=True):
             fab.current_stage = "shop"
             fab.next_stage = None
-            fab.updated_at = strip_timezone(utc_now())
+            fab.updated_at = strip_timezone(app_now())
             fab.updated_by = current_user.id
 
-    cnc.updated_at = strip_timezone(utc_now())
+    cnc.updated_at = strip_timezone(app_now())
     cnc.updated_by = current_user.id
 
     await db.commit()
@@ -617,15 +617,15 @@ async def submit_cnc_draft(
     if submit_data.is_completed:
         cnc.is_completed = True
         cnc.status_id = 3
-        cnc.drafter_end_date = strip_timezone(utc_now())
+        cnc.drafter_end_date = strip_timezone(app_now())
 
         if _should_move_fab_to_shop_after_cnc_completion(fab, cnc_completed=True):
             fab.current_stage = "shop"
             fab.next_stage = None
-            fab.updated_at = strip_timezone(utc_now())
+            fab.updated_at = strip_timezone(app_now())
             fab.updated_by = current_user.id
 
-    cnc.updated_at = strip_timezone(utc_now())
+    cnc.updated_at = strip_timezone(app_now())
     cnc.updated_by = current_user.id
 
     await db.commit()
@@ -694,7 +694,7 @@ async def add_file_to_cnc_drafting(
     else:
         cnc.file_ids = str(file_id)
 
-    cnc.updated_at = strip_timezone(utc_now())
+    cnc.updated_at = strip_timezone(app_now())
     cnc.updated_by = current_user.id
 
     await db.commit()

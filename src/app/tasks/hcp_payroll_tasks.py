@@ -13,7 +13,7 @@ from src.app.service.hcp_payroll_ingestion import (
 )
 from src.app.tasks.celery_app import celery_app
 from src.app.utils.config import DATABASE_URL
-from src.app.utils.helpers import utc_now
+from src.app.utils.helpers import APP_TIMEZONE_NAME, app_now
 
 logger = logging.getLogger("hcp_payroll_tasks")
 
@@ -28,7 +28,10 @@ def _run_with_session(operation: Callable[[AsyncSession], Awaitable[Any]]) -> An
     async def _runner() -> Any:
         engine = create_async_engine(
             DATABASE_URL,
-            connect_args={"statement_cache_size": 0} if "postgresql" in DATABASE_URL else {},
+            connect_args={
+                "statement_cache_size": 0,
+                "server_settings": {"timezone": APP_TIMEZONE_NAME},
+            } if "postgresql" in DATABASE_URL else {},
         )
         session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
         try:
@@ -51,7 +54,7 @@ def ingest_config_task(self, source_config_id: int) -> dict:
 
 @celery_app.task(name="hcp_payroll.dispatch_due_ingestions")
 def dispatch_due_ingestions_task() -> dict:
-    now = utc_now()
+    now = app_now()
 
     async def _collect(session: AsyncSession) -> list[int]:
         configs = await get_active_configs(session)

@@ -1,21 +1,23 @@
 import os
 import pathlib
-from datetime import timezone
 from dotenv import load_dotenv
 from functools import lru_cache
 from typing import AsyncGenerator
 from sqlalchemy.orm import sessionmaker
 from pydantic_settings import BaseSettings
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from src.app.utils.helpers import APP_TIMEZONE_NAME, to_app_tz
 
 load_dotenv()
 
 
-def _coerce_naive_datetimes_to_utc() -> None:
-    """Treat naive datetimes as UTC instead of raising.
+def _use_app_timezone_for_datetimes() -> None:
+    """Treat every datetime column as America/Chicago wall-clock time.
 
-    SQLModel >= 0.0.25 rejects naive datetimes outright; this keeps legacy call
-    sites working while the codebase standardises on aware UTC values.
+    The columns are `timestamp without time zone`. Writes are sent as
+    timestamptz and Postgres stores them in the session TimeZone (pinned to
+    America/Chicago on the engine below); reads come back naive and are
+    labelled America/Chicago. Naive input is assumed to already be Chicago time.
     """
     try:
         from sqlmodel.sql.sqltypes import UTCDateTime
@@ -23,16 +25,16 @@ def _coerce_naive_datetimes_to_utc() -> None:
         return
 
     def process_bind_param(self, value, dialect):
-        if value is None:
-            return None
-        if value.utcoffset() is None:
-            value = value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
+        return to_app_tz(value)
+
+    def process_result_value(self, value, dialect):
+        return to_app_tz(value)
 
     UTCDateTime.process_bind_param = process_bind_param
+    UTCDateTime.process_result_value = process_result_value
 
 
-_coerce_naive_datetimes_to_utc()
+_use_app_timezone_for_datetimes()
 
 # Base directory for the project
 BASE_DIR = pathlib.Path(__file__).parent.parent.parent.parent
@@ -91,10 +93,15 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
 # Database connection
-# Configure engine with statement_cache_size=0 for pgBouncer compatibility
+# Configure engine with statement_cache_size=0 for pgBouncer compatibility.
+# The session TimeZone is pinned so stored/returned timestamps are always
+# America/Chicago, regardless of the Postgres server's own timezone setting.
 engine = create_async_engine(
     DATABASE_URL,
-    connect_args={"statement_cache_size": 0} if "postgresql" in DATABASE_URL else {}
+    connect_args={
+        "statement_cache_size": 0,
+        "server_settings": {"timezone": APP_TIMEZONE_NAME},
+    } if "postgresql" in DATABASE_URL else {}
 )
 SessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 

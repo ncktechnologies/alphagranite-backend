@@ -4,7 +4,7 @@ from typing import Optional, List
 from src.app.database.sales_ct import SalesCT
 from src.app.service.background import send_email
 from src.app.database.sct_revision_queue import SCTRevisionQueue
-from src.app.utils.helpers import utc_now
+from src.app.utils.helpers import app_now
 
 class SalesCTService:
     def __init__(self, db: Session):
@@ -15,8 +15,8 @@ class SalesCTService:
             fab_id=fab_id,
             is_revision_needed=False,
             status_id=1,  # started
-            created_at=utc_now(),
-            updated_at=utc_now(),
+            created_at=app_now(),
+            updated_at=app_now(),
             updated_by=created_by
         )
         self.db.add(sales_ct)
@@ -32,8 +32,8 @@ class SalesCTService:
             draftings_id=drafter_id,
             file_ids=','.join(map(str, file_ids)),
             revision_number=1,  # increment as needed
-            created_at=utc_now(),
-            start_date=utc_now(),
+            created_at=app_now(),
+            start_date=app_now(),
             revision_reason=revision_reason,
             updated_by=created_by
         )
@@ -73,8 +73,8 @@ class SalesCTService:
         if not revision:
             return None
         revision.status_id = 2  # completed
-        revision.end_date = utc_now()
-        revision.updated_at = utc_now()
+        revision.end_date = app_now()
+        revision.updated_at = app_now()
         revision.revision_reason = note
         revision.updated_by = updated_by
         self.db.commit()

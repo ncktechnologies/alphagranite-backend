@@ -3,7 +3,8 @@ Fab Type model for fabrication types.
 """
 from datetime import datetime
 from typing import Optional
-from sqlmodel import SQLModel, Field, Column, DateTime, func
+from sqlmodel import SQLModel, Field, Column, func
+from sqlmodel.sql.sqltypes import UTCDateTime  # patched in utils/config to store/return America/Chicago
 
 
 class FabTypeBase(SQLModel):
@@ -18,11 +19,11 @@ class FabType(FabTypeBase, table=True):
     
     id: Optional[int] = Field(default=None, primary_key=True)
     created_at: datetime = Field(
-        sa_column=Column(DateTime(timezone=False), server_default=func.now())
+        sa_column=Column(UTCDateTime(), server_default=func.now())
     )
     updated_at: Optional[datetime] = Field(
         default=None,
-        sa_column=Column(DateTime(timezone=False), onupdate=func.now()),
+        sa_column=Column(UTCDateTime(), onupdate=func.now()),
     )
 
 

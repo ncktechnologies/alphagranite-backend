@@ -20,7 +20,7 @@ from src.app.database.file import File
 from src.app.database.fab import Fab
 from src.app.interface.response_wrappers import SuccessResponse, error_response, success_response
 from src.app.middleware.jwt_auth import get_current_user
-from src.app.utils.helpers import utc_now
+from src.app.utils.helpers import app_now
 from src.app.interface.business_schemas import (
     JobCreate, JobUpdate, JobResponse,
 )
@@ -843,7 +843,7 @@ async def add_job_note(
         job_id=job_id,
         note=note_data.note,
         created_by=current_user.id,
-        created_at=utc_now()
+        created_at=app_now()
     )
     
     db.add(new_note)

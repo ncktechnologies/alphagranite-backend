@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlmodel import SQLModel, Field
-from src.app.utils.helpers import utc_now
+from src.app.utils.helpers import app_now
 
 
 class ShopCutPlanTimerEvent(SQLModel, table=True):
@@ -14,5 +14,5 @@ class ShopCutPlanTimerEvent(SQLModel, table=True):
     operator_id: int = Field(foreign_key="users.id")
 
     action: str = Field(max_length=20)
-    event_at: datetime = Field(default_factory=utc_now)
+    event_at: datetime = Field(default_factory=app_now)
     note: Optional[str] = None

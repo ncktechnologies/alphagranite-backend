@@ -15,6 +15,7 @@ from src.app.database.user import User
 from src.app.database.work_station import WorkStation
 from src.app.interface.generated_schemas import PlanningSection
 from src.app.routers import dashboard, fabs, operators, reports, shop_cut_plan
+from src.app.utils.helpers import app_today
 
 
 ToolHandler = Callable[[dict[str, Any], AsyncSession, User], Awaitable[dict[str, Any]]]
@@ -282,7 +283,7 @@ def _default_params_for_tool(tool_name: str) -> dict[str, Any]:
 def _merge_date_range_params(question: str, params: dict[str, Any]) -> dict[str, Any]:
     merged = dict(params)
     lower = question.lower()
-    today = date.today()
+    today = app_today()
 
     explicit_dates = re.findall(r"\b\d{4}-\d{2}-\d{2}\b", question)
     if len(explicit_dates) >= 2:
@@ -1090,7 +1091,7 @@ async def _run_owner_weekly_fabrication_labor_cost(
     db: AsyncSession,
     current_user: User,
 ) -> dict[str, Any]:
-    today = date.today()
+    today = app_today()
     year = _parse_bounded_int(
         params.get("year"),
         field_name="year",
@@ -1145,7 +1146,7 @@ async def _run_owner_weekly_installer_labor_cost(
     db: AsyncSession,
     current_user: User,
 ) -> dict[str, Any]:
-    today = date.today()
+    today = app_today()
     year = _parse_bounded_int(
         params.get("year"),
         field_name="year",
@@ -1228,7 +1229,7 @@ async def _run_owner_monthly_install_completion(
     db: AsyncSession,
     current_user: User,
 ) -> dict[str, Any]:
-    today = date.today()
+    today = app_today()
     year = _parse_bounded_int(
         params.get("year"),
         field_name="year",
@@ -1273,7 +1274,7 @@ async def _run_owner_monthly_cut_completion(
     db: AsyncSession,
     current_user: User,
 ) -> dict[str, Any]:
-    today = date.today()
+    today = app_today()
     year = _parse_bounded_int(
         params.get("year"),
         field_name="year",
@@ -1302,7 +1303,7 @@ async def _run_owner_turnaround_times(
     db: AsyncSession,
     current_user: User,
 ) -> dict[str, Any]:
-    today = date.today()
+    today = app_today()
     year = _parse_bounded_int(
         params.get("year"),
         field_name="year",
@@ -1602,8 +1603,8 @@ async def _run_ops_shop_plans_by_fab(
     fab_id = _parse_bounded_int(params.get("fab_id"), field_name="fab_id", default=1, minimum=1, maximum=10_000_000)
     month_raw = params.get("month")
     year_raw = params.get("year")
-    month = _parse_bounded_int(month_raw, field_name="month", default=date.today().month, minimum=1, maximum=12) if month_raw not in (None, "") else None
-    year = _parse_bounded_int(year_raw, field_name="year", default=date.today().year, minimum=2000, maximum=2100) if year_raw not in (None, "") else None
+    month = _parse_bounded_int(month_raw, field_name="month", default=app_today().month, minimum=1, maximum=12) if month_raw not in (None, "") else None
+    year = _parse_bounded_int(year_raw, field_name="year", default=app_today().year, minimum=2000, maximum=2100) if year_raw not in (None, "") else None
     skip = _parse_bounded_int(params.get("skip"), field_name="skip", default=0, minimum=0, maximum=1_000_000)
     limit = _parse_bounded_int(params.get("limit"), field_name="limit", default=100, minimum=1, maximum=1000)
 

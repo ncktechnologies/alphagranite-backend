@@ -2,7 +2,7 @@ from datetime import date, datetime
 from typing import Optional, List
 from sqlmodel import SQLModel, Field, Column
 from sqlalchemy.dialects.postgresql import JSONB
-from src.app.utils.helpers import utc_now
+from src.app.utils.helpers import app_now
 
 # --- Jobs ---
 # Note: Job model removed to avoid conflict with src.app.database.job
@@ -210,7 +210,7 @@ class PlanningSection(SQLModel, table=True):
     plan_description: Optional[str] = None
     is_active: bool = Field(default=True)
     status_id: int = Field(foreign_key="status.value_id")
-    created_at: datetime = Field(default_factory=utc_now)
+    created_at: datetime = Field(default_factory=app_now)
     created_by: int = Field(foreign_key="users.id")
     updated_at: Optional[datetime] = None
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
@@ -234,7 +234,7 @@ class HcpPayrollSourceConfig(SQLModel, table=True):
     schedule_hour: int = Field(default=1)
     schedule_minute: int = Field(default=0)
     is_active: bool = Field(default=True, index=True)
-    created_at: datetime = Field(default_factory=utc_now)
+    created_at: datetime = Field(default_factory=app_now)
     updated_at: Optional[datetime] = None
     created_by: Optional[int] = Field(default=None, foreign_key="users.id")
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
@@ -255,8 +255,8 @@ class HcpPayrollIngestionRun(SQLModel, table=True):
     report_content_type: Optional[str] = Field(default=None, max_length=255)
     error_message: Optional[str] = Field(default=None)
     row_count: int = Field(default=0)
-    created_at: datetime = Field(default_factory=utc_now)
-    started_at: datetime = Field(default_factory=utc_now)
+    created_at: datetime = Field(default_factory=app_now)
+    started_at: datetime = Field(default_factory=app_now)
     finished_at: Optional[datetime] = Field(default=None)
     created_by: Optional[int] = Field(default=None, foreign_key="users.id")
 
@@ -275,7 +275,7 @@ class HcpPayrollReportSnapshot(SQLModel, table=True):
     # Mon-Sun week the pull covers (the week before the pull).
     period_start: Optional[date] = Field(default=None)
     period_end: Optional[date] = Field(default=None, index=True)
-    created_at: datetime = Field(default_factory=utc_now)
+    created_at: datetime = Field(default_factory=app_now)
 
 
 class HcpPayrollReportRow(SQLModel, table=True):
@@ -299,7 +299,7 @@ class HcpPayrollReportRow(SQLModel, table=True):
     overtime_hours: Optional[float] = Field(default=None)
     total_ot_wages: Optional[float] = Field(default=None)
     raw_line_text: Optional[str] = Field(default=None)
-    created_at: datetime = Field(default_factory=utc_now)
+    created_at: datetime = Field(default_factory=app_now)
 
 
 class HcpStaffRosterSnapshot(SQLModel, table=True):
@@ -311,13 +311,13 @@ class HcpStaffRosterSnapshot(SQLModel, table=True):
     report_settings_id: str = Field(max_length=100, index=True)
     payload_format: str = Field(default="csv", max_length=50)
     raw_payload_text: str = Field()
-    pulled_at: datetime = Field(default_factory=utc_now, index=True)
+    pulled_at: datetime = Field(default_factory=app_now, index=True)
     row_count: int = Field(default=0)
     active_employee_count: int = Field(default=0)
     # Mon-Sun week the pull covers (the week before the pull).
     period_start: Optional[date] = Field(default=None)
     period_end: Optional[date] = Field(default=None, index=True)
-    created_at: datetime = Field(default_factory=utc_now)
+    created_at: datetime = Field(default_factory=app_now)
 
 
 class HcpStaffRosterRow(SQLModel, table=True):
@@ -339,7 +339,7 @@ class HcpStaffRosterRow(SQLModel, table=True):
     date_terminated: Optional[str] = Field(default=None, max_length=100)
     is_active: bool = Field(default=False, index=True)
     raw_line_text: Optional[str] = Field(default=None)
-    created_at: datetime = Field(default_factory=utc_now)
+    created_at: datetime = Field(default_factory=app_now)
 
 
 # --- Shop Planning Sections ---
@@ -466,7 +466,7 @@ class ShopRevision(SQLModel, table=True):
     revision_feedback: Optional[str] = Field(default=None)
     revision_completed: bool = Field(default=False, index=True)
     completed_at: Optional[datetime] = Field(default=None)
-    created_at: datetime = Field(default_factory=utc_now, index=True)
+    created_at: datetime = Field(default_factory=app_now, index=True)
     updated_at: Optional[datetime] = Field(default=None)
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
     file_ids: Optional[str] = Field(default=None, description="Comma-separated file IDs")
@@ -550,7 +550,7 @@ class DraftingSession(SQLModel, table=True):
     work_percentage_done: int = Field(default=0)
     
     # Metadata
-    created_at: datetime = Field(default_factory=utc_now)
+    created_at: datetime = Field(default_factory=app_now)
     updated_at: Optional[datetime] = Field(default=None)
 
 
@@ -565,7 +565,7 @@ class DraftingSessionNote(SQLModel, table=True):
     note: Optional[str] = Field(default=None)
     sqft_drafted: Optional[str] = Field(default=None)
     work_percentage_done: Optional[int] = Field(default=None)
-    created_at: datetime = Field(default_factory=utc_now)
+    created_at: datetime = Field(default_factory=app_now)
 
 
 # --- SlabSmith Sessions ---
@@ -583,7 +583,7 @@ class SlabSmithSession(SQLModel, table=True):
     total_pause_duration: int = Field(default=0)  # in seconds
     total_time_spent: int = Field(default=0)  # in seconds
 
-    created_at: datetime = Field(default_factory=utc_now)
+    created_at: datetime = Field(default_factory=app_now)
     updated_at: Optional[datetime] = Field(default=None)
 
 
@@ -599,7 +599,7 @@ class SlabSmithSessionNote(SQLModel, table=True):
     note: Optional[str] = Field(default=None)
     sqft_completed: Optional[float] = Field(default=None)
     work_percentage_done: Optional[float] = Field(default=None)
-    created_at: datetime = Field(default_factory=utc_now)
+    created_at: datetime = Field(default_factory=app_now)
 
 
 # --- Final Programming Sessions ---
@@ -617,7 +617,7 @@ class FinalProgrammingSession(SQLModel, table=True):
     total_pause_duration: int = Field(default=0)  # in seconds
     total_time_spent: int = Field(default=0)  # in seconds
 
-    created_at: datetime = Field(default_factory=utc_now)
+    created_at: datetime = Field(default_factory=app_now)
     updated_at: Optional[datetime] = Field(default=None)
 
 
@@ -633,7 +633,7 @@ class FinalProgrammingSessionNote(SQLModel, table=True):
     note: Optional[str] = Field(default=None)
     sqft_completed: Optional[float] = Field(default=None)
     work_percentage_done: Optional[float] = Field(default=None)
-    created_at: datetime = Field(default_factory=utc_now)
+    created_at: datetime = Field(default_factory=app_now)
 
 
 # --- CNC Drafting ---
@@ -684,7 +684,7 @@ class CNCDraftingSession(SQLModel, table=True):
     cumulative_sqft_drafted: Optional[str] = Field(default="0")
     work_percentage_done: int = Field(default=0)
 
-    created_at: datetime = Field(default_factory=utc_now)
+    created_at: datetime = Field(default_factory=app_now)
     updated_at: Optional[datetime] = Field(default=None)
 
 
@@ -699,4 +699,4 @@ class CNCDraftingSessionNote(SQLModel, table=True):
     note: Optional[str] = Field(default=None)
     sqft_drafted: Optional[str] = Field(default=None)
     work_percentage_done: Optional[int] = Field(default=None)
-    created_at: datetime = Field(default_factory=utc_now)
+    created_at: datetime = Field(default_factory=app_now)

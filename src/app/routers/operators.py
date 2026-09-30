@@ -34,7 +34,7 @@ from src.app.interface.response_wrappers import SuccessResponse
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.service.file import FileService
 from src.app.utils.config import get_settings
-from src.app.utils.helpers import success_response, utc_now, to_utc
+from src.app.utils.helpers import success_response, app_now, to_app_tz, app_today
 from src.app.utils.timer_guards import assert_no_active_timer_session, assert_no_pending_shop_revision
 
 
@@ -216,7 +216,7 @@ def _compute_schedule_end_time_iso(
 
 
 def _build_calendar_window(view: str, reference_date: date) -> tuple[datetime, datetime]:
-    start_of_day = to_utc(datetime.combine(reference_date, datetime.min.time()))
+    start_of_day = to_app_tz(datetime.combine(reference_date, datetime.min.time()))
 
     if view == "day":
         return start_of_day, start_of_day + timedelta(days=1)
@@ -402,7 +402,7 @@ def _group_tasks_by_day(tasks: list[dict]) -> list[dict]:
 
 
 def _normalize_naive_dt(value: Optional[datetime]) -> Optional[datetime]:
-    return to_utc(value)
+    return to_app_tz(value)
 
 
 def _serialize_operator_job_timer_session(session: OperatorJobTimerSession) -> dict:
@@ -644,7 +644,7 @@ async def get_workstation_tasks_by_operator(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workstation is not assigned to this operator")
 
     normalized_view = (view or "day").strip().lower()
-    target_date = selected_date or date.today()
+    target_date = selected_date or app_today()
     range_start, range_end = _build_calendar_window(normalized_view, target_date)
 
     query = (
@@ -697,7 +697,7 @@ async def get_workstation_tasks_by_operator(
                 job_id=job_id,
                 operator_id=operator_id,
                 workstation_id=workstation_id,
-                as_of=utc_now().replace(second=0, microsecond=0),
+                as_of=app_now().replace(second=0, microsecond=0),
             )
         total_actual_hours, total_actual_seconds = totals_cache[job_id]
         tasks.append(
@@ -788,7 +788,7 @@ async def get_workstation_task_by_id(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
 
     job_id = task_row[2].id
-    as_of = utc_now().replace(second=0, microsecond=0)
+    as_of = app_now().replace(second=0, microsecond=0)
     total_actual_hours, total_actual_seconds = await _recalculate_operator_job_work_totals(
         db=db,
         job_id=job_id,
@@ -911,14 +911,14 @@ async def update_workstation_task_by_id(
     if payload.notes is not None:
         plan.notes = payload.notes
 
-    plan.updated_at = utc_now()
+    plan.updated_at = app_now()
     plan.updated_by = current_user.id
 
     await db.commit()
     await db.refresh(plan)
 
     job_id = task_row[2].id
-    as_of = utc_now().replace(second=0, microsecond=0)
+    as_of = app_now().replace(second=0, microsecond=0)
     total_actual_hours, total_actual_seconds = await _recalculate_operator_job_work_totals(
         db=db,
         job_id=job_id,
@@ -1038,7 +1038,7 @@ async def get_active_workstation_task_by_operator(
         job_id=active_session.job_id,
         operator_id=operator_id,
         workstation_id=workstation_id,
-        as_of=utc_now().replace(second=0, microsecond=0),
+        as_of=app_now().replace(second=0, microsecond=0),
     )
 
     task = _serialize_operator_workstation_task(
@@ -1046,7 +1046,7 @@ async def get_active_workstation_task_by_operator(
         operator=operator,
         total_actual_hours=total_actual_hours,
         total_actual_seconds=total_actual_seconds,
-        run_time=_current_session_run_time(active_session, utc_now().replace(second=0, microsecond=0)),
+        run_time=_current_session_run_time(active_session, app_now().replace(second=0, microsecond=0)),
     )
 
     return success_response(
@@ -1075,7 +1075,7 @@ async def get_current_operator_tasks(
     """Return tasks assigned to the currently logged-in operator for day/week/month calendar views."""
 
     normalized_view = (view or "week").strip().lower()
-    target_date = reference_date or date.today()
+    target_date = reference_date or app_today()
     range_start, range_end = _build_calendar_window(normalized_view, target_date)
 
     pending_shop_revision_exists = (
@@ -1184,7 +1184,7 @@ async def _process_current_operator_job_timer_action(
         # Always use server-generated time — never trust client-supplied timestamps
         # for duration calculations, as timezone mismatches or stale values produce
         # incorrect elapsed-time results.
-        action_ts: datetime = utc_now()
+        action_ts: datetime = app_now()
 
         job_result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
         job = job_result.scalar_one_or_none()
@@ -1226,7 +1226,7 @@ async def _process_current_operator_job_timer_action(
                 current_run_start_at=action_ts,
                 total_work_seconds=0,
                 total_pause_seconds=0,
-                created_at=utc_now(),
+                created_at=app_now(),
                 created_by=operator_id,
             )
             db.add(session)
@@ -1260,7 +1260,7 @@ async def _process_current_operator_job_timer_action(
             active_session.status = "paused"
             active_session.current_run_start_at = None
             active_session.current_pause_start_at = action_ts
-            active_session.updated_at = utc_now()
+            active_session.updated_at = app_now()
             active_session.updated_by = operator_id
             if workstation_id is not None:
                 active_session.workstation_id = workstation_id
@@ -1295,7 +1295,7 @@ async def _process_current_operator_job_timer_action(
             active_session.status = "running"
             active_session.current_pause_start_at = None
             active_session.current_run_start_at = action_ts
-            active_session.updated_at = utc_now()
+            active_session.updated_at = app_now()
             active_session.updated_by = operator_id
             if workstation_id is not None:
                 active_session.workstation_id = workstation_id
@@ -1337,7 +1337,7 @@ async def _process_current_operator_job_timer_action(
             active_session.current_run_start_at = None
             active_session.current_pause_start_at = None
             active_session.stopped_at = action_ts
-            active_session.updated_at = utc_now()
+            active_session.updated_at = app_now()
             active_session.updated_by = operator_id
 
             db.add(
@@ -1550,7 +1550,7 @@ async def get_current_operator_job_timer_state(
     )
     latest = latest_result.scalars().first()
 
-    now_ts = utc_now().replace(second=0, microsecond=0)
+    now_ts = app_now().replace(second=0, microsecond=0)
     total_actual_hours, total_actual_seconds = await _recalculate_operator_job_work_totals(
         db=db,
         fab_id=fab_id,

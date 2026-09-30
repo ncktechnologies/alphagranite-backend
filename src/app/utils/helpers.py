@@ -1,4 +1,6 @@
-from datetime import datetime, timezone
+import os
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, Optional, Callable, TypeVar, Awaitable
 from fastapi import HTTPException
 from pydantic import ValidationError
@@ -7,6 +9,11 @@ import logging
 T = TypeVar('T')
 
 logger = logging.getLogger(__name__)
+
+# Every timestamp in the system (DB storage, business logic, API output) is
+# America/Chicago wall-clock time.
+APP_TIMEZONE_NAME = os.getenv("APP_TIMEZONE", "America/Chicago")
+APP_TZ = ZoneInfo(APP_TIMEZONE_NAME)
 
 def success_response(data: Any = None, message: str = "Success") -> Dict[str, Any]:
     """Create standardized success response"""
@@ -49,39 +56,35 @@ async def call_service(
         raise error_response("Internal server error", 500)
 
 def strip_timezone(dt: Optional[datetime]) -> Optional[datetime]:
-    """Normalize a datetime to aware UTC for database storage.
+    """Normalize a datetime to aware America/Chicago for database storage.
 
     Name kept for backwards compatibility; SQLModel now requires aware values.
     """
-    return to_utc(dt)
+    return to_app_tz(dt)
 
-# Add this utility
-def utc_now() -> datetime:
-    """Current UTC time, timezone-aware (SQLModel requires aware datetimes)."""
-    return datetime.now(timezone.utc)
+def app_now() -> datetime:
+    """Current America/Chicago time, timezone-aware (SQLModel requires aware datetimes)."""
+    return datetime.now(APP_TZ)
 
 
-def to_utc(dt: Optional[datetime]) -> Optional[datetime]:
-    """Normalize any datetime to aware UTC; naive input is assumed to be UTC."""
+def app_today() -> date:
+    """Current calendar date in America/Chicago (not the server's local date)."""
+    return app_now().date()
+
+
+def to_app_tz(dt: Optional[datetime]) -> Optional[datetime]:
+    """Normalize any datetime to aware America/Chicago; naive input is assumed to be Chicago time."""
     if dt is None:
         return None
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=APP_TZ)
+    return dt.astimezone(APP_TZ)
 
 def datetime_to_iso(dt: Optional[datetime]) -> Optional[str]:
     """
-    Convert datetime to ISO 8601 format string with UTC timezone.
-    Returns format: 2024-01-15T14:30:00Z
+    Convert datetime to ISO 8601 format string in America/Chicago.
+    Returns format: 2024-01-15T14:30:00-06:00
     """
     if dt is None:
         return None
-    
-    # If naive datetime, assume it's UTC
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    else:
-        # Convert to UTC if not already
-        dt = dt.astimezone(timezone.utc)
-    
-    return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+    return to_app_tz(dt).isoformat(timespec="seconds")

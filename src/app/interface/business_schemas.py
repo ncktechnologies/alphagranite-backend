@@ -4,7 +4,7 @@ from pydantic import AliasChoices, BaseModel, Field, field_validator, model_vali
 from decimal import Decimal
 from typing import List, Optional
 from datetime import datetime
-from src.app.utils.helpers import to_utc
+from src.app.utils.helpers import to_app_tz
 
 
 class FabPlanResponse(BaseModel):
@@ -620,9 +620,9 @@ class DraftingUpdate(BaseModel):
             if v.endswith('Z'):
                 v = v[:-1] + '+00:00'
             dt = datetime.fromisoformat(v)
-            return to_utc(dt)
+            return to_app_tz(dt)
         if isinstance(v, datetime):
-            return to_utc(v)
+            return to_app_tz(v)
         return v
 
 
@@ -1753,9 +1753,9 @@ class CNCDraftingUpdate(BaseModel):
             if v.endswith('Z'):
                 v = v[:-1] + '+00:00'
             dt = datetime.fromisoformat(v)
-            return to_utc(dt)
+            return to_app_tz(dt)
         if isinstance(v, datetime):
-            return to_utc(v)
+            return to_app_tz(v)
         return v
 
 

@@ -30,16 +30,19 @@ RUN pip install --upgrade pip && \
 # Production stage
 FROM python:3.11-slim
 
-# Set environment variables
+# Set environment variables (container clock/logs run on America/Chicago)
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PATH="/opt/venv/bin:$PATH"
+    PATH="/opt/venv/bin:$PATH" \
+    TZ=America/Chicago \
+    APP_TIMEZONE=America/Chicago
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
     libpq-dev \
     curl \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app user
