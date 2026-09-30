@@ -167,6 +167,22 @@ class Ctx:
             CREATE UNIQUE INDEX IF NOT EXISTS uq_unresolved
             ON unresolved_references(kind, raw_value, context)""")
 
+    def sync_id_sequences(self):
+        """Move each serial id sequence up to at least max(id). Rows loaded with
+        explicit ids (seeds, restores) leave sequences behind, so the next INSERT
+        collides with an existing id. Never moves a sequence down."""
+        self.cur.execute(
+            "SELECT table_name, column_name,"
+            " pg_get_serial_sequence(format('%I', table_name), column_name)"
+            " FROM information_schema.columns"
+            " WHERE table_schema='public' AND column_default LIKE 'nextval(%'")
+        for tbl, col, seq in self.cur.fetchall():
+            if not seq:
+                continue
+            self.cur.execute(
+                f'SELECT setval(%s, m) FROM (SELECT max("{col}") AS m FROM "{tbl}") x'
+                f" WHERE m > (SELECT last_value FROM {seq})", (seq,))
+
     def ensure_mig_user(self):
         self.cur.execute("SELECT id FROM users WHERE username=%s", (MIG_USER,))
         row = self.cur.fetchone()
@@ -212,6 +228,7 @@ class Ctx:
             if self.counts[table]["errored"] <= 5:
                 print(f"REJECT {table} {key}: {reason}")
             return
+        self.cur.execute("SAVEPOINT reject_row")
         try:
             self.cur.execute(
                 "INSERT INTO migration_rejects(source_table, source_key, reason, payload)"
@@ -221,8 +238,18 @@ class Ctx:
                 (table, str(key), reason,
                  json.dumps(payload or {}, default=str),
                  table, str(key), reason))
+            self.cur.execute("RELEASE SAVEPOINT reject_row")
         except Exception:
-            self.conn.rollback()
+            self.cur.execute("ROLLBACK TO SAVEPOINT reject_row")
+
+    def undo_row(self):
+        """Roll back only the current row (to SAVEPOINT fab_row), then drop cached
+        ids the row may have created, so later rows don't reference them."""
+        self.cur.execute("ROLLBACK TO SAVEPOINT fab_row")
+        self._refcaches = {}
+        self.accounts, self.jobs, self.fabs = {}, {}, {}
+        self.stations, self.plan_sections = {}, {}
+        self.load_caches()
 
     def backlog(self, kind, raw, context):
         if not raw:
@@ -333,6 +360,25 @@ class Ctx:
         self.stations[key] = _id
         self.counts["work_stations"]["inserted"] += 1
         self.backlog("workstation", name, context)
+        return _id
+
+    def planning_section(self, name, context=""):
+        key = name.strip().upper()
+        if key in self.plan_sections:
+            return self.plan_sections[key]
+        self.cur.execute("SELECT id FROM planning_sections WHERE upper(plan_name)=%s", (key,))
+        row = self.cur.fetchone()
+        if row:
+            self.plan_sections[key] = row[0]
+            return row[0]
+        self.cur.execute(
+            "INSERT INTO planning_sections(plan_name, is_active, status_id, created_at, created_by)"
+            " VALUES(%s, true, %s, %s, %s) RETURNING id",
+            (key, ACTIVE, self.now, self.mig_user))
+        _id = self.cur.fetchone()[0]
+        self.plan_sections[key] = _id
+        self.counts["planning_sections"]["inserted"] += 1
+        self.backlog("planning_section", key, context)
         return _id
 
     def account(self, raw, job_number=""):
@@ -503,6 +549,9 @@ def migrate(ctx, data):
         ctx.jobs[jn] = job_id
 
     for r in fab_rows:
+        # A failing row only undoes itself; a full rollback would also undo the
+        # migration user, jobs and every earlier FAB.
+        ctx.cur.execute("SAVEPOINT fab_row")
         try:
             fab_id = parse_int(r.get("fab_id"))
             if not fab_id:
@@ -658,8 +707,10 @@ def migrate(ctx, data):
             if parse_int(r.get("number_pieces")) is None and r.get("number_pieces", "").strip():
                 ctx.backlog("number_pieces", r["number_pieces"], f"fab {fab_id}")
             make_stage_rows(ctx, r, fab_id, created)
+            ctx.cur.execute("RELEASE SAVEPOINT fab_row")
         except Exception as e:
-            ctx.conn.rollback()
+            ctx.undo_row()
+            ctx.complete_fabs.discard(parse_int(r.get("fab_id")))
             ctx.reject("Fab_Status", r.get("fab_id"), f"{type(e).__name__}: {e}", r)
 
 
@@ -837,7 +888,7 @@ def make_stage_rows(ctx, r, fab_id, created):
         # (the app only treats a FAB as install complete when every plan is at 100%).
         pct_i = 100 if complete else parse_int(pct)
         ws_id = resolve_station(ctx, ws, mach, f"fab {fab_id} {ws}")
-        plan_id = ctx.plan_sections.get(PLAN_BY_WS[ws], 7)
+        plan_id = ctx.planning_section(PLAN_BY_WS[ws], f"fab {fab_id} {ws}")
         # Who did the work (clock number), else who was scheduled (name).
         operator = (ctx.employees.by_clock_number(f"shop_cut_plans.user_id ({ws.lower()}_by)", by)
                     or ctx.employees.by_name(
@@ -1211,6 +1262,7 @@ def main():
     conn.autocommit = False
     ctx = Ctx(conn, dry_run=args.dry_run)
     ctx.ensure_helper_tables()
+    ctx.sync_id_sequences()
     ctx.ensure_mig_user()
     ctx.load_caches()
     data = read_csvs(args.input)
