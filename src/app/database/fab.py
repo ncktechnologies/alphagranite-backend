@@ -99,3 +99,5 @@ class Fab(SQLModel, table=True):
     block_drawing_approved: Optional[bool] = Field(default=None, description="Block drawing approval status")
 
     shop_est_completion_date: Optional[datetime] = Field(default=None, description="Estimated completion date for shop")
+    is_migrated: bool = Field(default=False, description="Imported by the legacy data migration, not created in Odyssey")
+    migration_source: Optional[str] = Field(default=None, max_length=50, description="Legacy system the FAB was imported from (e.g. 'caspio')")
