@@ -1,3 +1,7 @@
+# Template for docker-compose.yml, which is NOT tracked: each server/branch keeps
+# its own copy. Copy this file to docker-compose.yml and set the per-environment
+# defaults (APP_ENV_FILE, STATIC_HOST_DIR, BASE_URL), or set them in the env file
+# passed with --env-file. Defaults below are staging's.
 services:
 
   # FastAPI Application
@@ -16,7 +20,7 @@ services:
       - ./static/uploads:/app/static/uploads
       - ./static/defaults:/app/static/defaults
       - ./logs:/app/logs
-      - /var/www/staging/backend/alphagranite-backend/static:/app/static
+      - ${STATIC_HOST_DIR:-/var/www/staging/backend/alphagranite-backend/static}:/app/static
       - ./alembic/versions:/app/alembic/versions
     entrypoint: []
     command: uvicorn src.app.main:app --host 0.0.0.0 --port 8000
@@ -57,7 +61,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./logs:/app/logs
-      - /var/www/staging/backend/alphagranite-backend/static:/app/static
+      - ${STATIC_HOST_DIR:-/var/www/staging/backend/alphagranite-backend/static}:/app/static
     entrypoint: []
     command: celery -A src.app.tasks.celery_app.celery_app worker --loglevel=info --concurrency=2
     healthcheck:
