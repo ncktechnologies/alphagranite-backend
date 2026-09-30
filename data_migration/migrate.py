@@ -8,8 +8,11 @@ Implements mapping_matrix.csv / Caspio_to_Odyssey_mapping.md:
   Phase 1 refs -> Phase 2 core+stages -> Phase 3 history, with reject table,
   unresolved-reference backlog, and reconciliation report. Safe to re-run:
   every entity resolves by natural key and updates in place (zero growth).
-Requires target DB cloned from staging (schema + seeds). Never run against
-production without a backup.
+Requires target DB cloned from staging (schema + seeds) and migrated to alembic
+head (fabs.is_migrated). Never run against production without a backup.
+
+Imported FABs are flagged is_migrated=true / migration_source='caspio'. The
+Caspio "complete" checkbox marks a FAB install complete (see README.md).
 """
 import argparse
 import csv
@@ -18,17 +21,23 @@ import os
 import re
 import sys
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import psycopg2
 import psycopg2.extras
 
-SRC_TZ = ZoneInfo("America/Chicago")
-ACTIVE, COMPLETED = 1, 8  # status.value_id
-MIG_USER = "migration_bot"
+from employees import EmployeeDirectory
 
-BOOL_TRUE = {"yes", "y", "true", "t", "1", "complete", "completed", "done"}
+# Caspio exports are America/Chicago wall-clock, which is also how Odyssey stores
+# timestamps, so parsed values are kept as-is (naive Chicago time).
+SRC_TZ = ZoneInfo("America/Chicago")
+ACTIVE = 1  # status.value_id; install-complete FABs stay Active, as in the app
+MIG_USER = "migration_bot"
+MIGRATION_SOURCE = "caspio"
+
+# Caspio checkboxes export as -1 (checked) / 0 (unchecked).
+BOOL_TRUE = {"yes", "y", "true", "t", "1", "-1", "complete", "completed", "done"}
 BOOL_FALSE = {"no", "n", "false", "f", "0"}
 
 
@@ -90,8 +99,7 @@ def parse_dt(v):
         "%Y-%m-%dT%H:%M:%S",
     ):
         try:
-            dt = datetime.strptime(s, fmt)
-            return dt.replace(tzinfo=SRC_TZ).astimezone(timezone.utc).replace(tzinfo=None)
+            return datetime.strptime(s, fmt)
         except ValueError:
             continue
     return None
@@ -131,7 +139,7 @@ class Ctx:
         self.conn = conn
         self.cur = conn.cursor()
         self.dry_run = dry_run
-        self.now = datetime.now(timezone.utc).replace(tzinfo=None)
+        self.now = datetime.now(SRC_TZ).replace(tzinfo=None)
         self.counts = defaultdict(lambda: defaultdict(int))  # entity -> op -> n
         self.mig_user = None
         self.accounts = {}      # lower name -> id
@@ -139,6 +147,9 @@ class Ctx:
         self.fabs = {}          # fab_id -> job_id
         self.stations = {}      # lower name -> id
         self.plan_sections = {}  # UPPER name -> id
+        self.complete_fabs = set()  # fab ids with the Caspio "complete" box checked
+        self.employees = None       # EmployeeDirectory (Caspio person -> users.id)
+        self.fab_sales_ids = {}     # fab id -> revision_info.SalesPerson (sales list id)
 
     # -- infra ----------------------------------------------------------
     def ensure_helper_tables(self):
@@ -189,6 +200,11 @@ class Ctx:
         self.cur.execute("SELECT id, plan_name FROM planning_sections")
         for _id, name in self.cur.fetchall():
             self.plan_sections[(name or "").strip().upper()] = _id
+
+    def load_employees(self, data):
+        self.cur.execute("SELECT id, first_name, last_name, hcp_employee_id FROM users"
+                         " WHERE username <> %s", (MIG_USER,))
+        self.employees = EmployeeDirectory(data, self.cur.fetchall())
 
     def reject(self, table, key, reason, payload=None):
         self.counts[table]["errored"] += 1
@@ -368,6 +384,70 @@ def resolve_station(ctx, activity, machine, context):
     return ctx.workstation("UNKNOWN", context)
 
 
+# Odyssey workflow order (src/app/routers/fabs.py FAB_STAGES) for the stages a
+# Caspio FAB can be sitting in.
+STAGE_ORDER = ["templating", "pre_draft_review", "drafting", "sales_ct",
+               "slab_smith_request", "final_programming", "cut_list",
+               "install_scheduling", "install_completion"]
+
+
+def derive_stage(r, complete):
+    """(current_stage, next_stage) in Odyssey terms from the Caspio flags."""
+    if complete:
+        return "install_completion", None
+    done = lambda col: bool(parse_bool(r.get(col)))
+    has = lambda col: bool((r.get(col) or "").strip())
+    drafting_needed = needed(r.get("draft_not_needed"))
+    stage_needed = {
+        "templating": needed(r.get("template_not_needed")),
+        "pre_draft_review": drafting_needed,
+        "drafting": drafting_needed,
+        "sales_ct": needed(r.get("sct_not_needed")),
+        "slab_smith_request": (needed(r.get("slabsmith_cust_not_needed"))
+                               or needed(r.get("slabsmith_ag_not_needed"))),
+        "final_programming": needed(r.get("final_not_needed")),
+        "cut_list": True, "install_scheduling": True, "install_completion": True}
+    stage_done = {
+        "templating": done("template_completed"),
+        "pre_draft_review": done("pre_draft_review_completed"),
+        "drafting": done("draft_completed"),
+        "sales_ct": done("sct_completed"),
+        "slab_smith_request": done("slabsmith_complete"),
+        "final_programming": done("final_completed"),
+        # Shop work finished -> waiting to be scheduled for install.
+        "cut_list": has("cut_date_completed") or has("install_date"),
+        # Install date set -> scheduled, waiting for completion.
+        "install_scheduling": has("install_date"),
+        "install_completion": False}
+    current = next(st for st in STAGE_ORDER if stage_needed[st] and not stage_done[st])
+    later = STAGE_ORDER[STAGE_ORDER.index(current) + 1:]
+    return current, next((st for st in later if stage_needed[st]), None)
+
+
+def created_date(r):
+    """Caspio creation_date, else the earliest date recorded on the row (788 rows
+    have no creation_date), else None."""
+    created = parse_dt(r.get("creation_date"))
+    if created:
+        return created
+    dates = [d for d in (parse_dt(v) for k, v in r.items()
+                         if ("date" in k.lower() or k.lower().endswith("_time")) and v)
+             if d]
+    return min(dates) if dates else None
+
+
+def install_dates(r):
+    """(install date, install completion date) from Caspio.
+
+    Caspio's completion_date is when the SHOP finished the FAB (same day as QC
+    completion in ~92% of rows, usually weeks before install), so install_date is
+    the install date; completion_date is only a fallback when it is missing.
+    """
+    inst_d = parse_dt(r.get("install_date"))
+    shop_done = parse_dt(r.get("completion_date"))
+    return inst_d, inst_d or shop_done
+
+
 def migrate(ctx, data):
     tables = data
     fab_rows = tables.get("Fab_Status", [])
@@ -388,15 +468,11 @@ def migrate(ctx, data):
     for r in tables.get("Fab_Types", []):
         if r.get("fab_type", "").strip():
             ctx.fab_type(r["fab_type"])
-    for emp_file, cols in (
-            ("Active_Sales_Employees", ("sales_employee_name",)),
-            ("Employees_Shop", ("Name",)),
-            ("Employees_Template", ("template_employee_name",)),
-            ("Alpha_Employees", ("FirstName", "LastName"))):
-        for r in tables.get(emp_file, []):
-            label = " ".join(r.get(c, "") for c in cols).strip()
-            if label:
-                ctx.backlog("user", label, f"employee file {emp_file} (deferred)")
+    # Salesperson per FAB, from revision_info (Active_Sales_Employees ids).
+    for rev in tables.get("revision_info", []):
+        fab_id, sales_id = parse_int(rev.get("FabID")), (rev.get("SalesPerson") or "").strip()
+        if fab_id and sales_id:
+            ctx.fab_sales_ids.setdefault(fab_id, sales_id)
 
     # ---- jobs + fabs ----------------------------------------------------
     jobs_agg = defaultdict(list)
@@ -412,12 +488,10 @@ def migrate(ctx, data):
         acct_id = ctx.account(first.get("account"), jn)
         sqft = sum(parse_float(r.get("total_sqft")) or 0 for r in rows)
         rev = sum(parse_float(r.get("revenue")) or 0 for r in rows)
-        starts = [parse_dt(r.get("creation_date")) for r in rows]
+        starts = [created_date(r) for r in rows]
         starts = [d for d in starts if d]
         name = next((r.get("job_name", "").strip() for r in rows
                      if r.get("job_name", "").strip()), f"JOB-{jn}")
-        sales_raw = next((r.get("installer", "") for r in rows), "")
-        ctx.person(sales_raw, f"job {jn} sales")
         job_id = ctx.upsert_by_key("business_jobs", "business_jobs", ["job_number"], {
             "job_number": jn, "name": name[:255], "account_id": acct_id,
             "description": first.get("areas", "").strip() or None,
@@ -428,7 +502,6 @@ def migrate(ctx, data):
             "need_to_invoice": False})
         ctx.jobs[jn] = job_id
 
-    STAGES = ["template", "draft", "slabsmith", "sct", "final", "shop", "install"]
     for r in fab_rows:
         try:
             fab_id = parse_int(r.get("fab_id"))
@@ -458,38 +531,24 @@ def migrate(ctx, data):
             revised = bool(parse_bool(r.get("been_revised"))
                            or parse_bool(r.get("being_revised"))
                            or r.get("revision_completion_date", "").strip())
-            created = parse_dt(r.get("creation_date")) or ctx.now
-            ctx.person(r.get("installer"), f"fab {fab_id} sales_person")
+            created = created_date(r) or ctx.now
             notes = {}
             for col in ("template_date_completed_2", "draft_date_completed_2",
                         "estimated_completion_date2", "first_est_completion_date",
-                        "fab_percent", "install_date2"):
+                        "fab_percent", "install_date2", "completion_date"):
                 if r.get(col, "").strip():
                     notes[col] = r[col].strip()
             for col in ("program_clock_complete", "draft_clock_complete",
                         "slabsmith_clock_complete"):
                 if parse_bool(r.get(col)) is not None:
                     notes[col] = parse_bool(r.get(col))
-            # current/next stage derivation
-            done_flags = {
-                "template": parse_bool(r.get("template_completed")),
-                "draft": parse_bool(r.get("draft_completed")),
-                "slabsmith": parse_bool(r.get("slabsmith_complete")),
-                "sct": parse_bool(r.get("sct_completed")),
-                "final": parse_bool(r.get("final_completed")),
-                "shop": bool(r.get("cut_date_completed", "").strip()),
-                "install": bool(r.get("completion_date", "").strip()
-                                or r.get("install_date", "").strip())}
+            cur_stage, nxt = derive_stage(r, complete)
             if complete:
-                cur_stage, nxt = "completed", None
-            else:
-                last = next((s for s in reversed(STAGES) if done_flags.get(s)), None)
-                cur_stage = last or "template"
-                nxt = STAGES[STAGES.index(cur_stage) + 1] if cur_stage in STAGES[:-1] else None
+                ctx.complete_fabs.add(fab_id)
             fab_data = {
                 "id": fab_id, "job_id": ctx.jobs[jn],
                 "fab_type": ctx.fab_type(r.get("fab_type") or "STANDARD"),
-                "sales_person_id": ctx.mig_user,
+                "sales_person_id": sales_person(ctx, r, fab_id),
                 "stone_type_id": stone_t, "stone_color_id": stone_c,
                 "stone_thickness_id": stone_th, "edge_id": edge_id,
                 "input_area": r.get("areas", "").strip() or None,
@@ -525,10 +584,11 @@ def migrate(ctx, data):
                 "edging_linft": parse_float(r.get("edging_linft")),
                 "cnc_linft": parse_float(r.get("cnc_linft")),
                 "miter_linft": parse_float(r.get("miter_linft")),
-                "installation_date": parse_dt(r.get("completion_date"))
-                                     or parse_dt(r.get("install_date")),
+                "installation_date": (install_dates(r)[1] if complete
+                                      else install_dates(r)[0]),
                 "current_stage": cur_stage, "next_stage": nxt,
-                "status_id": COMPLETED if complete else ACTIVE,
+                "status_id": ACTIVE,
+                "is_migrated": True, "migration_source": MIGRATION_SOURCE,
                 "created_at": created, "created_by": ctx.mig_user,
                 "slabsmith_completed_date": parse_dt(r.get("slabsmith_completion_date")),
                 "sales_ct_completed_date": parse_dt(r.get("sct_date_completed")),
@@ -562,7 +622,8 @@ def migrate(ctx, data):
                     installation_date, current_stage, next_stage, status_id, created_at,
                     created_by, slabsmith_completed_date, sales_ct_completed_date,
                     template_completed_date, predraft_completed_date, draft_completed_date,
-                    revision_completed_date, sct_completed_date, shop_est_completion_date)
+                    revision_completed_date, sct_completed_date, shop_est_completion_date,
+                    is_migrated, migration_source)
                 VALUES(%(id)s, %(job_id)s, %(fab_type)s, %(sales_person_id)s,
                     %(stone_type_id)s, %(stone_color_id)s, %(stone_thickness_id)s,
                     %(edge_id)s, %(input_area)s, %(total_sqft)s,
@@ -582,11 +643,11 @@ def migrate(ctx, data):
                     %(slabsmith_completed_date)s, %(sales_ct_completed_date)s,
                     %(template_completed_date)s, %(predraft_completed_date)s,
                     %(draft_completed_date)s, %(revision_completed_date)s,
-                    %(sct_completed_date)s, %(shop_est_completion_date)s)
-                ON CONFLICT (id) DO UPDATE SET
-                    job_id=EXCLUDED.job_id, total_sqft=EXCLUDED.total_sqft,
+                    %(sct_completed_date)s, %(shop_est_completion_date)s,
+                    %(is_migrated)s, %(migration_source)s)
+                ON CONFLICT (id) DO UPDATE SET {updates},
                     updated_at=%(now)s, updated_by=%(mig)s
-                RETURNING (xmax = 0) AS was_inserted""",
+                RETURNING (xmax = 0) AS was_inserted""".replace("{updates}", FAB_UPDATE_SET),
                 {**fab_data, "now": ctx.now, "mig": ctx.mig_user})
             was_inserted = ctx.cur.fetchone()[0]
             if was_inserted:
@@ -602,25 +663,57 @@ def migrate(ctx, data):
             ctx.reject("Fab_Status", r.get("fab_id"), f"{type(e).__name__}: {e}", r)
 
 
+# Re-runs refresh every imported column so fixes reach FABs imported earlier.
+FAB_UPDATE_SET = ", ".join(f"{c}=EXCLUDED.{c}" for c in (
+    "job_id", "fab_type", "sales_person_id", "stone_type_id", "stone_color_id",
+    "stone_thickness_id", "edge_id", "input_area", "total_sqft", "notes",
+    "cost_of_stone", "template_needed", "drafting_needed", "slab_smith_cust_needed",
+    "slab_smith_ag_needed", "sct_needed", "final_programming_needed",
+    "template_received", "template_review_complete", "draft_completed",
+    "cad_review_complete", "no_of_pieces", "revenue", "gp", "sct_completed", "revised",
+    "shop_date_schedule", "final_programming_complete", "cutlist_complete",
+    "final_programming_completed_date", "slab_smith_used", "fp_not_needed",
+    "wj_time_minutes", "wj_linft", "edging_linft", "cnc_linft", "miter_linft",
+    "installation_date", "current_stage", "next_stage", "status_id", "created_at",
+    "slabsmith_completed_date", "sales_ct_completed_date", "template_completed_date",
+    "predraft_completed_date", "draft_completed_date", "revision_completed_date",
+    "sct_completed_date", "shop_est_completion_date", "is_migrated", "migration_source"))
+
+
 def one_per_fab(ctx, entity, table, fab_id, data, extra_keys=()):
     keys = ["fab_id"] + list(extra_keys)
     return ctx.upsert_by_key(entity, table, keys, {"fab_id": fab_id, **data})
 
 
+def sales_person(ctx, r, fab_id):
+    """FAB salesperson: revision_info.SalesPerson, else the SCT owner (sct_by;
+    its most-used ids are exactly the active salespeople), else migration_bot."""
+    sales_id = ctx.fab_sales_ids.get(fab_id)
+    if sales_id:
+        uid = ctx.employees.by_list_id("fabs.sales_person_id (revision SalesPerson)",
+                                       "sales", sales_id)
+        if uid:
+            return uid
+    return ctx.employees.by_list_id("fabs.sales_person_id (sct_by)", "sales",
+                                    r.get("sct_by")) or ctx.mig_user
+
+
 def make_stage_rows(ctx, r, fab_id, created):
     M, now = ctx.mig_user, ctx.now
+    complete = fab_id in ctx.complete_fabs
     sched = parse_dt(r.get("shop_date_scheduled")) or created
     # templatings / draftings / slab_smiths / sales_cts / final_programmings
     one_per_fab(ctx, "templatings", "templatings", fab_id, {
         "schedule_start_date": parse_dt(r.get("template_date_scheduled")) or created,
         "schedule_due_date": parse_dt(r.get("template_date_scheduled")) or created,
-        "technician_id": M, "actual_start_date": None,
+        "technician_id": ctx.employees.by_list_id(
+            "templatings.technician_id (template_by)", "template", r.get("template_by")) or M,
+        "actual_start_date": None,
         "actual_end_date": parse_dt(r.get("template_date_completed")),
         "is_templating_schedule": True, "rescheduled": False,
         "is_completed": bool(parse_bool(r.get("template_completed"))),
         "status_id": ACTIVE, "created_at": created, "updated_at": now,
         "updated_by": M})
-    ctx.person(r.get("template_by"), f"fab {fab_id} template_by")
     one_per_fab(ctx, "draftings", "draftings", fab_id, {
         "drafter_id": M, "scheduled_start_date": created,
         "scheduled_end_date": created,
@@ -653,10 +746,11 @@ def make_stage_rows(ctx, r, fab_id, created):
         "is_revision_needed": False,
         "is_completed": bool(parse_bool(r.get("sct_completed"))),
         "status_id": ACTIVE, "created_at": created, "updated_at": now,
-        "updated_by": M, "slab_smith_type": "SCT", "drafter_id": M,
+        "updated_by": M, "slab_smith_type": "SCT",
+        "drafter_id": ctx.employees.by_list_id(
+            "sales_cts.drafter_id (sct_by)", "sales", r.get("sct_by")) or M,
         "start_date": created,
         "end_date": parse_dt(r.get("sct_date_completed")) or created})
-    ctx.person(r.get("sct_by"), f"fab {fab_id} sct_by")
     one_per_fab(ctx, "final_programmings", "final_programmings", fab_id, {
         "drafter_id": M, "scheduled_start_date": created,
         "scheduled_end_date": created,
@@ -703,7 +797,6 @@ def make_stage_rows(ctx, r, fab_id, created):
         "status_id": ACTIVE, "created_at": created, "updated_at": now,
         "updated_by": M, "total_sqft": r.get("cut_sqft") or r.get("total_sqft"),
         "installation_date": parse_dt(r.get("install_date"))})
-    ctx.person(r.get("cut_by"), f"fab {fab_id} cut_by")
     if (r.get("cost_of_stone", "").strip() or
             parse_bool(r.get("cost_entered")) is not None):
         one_per_fab(ctx, "cost_of_stones", "cost_of_stones", fab_id, {
@@ -740,17 +833,21 @@ def make_stage_rows(ctx, r, fab_id, created):
         if not any(vals):
             continue
         sched_s, hours, pct, done_d, by, mach, emp = vals
-        pct_i = parse_int(pct)
+        # An install-complete FAB finished all shop work, whatever Caspio's % says
+        # (the app only treats a FAB as install complete when every plan is at 100%).
+        pct_i = 100 if complete else parse_int(pct)
         ws_id = resolve_station(ctx, ws, mach, f"fab {fab_id} {ws}")
         plan_id = ctx.plan_sections.get(PLAN_BY_WS[ws], 7)
-        for person in (by, emp):
-            ctx.person(person, f"fab {fab_id} {ws}")
+        # Who did the work (clock number), else who was scheduled (name).
+        operator = (ctx.employees.by_clock_number(f"shop_cut_plans.user_id ({ws.lower()}_by)", by)
+                    or ctx.employees.by_name(
+                        f"shop_cut_plans.user_id ({ws.lower()}_employee_scheduled)", emp))
         ctx.cur.execute(
             "SELECT id FROM shop_cut_plans WHERE fab_id=%s AND workstation_id=%s",
             (fab_id, ws_id))
         row = ctx.cur.fetchone()
         payload = {"fab_id": fab_id, "workstation_id": ws_id,
-                   "planning_section_id": plan_id, "user_id": M,
+                   "planning_section_id": plan_id, "user_id": operator or M,
                    "sequence": seq[ws],
                    "estimated_hours": parse_float(hours) or 0,
                    "scheduled_start_date": parse_dt(sched_s),
@@ -758,7 +855,7 @@ def make_stage_rows(ctx, r, fab_id, created):
                    "actual_start_date": parse_dt(sched_s),
                    "actual_end_date": parse_dt(done_d),
                    "work_percentage": max(0, min(100, pct_i)) if pct_i is not None else 0,
-                   "notes": f"migrated {ws} by={by} emp={emp}".strip(),
+                   "notes": f"migrated {ws} by={by} emp={emp} caspio_percent={pct}".strip(),
                    "created_at": created, "created_by": M,
                    "updated_at": now, "updated_by": M}
         if row:
@@ -778,7 +875,10 @@ def make_stage_rows(ctx, r, fab_id, created):
                                            "wj_percent", "wj_date_completed"))):
         done_d = parse_dt(r.get("wj_date_completed"))
         one_per_fab(ctx, "wj_schedulings", "wj_schedulings", fab_id, {
-            "technician_id": None,
+            "technician_id": (
+                ctx.employees.by_clock_number("wj_schedulings.technician_id (wj_by)", r.get("wj_by"))
+                or ctx.employees.by_name("wj_schedulings.technician_id (wj_employee_scheduled)",
+                                         r.get("wj_employee_scheduled"))),
             "scheduled_start_date": parse_dt(r.get("wj_date_scheduled")),
             "scheduled_end_date": parse_dt(r.get("wj_date_scheduled")),
             "actual_start_date": parse_dt(r.get("wj_date_scheduled")),
@@ -796,14 +896,13 @@ def make_stage_rows(ctx, r, fab_id, created):
             "status_id": ACTIVE, "created_at": created,
             "updated_at": now, "updated_by": M,
             "total_ln_ft": r.get("wj_linft")})
-        for person in (r.get("wj_by"), r.get("wj_employee_scheduled")):
-            ctx.person(person, f"fab {fab_id} wj")
     # resurface
     if any((r.get(c, "").strip() for c in ("resurface_sqft", "resurface_percent",
                                            "resurface_date_completed"))):
         done_d = parse_dt(r.get("resurface_date_completed"))
         one_per_fab(ctx, "resurface_schedulings", "resurface_schedulings", fab_id, {
-            "technician_id": None,
+            "technician_id": ctx.employees.by_clock_number(
+                "resurface_schedulings.technician_id (resurface_by)", r.get("resurface_by")),
             "scheduled_start_date": sched, "scheduled_end_date": sched,
             "actual_start_date": sched, "actual_end_date": done_d,
             "total_sqft": r.get("resurface_sqft"),
@@ -813,32 +912,42 @@ def make_stage_rows(ctx, r, fab_id, created):
             "updated_at": now, "updated_by": M,
             "notes": json.dumps({"resurface_percent": r["resurface_percent"]})
                      if r.get("resurface_percent", "").strip() else None})
-        ctx.person(r.get("resurface_by"), f"fab {fab_id} resurface")
-    # install
-    if any((r.get(c, "").strip() for c in ("install_date", "install_date2",
-                                           "installer", "install_confirmed",
-                                           "completion_date"))):
-        inst_d = parse_dt(r.get("install_date")) or parse_dt(r.get("completion_date"))
-        comp_d = parse_dt(r.get("completion_date")) or inst_d or now
+    # install: the Caspio "complete" checkbox means the FAB is install complete.
+    inst_d, comp_d = install_dates(r)
+    if complete or inst_d:
         one_per_fab(ctx, "install_schedulings", "install_schedulings", fab_id, {
             "installer_id": None,
-            "scheduled_install_date": inst_d, "scheduled_end_date": inst_d,
-            "actual_install_date": comp_d,
+            "scheduled_install_date": inst_d or comp_d,
+            "scheduled_end_date": inst_d or comp_d,
+            "actual_install_date": comp_d if complete else None,
             "total_sqft": r.get("total_sqft"),
-            "is_completed": bool(comp_d and parse_bool(r.get("complete"))),
+            "is_completed": complete,
             "status_id": ACTIVE, "created_at": created,
             "updated_at": now, "updated_by": M,
             "notes": json.dumps({"migrated_install_notes":
                                   r["install_notes"].strip()})
                  if r.get("install_notes", "").strip() else None})
+        ctx.person(r.get("installer"), f"fab {fab_id} installer")
+    if complete:
         one_per_fab(ctx, "install_completions", "install_completions", fab_id, {
-            "installer_id": M, "install_date": inst_d or created,
-            "completion_date": comp_d,
-            "is_completed": bool(parse_bool(r.get("complete"))),
+            "installer_id": M,
+            "install_date": inst_d or comp_d or created,
+            "completion_date": comp_d,  # left blank if Caspio has no date
+            "is_completed": True,
             "is_confirmed": bool(parse_bool(r.get("install_confirmed"))),
+            "completion_notes": ("Imported from Caspio (install complete)" if inst_d or not comp_d
+                                 else "Imported from Caspio (install complete; no install date,"
+                                      " using shop completion date)"),
             "status_id": ACTIVE, "created_at": created,
             "updated_at": now, "updated_by": M})
-        ctx.person(r.get("installer"), f"fab {fab_id} installer")
+    else:
+        # Not complete in Caspio: leave no completion row, so the app's
+        # POST /install-completion can create it (it refuses if one exists).
+        # Also removes rows an earlier import created for incomplete FABs.
+        ctx.cur.execute(
+            "DELETE FROM install_completions WHERE fab_id=%s AND installer_id=%s"
+            " AND is_completed = false", (fab_id, M))
+        ctx.counts["install_completions"]["deleted"] += ctx.cur.rowcount
     # redo -> revisions
     if any((r.get(c, "").strip() for c in ("redo_reason", "redo_dept",
                                            "redo_person", "redo_cost"))
@@ -878,9 +987,8 @@ def migrate_history(ctx, data):
             or parse_duration_sec(s.get("draft_duration"))
         if start and end and dur is None:
             dur = int((end - start).total_seconds())
-        active = parse_bool(s.get("active_session"))
-        status = ("IN_PROGRESS" if active else
-                  ("COMPLETED" if end else "IN_PROGRESS"))
+        # A session with an end time is finished, even if Caspio still flags it active.
+        status = "COMPLETED" if end else "IN_PROGRESS"
         ctx.cur.execute(
             "SELECT id FROM drafting_sessions WHERE fab_id=%s AND session_start_time=%s",
             (fab_id, start))
@@ -939,8 +1047,7 @@ def migrate_history(ctx, data):
             or parse_duration_sec(s.get("programming_duration"))
         if start and end and dur is None:
             dur = int((end - start).total_seconds())
-        active = parse_bool(s.get("active_session"))
-        status = "IN_PROGRESS" if (active or not end) else "COMPLETED"
+        status = "COMPLETED" if end else "IN_PROGRESS"
         ctx.cur.execute(
             "SELECT id FROM final_programming_sessions WHERE fab_id=%s AND session_start_time=%s",
             (fab_id, start))
@@ -996,7 +1103,8 @@ def migrate_history(ctx, data):
             ctx.backlog("machine", s["cut_machine"], f"shop session fab {fab_id}")
         if s.get("edging_machine", "").strip():
             ctx.backlog("machine", s["edging_machine"], f"shop session fab {fab_id}")
-        ctx.person(s.get("shop_employee"), f"shop session fab {fab_id}")
+        operator = ctx.employees.by_clock_number(
+            "operator_job_timer_sessions.operator_id (shop_employee)", s.get("shop_employee")) or M
         job_id = ctx.fabs[fab_id]
         status = "IN_PROGRESS" if not stop else "COMPLETED"
         ctx.cur.execute(
@@ -1007,8 +1115,8 @@ def migrate_history(ctx, data):
             sid = row[0]
             ctx.cur.execute(
                 "UPDATE operator_job_timer_sessions SET stopped_at=%s, total_work_seconds=%s,"
-                " status=%s, updated_at=%s WHERE id=%s",
-                (stop, dur or 0, status, now, sid))
+                " status=%s, operator_id=%s, updated_at=%s WHERE id=%s",
+                (stop, dur or 0, status, operator, now, sid))
             ctx.counts["operator_job_timer_sessions"]["updated"] += 1
         else:
             ctx.cur.execute(
@@ -1017,7 +1125,7 @@ def migrate_history(ctx, data):
                 " total_work_seconds, total_pause_seconds, created_at, created_by,"
                 " updated_at, updated_by)"
                 " VALUES(%s,%s,%s,%s,%s,%s,%s,%s,0,%s,%s,%s,%s) RETURNING id",
-                (job_id, fab_id, M, ws_id, status, start, stop, dur or 0,
+                (job_id, fab_id, operator, ws_id, status, start, stop, dur or 0,
                  now, M, now, M))
             sid = ctx.cur.fetchone()[0]
             ctx.counts["operator_job_timer_sessions"]["inserted"] += 1
@@ -1026,17 +1134,18 @@ def migrate_history(ctx, data):
             f"measure={s['measure'].strip()} {s['units'].strip()}" if s.get("measure","").strip() else "",
             f"percent={s['percent_complete'].strip()}" if s.get("percent_complete","").strip() else "") if x)
         ctx.cur.execute(
-            "SELECT id FROM operator_job_timer_events WHERE session_id=%s AND action=%s AND event_at=%s",
-            (sid, "MIGRATED", start))
-        if not ctx.cur.fetchone():
+            "UPDATE operator_job_timer_events SET operator_id=%s"
+            " WHERE session_id=%s AND action=%s AND event_at=%s",
+            (operator, sid, "MIGRATED", start))
+        if not ctx.cur.rowcount:
             ctx.cur.execute(
                 "INSERT INTO operator_job_timer_events(session_id, job_id, fab_id,"
                 " operator_id, action, event_at, note)"
                 " VALUES(%s,%s,%s,%s,%s,%s,%s)",
-                (sid, job_id, fab_id, M, "MIGRATED", start, note or None))
+                (sid, job_id, fab_id, operator, "MIGRATED", start, note or None))
             ctx.counts["operator_job_timer_events"]["inserted"] += 1
         pct_i = parse_int(s.get("percent_complete"))
-        if pct_i is not None and ws_id:
+        if pct_i is not None and ws_id and fab_id not in ctx.complete_fabs:
             ctx.cur.execute(
                 "UPDATE shop_cut_plans SET work_percentage=%s, updated_at=%s"
                 " WHERE fab_id=%s AND workstation_id=%s",
@@ -1052,7 +1161,6 @@ def migrate_history(ctx, data):
             rtype = "SHOP"
         created = parse_dt(rev.get("creation_date")) or now
         done_d = parse_dt(rev.get("revision_date_completed"))
-        ctx.person(rev.get("SalesPerson"), f"revision fab {fab_id} sales")
         ctx.person(rev.get("Revisor"), f"revision fab {fab_id} revisor")
         one_per_fab(ctx, "revisions", "revisions", fab_id, {
             "revision_type": rtype, "requested_by": M, "assigned_to": None,
@@ -1088,6 +1196,7 @@ def main():
         help="PostgreSQL URL; defaults to DATABASE_URL when set",
     )
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--employee-report", help="CSV path for Caspio people that could not be linked to a user")
     args = ap.parse_args()
 
     if args.database_url:
@@ -1105,9 +1214,12 @@ def main():
     ctx.ensure_mig_user()
     ctx.load_caches()
     data = read_csvs(args.input)
+    ctx.load_employees(data)
 
     migrate(ctx, data)
     migrate_history(ctx, data)
+    for field, ref, _n in ctx.employees.report_rows():
+        ctx.backlog("employee", ref, field)
 
     if args.dry_run:
         conn.rollback()
@@ -1128,8 +1240,18 @@ def main():
         total_i += i
         total_u += u
         total_e += e
-        print(f"{entity:38s} inserted={i:4d} updated={u:4d} errored={e:4d}")
+        d = ops.get("deleted", 0)
+        print(f"{entity:38s} inserted={i:4d} updated={u:4d} errored={e:4d}"
+              + (f" deleted={d}" if d else ""))
     print(f"{'TOTAL':38s} inserted={total_i:4d} updated={total_u:4d} errored={total_e:4d}")
+    print("\n=== EMPLOYEE LINKING (Caspio person -> users.id; unlinked rows keep migration_bot/NULL) ===")
+    print("\n".join(ctx.employees.report_lines()))
+    if args.employee_report:
+        with open(args.employee_report, "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["target_field", "caspio_reference", "rows"])
+            w.writerows(ctx.employees.report_rows())
+        print(f"Unlinked employee references written to {args.employee_report}")
     if not args.dry_run:
         cur = conn.cursor()
         cur.execute("SELECT count(*) FROM migration_rejects")
@@ -1138,6 +1260,20 @@ def main():
         print("unresolved_references:")
         for kind, n in cur.fetchall():
             print(f"  {kind:20s} {n}")
+        print("\n=== INSTALL COMPLETION (Caspio 'complete' checkbox) ===")
+        print(f"{'Caspio complete FABs':38s} {len(ctx.complete_fabs)}")
+        for label, q in (
+                ("fabs flagged is_migrated", "SELECT count(*) FROM fabs WHERE is_migrated"),
+                ("migrated fabs at install_completion",
+                 "SELECT count(*) FROM fabs WHERE is_migrated AND current_stage='install_completion'"),
+                ("install_completions is_completed",
+                 "SELECT count(*) FROM install_completions ic JOIN fabs f ON f.id=ic.fab_id"
+                 " WHERE f.is_migrated AND ic.is_completed"),
+                ("install_schedulings is_completed",
+                 "SELECT count(*) FROM install_schedulings i JOIN fabs f ON f.id=i.fab_id"
+                 " WHERE f.is_migrated AND i.is_completed")):
+            cur.execute(q)
+            print(f"{label:38s} {cur.fetchone()[0]}")
         print("\n=== TARGET COUNTS ===")
         for t in ("accounts", "business_jobs", "fabs", "templatings", "draftings",
                   "slab_smiths", "sales_cts", "final_programmings", "shop_cut_plans",

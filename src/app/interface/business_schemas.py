@@ -437,6 +437,8 @@ class FabResponse(BaseModel):
     next_stage: Optional[str] = "pre_draft_review"
     is_complete: Optional[bool] = False  # Whether current stage is completed
     stage_data: Optional[dict] = None  # Stage-specific data for current stage
+    is_migrated: bool = False  # Imported by the legacy (Caspio) data migration
+    migration_source: Optional[str] = None
     status_id: int
     created_at: datetime
     created_by: int
