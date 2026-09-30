@@ -21,6 +21,8 @@ services:
     entrypoint: []
     command: uvicorn src.app.main:app --host 0.0.0.0 --port 8000
     environment:
+      - TZ=America/Chicago
+      - APP_TIMEZONE=America/Chicago
       - FILE_UPLOAD_ROOT=/app/static   # root for FileService
       - UPLOAD_DIR=/app/static/jobs    # if your code reads this
       - BASE_URL=${BASE_URL:-https://api.staging.odysseytracker.com}
@@ -34,6 +36,8 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     command: redis-server --appendonly yes
+    environment:
+      - TZ=America/Chicago
     volumes:
       - redis_data:/data
     healthcheck:
@@ -59,6 +63,8 @@ services:
     healthcheck:
       disable: true   # image healthcheck curls the HTTP port, which celery has no
     environment:
+      - TZ=America/Chicago
+      - APP_TIMEZONE=America/Chicago
       - FILE_UPLOAD_ROOT=/app/static
       - UPLOAD_DIR=/app/static/jobs
       - BASE_URL=${BASE_URL:-https://api.staging.odysseytracker.com}
@@ -83,6 +89,8 @@ services:
     healthcheck:
       disable: true   # image healthcheck curls the HTTP port, which celery has no
     environment:
+      - TZ=America/Chicago
+      - APP_TIMEZONE=America/Chicago
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
     depends_on:
       redis:
@@ -90,6 +98,8 @@ services:
 
   nginx:
     image: nginx:alpine
+    environment:
+      - TZ=America/Chicago
     ports:
       - "${NGINX_HTTP_HOST_PORT:-8080}:80"
       - "${NGINX_HTTPS_HOST_PORT:-8443}:443"

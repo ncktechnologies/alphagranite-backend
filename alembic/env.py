@@ -145,6 +145,8 @@ def run_migrations_online() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        # Keep migration-time now()/CURRENT_TIMESTAMP in the app timezone.
+        connect_args={"options": f"-c timezone={os.getenv('APP_TIMEZONE', 'America/Chicago')}"},
     )
 
     with connectable.connect() as connection:

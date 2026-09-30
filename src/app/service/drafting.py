@@ -3,22 +3,22 @@ from typing import Optional, List
 from datetime import datetime, timedelta
 from src.app.service.background import send_email, save_audit_trail, send_notification
 from src.app.interface.generated_schemas import Drafting
-from src.app.utils.helpers import utc_now
+from src.app.utils.helpers import app_now
 
 class DraftingService:
     def __init__(self, db: Session):
         self.db = db
 
     def auto_assign_drafter(self, fab_id: int, drafter_id: int, created_by: int) -> Drafting:
-        due_date = utc_now() + timedelta(days=2)
+        due_date = app_now() + timedelta(days=2)
         drafting = Drafting(
             fab_id=fab_id,
             drafter_id=drafter_id,
-            scheduled_start_date=utc_now(),
+            scheduled_start_date=app_now(),
             scheduled_end_date=due_date,
             status_id=1,
-            created_at=utc_now(),
-            updated_at=utc_now(),
+            created_at=app_now(),
+            updated_at=app_now(),
             updated_by=created_by
         )
         self.db.add(drafting)
@@ -57,7 +57,7 @@ class DraftingService:
         drafting.draft_note = draft_note
         drafting.mentions = ','.join(map(str, mentions))
         drafting.is_redrafting = False
-        drafting.updated_at = utc_now()
+        drafting.updated_at = app_now()
         drafting.updated_by = updated_by
         if is_completed:
             drafting.status_id = 2
@@ -92,7 +92,7 @@ class DraftingService:
             return None
         drafting.is_redrafting = True
         drafting.draft_note = note
-        drafting.updated_at = utc_now()
+        drafting.updated_at = app_now()
         drafting.updated_by = updated_by
         self.db.commit()
         self.db.refresh(drafting)

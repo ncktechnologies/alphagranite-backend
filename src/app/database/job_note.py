@@ -1,7 +1,8 @@
 from datetime import datetime
 from typing import Optional
-from sqlmodel import SQLModel, Field, Column, DateTime
-from src.app.utils.helpers import utc_now
+from sqlmodel import SQLModel, Field, Column
+from sqlmodel.sql.sqltypes import UTCDateTime  # patched in utils/config to store/return America/Chicago
+from src.app.utils.helpers import app_now
 
 
 class JobNote(SQLModel, table=True):
@@ -12,6 +13,6 @@ class JobNote(SQLModel, table=True):
     note: str = Field(index=False)
     created_by: int = Field(foreign_key="users.id", index=True)
     created_at: datetime = Field(
-        default_factory=utc_now,
-        sa_column=Column(DateTime(timezone=False))
+        default_factory=app_now,
+        sa_column=Column(UTCDateTime())
     )

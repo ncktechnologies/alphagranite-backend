@@ -28,7 +28,7 @@ from src.app.interface.generated_schemas import InstallCompletion
 from src.app.service.background import send_email_with_attachments
 from src.app.utils.config import ADMIN_EMAIL
 from src.app.utils.config import SessionLocal
-from src.app.utils.helpers import utc_now
+from src.app.utils.helpers import app_now
 
 logger = logging.getLogger("monthly_status_report")
 
@@ -415,7 +415,7 @@ async def _scheduler_loop() -> None:
     global _last_trigger_key
 
     while True:
-        now = utc_now()
+        now = app_now()
         trigger_key = now.strftime("%Y-%m-%d %H:%M")
 
         if now.day == 1 and now.hour == 0 and now.minute == 0 and trigger_key != _last_trigger_key:

@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -15,6 +15,7 @@ pytest.importorskip("aiosqlite")
 from src.app.routers.shop_cut_plan import _assert_no_shop_plan_conflicts
 from src.app.database.shop_cut_plan import ShopCutPlan
 from src.app.routers.workstation import WorkstationCreate, _serialize_workstation
+from src.app.utils.helpers import APP_TZ
 
 
 def test_workstation_create_defaults_attendance_required_to_false():
@@ -27,7 +28,7 @@ def test_workstation_create_defaults_attendance_required_to_false():
         status_id=payload.status_id,
         planning_section_id=None,
         operator_ids=[],
-        created_at=datetime(2026, 9, 4, 8, 0, tzinfo=timezone.utc),
+        created_at=datetime(2026, 9, 4, 8, 0, tzinfo=APP_TZ),
         created_by=1,
         updated_at=None,
         updated_by=None,
@@ -129,7 +130,7 @@ async def test_overlapping_plan_fails_when_attendance_is_required(
                 fab_id=2,
                 workstation_id=20,
                 operator_id=7,
-                scheduled_start=datetime(2026, 9, 4, 10, 0, tzinfo=timezone.utc),
+                scheduled_start=datetime(2026, 9, 4, 10, 0, tzinfo=APP_TZ),
                 estimated_hours=1,
             )
 
@@ -153,7 +154,7 @@ async def test_overlapping_plan_succeeds_when_attendance_is_not_required():
             fab_id=2,
             workstation_id=20,
             operator_id=7,
-            scheduled_start=datetime(2026, 9, 4, 10, 0, tzinfo=timezone.utc),
+            scheduled_start=datetime(2026, 9, 4, 10, 0, tzinfo=APP_TZ),
             estimated_hours=1,
         )
     await engine.dispose()
@@ -170,7 +171,7 @@ async def test_overlapping_plan_fails_on_same_workstation_for_different_operator
                 fab_id=2,
                 workstation_id=10,
                 operator_id=8,
-                scheduled_start=datetime(2026, 9, 4, 10, 0, tzinfo=timezone.utc),
+                scheduled_start=datetime(2026, 9, 4, 10, 0, tzinfo=APP_TZ),
                 estimated_hours=1,
             )
     await engine.dispose()
@@ -194,7 +195,7 @@ async def test_overlapping_plan_succeeds_on_different_workstation():
             fab_id=2,
             workstation_id=20,
             operator_id=8,
-            scheduled_start=datetime(2026, 9, 4, 10, 0, tzinfo=timezone.utc),
+            scheduled_start=datetime(2026, 9, 4, 10, 0, tzinfo=APP_TZ),
             estimated_hours=1,
         )
     await engine.dispose()
@@ -210,7 +211,7 @@ async def test_adjacent_plan_succeeds_on_same_workstation():
             fab_id=2,
             workstation_id=10,
             operator_id=8,
-            scheduled_start=datetime(2026, 9, 4, 11, 0, tzinfo=timezone.utc),
+            scheduled_start=datetime(2026, 9, 4, 11, 0, tzinfo=APP_TZ),
             estimated_hours=1,
         )
     await engine.dispose()
@@ -228,10 +229,10 @@ async def test_overlapping_pending_stages_fail_on_same_workstation():
                 user_id=8,
                 sequence=1,
                 estimated_hours=2,
-                scheduled_start_date=datetime(2026, 9, 4, 9, 0, tzinfo=timezone.utc),
-                scheduled_end_date=datetime(2026, 9, 4, 11, 0, tzinfo=timezone.utc),
+                scheduled_start_date=datetime(2026, 9, 4, 9, 0, tzinfo=APP_TZ),
+                scheduled_end_date=datetime(2026, 9, 4, 11, 0, tzinfo=APP_TZ),
                 work_percentage=0,
-                created_at=datetime(2026, 9, 4, 8, 0, tzinfo=timezone.utc),
+                created_at=datetime(2026, 9, 4, 8, 0, tzinfo=APP_TZ),
                 created_by=1,
             )
         )
@@ -243,7 +244,7 @@ async def test_overlapping_pending_stages_fail_on_same_workstation():
                 fab_id=2,
                 workstation_id=20,
                 operator_id=9,
-                scheduled_start=datetime(2026, 9, 4, 10, 0, tzinfo=timezone.utc),
+                scheduled_start=datetime(2026, 9, 4, 10, 0, tzinfo=APP_TZ),
                 estimated_hours=1,
             )
 
@@ -262,7 +263,7 @@ async def test_non_overlapping_plan_succeeds_when_new_workstation_requires_atten
             fab_id=2,
             workstation_id=20,
             operator_id=7,
-            scheduled_start=datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc),
+            scheduled_start=datetime(2026, 9, 4, 12, 0, tzinfo=APP_TZ),
             estimated_hours=1,
         )
     await engine.dispose()

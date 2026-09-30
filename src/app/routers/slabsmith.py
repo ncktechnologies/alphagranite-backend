@@ -10,7 +10,7 @@ from src.app.database.user import User
 from src.app.interface.business_schemas import SlabSmithSessionUpdate
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.utils.timer_guards import assert_no_active_timer_session
-from src.app.utils.helpers import utc_now, to_utc
+from src.app.utils.helpers import app_now, to_app_tz
 
 router = APIRouter(
     prefix="/slabsmith",
@@ -39,7 +39,7 @@ async def manage_slabsmith_session(
     
     action = session_data.action.lower()
     note_value = (session_data.note or "").strip() or None
-    now = utc_now()
+    now = app_now()
 
     active_session_result = await db.execute(
         select(SlabSmithSession)
@@ -287,13 +287,13 @@ async def get_slabsmith_session_status(
             break
     
     # Calculate current duration
-    current_time = utc_now()
-    session_start = to_utc(session.session_start_time)
+    current_time = app_now()
+    session_start = to_app_tz(session.session_start_time)
     if session.status == "active":
         total_seconds = int((current_time - session_start).total_seconds()) - session.total_pause_duration
         duration_minutes = max(total_seconds, 0) / 60
     else:  # paused
-        pause_anchor = to_utc(session.current_pause_start_time) or current_time
+        pause_anchor = to_app_tz(session.current_pause_start_time) or current_time
         total_seconds = int((pause_anchor - session_start).total_seconds()) - session.total_pause_duration
         duration_minutes = max(total_seconds, 0) / 60
     
@@ -371,7 +371,7 @@ async def get_slabsmith_session_history(
             }
         )
 
-    now = utc_now()
+    now = app_now()
     session_rows: list[dict] = []
     for session in sessions:
         duration_seconds = int(session.total_time_spent or 0)

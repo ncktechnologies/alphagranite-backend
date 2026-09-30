@@ -24,8 +24,8 @@ sys.path.insert(0, os.path.join(project_root, "src"))
 # Load env vars
 load_dotenv()
 
-# Import utc_now from helpers
-from src.app.utils.helpers import utc_now
+# Import app_now from helpers
+from src.app.utils.helpers import app_now
 
 # Import models (some modules only register mappers on import)
 # Import order can matter; import dependent modules early to register mappers.
@@ -123,8 +123,8 @@ async def _create_superuser_async():
                 department=1,
                 status=1,
                 is_super_admin=True,
-                created_at=utc_now(),
-                updated_at=utc_now(),
+                created_at=app_now(),
+                updated_at=app_now(),
                 role_id=None,
             )
             db.add(user)

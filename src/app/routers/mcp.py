@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 import logging
 from typing import Any
 
@@ -37,7 +37,7 @@ from src.app.service.ai_provider import (
     maybe_generate_sql,
     maybe_plan_tool_with_llm,
 )
-from src.app.utils.helpers import error_response, success_response
+from src.app.utils.helpers import error_response, success_response, app_now
 from src.app.utils.permissions import PermissionChecker
 
 
@@ -130,7 +130,7 @@ async def run_mcp_tool(
         {
             "tool": tool_definition.name,
             "description": tool_definition.description,
-            "executed_at": datetime.now(timezone.utc).isoformat(),
+            "executed_at": app_now().isoformat(),
             "params": cleaned_params,
             "result": result,
         },

@@ -10,7 +10,7 @@ from src.app.database.job import (
 )
 from src.app.database import fab as fab_models
 from src.app.database.user import User
-from src.app.utils.helpers import utc_now
+from src.app.utils.helpers import app_now
 
 T = TypeVar('T')
 
@@ -166,7 +166,7 @@ class JobService:
             **job_data,
             company_id=user.company_id,
             created_by=user.id,
-            created_at=utc_now()
+            created_at=app_now()
         )
         
         self.db.add(job)
@@ -249,7 +249,7 @@ class JobService:
         for field, value in update_data.items():
             setattr(job, field, value)
             
-        job.updated_at = utc_now()
+        job.updated_at = app_now()
         self.db.commit()
         self.db.refresh(job)
         
@@ -305,7 +305,7 @@ class JobService:
             steps=fab_data["steps"],
             status="Draft",
             created_by=created_by,
-            created_at=utc_now()
+            created_at=app_now()
         )
         
         self.db.add(fab)
@@ -342,7 +342,7 @@ class JobService:
         for key, value in update_data.items():
             setattr(fab, key, value)
             
-        fab.updated_at = utc_now()
+        fab.updated_at = app_now()
         self.db.commit()
         self.db.refresh(fab)
         return fab
@@ -367,7 +367,7 @@ class JobService:
             )
             
         fab.status = status
-        fab.updated_at = utc_now()
+        fab.updated_at = app_now()
         self.db.commit()
         self.db.refresh(fab)
         return fab
@@ -384,7 +384,7 @@ class JobService:
                 Job.status == JobStatus.PUBLISHED,
                 or_(
                     Job.application_deadline.is_(None),
-                    Job.application_deadline >= utc_now()
+                    Job.application_deadline >= app_now()
                 )
             )
         ).first()
@@ -415,7 +415,7 @@ class JobService:
             job_id=job_id,
             applicant_id=user.id,
             status=ApplicationStatus.APPLIED,
-            applied_at=utc_now()
+            applied_at=app_now()
         )
         
         self.db.add(application)
@@ -490,7 +490,7 @@ class JobService:
         if notes is not None:
             application.notes = notes
             
-        application.updated_at = utc_now()
+        application.updated_at = app_now()
         self.db.commit()
         self.db.refresh(application)
         

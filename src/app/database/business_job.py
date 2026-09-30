@@ -4,7 +4,8 @@ This is separate from recruitment jobs in job.py
 """
 from datetime import datetime, date
 from typing import Optional, List, TYPE_CHECKING
-from sqlmodel import SQLModel, Field, Column, Integer, String, Text, DateTime, Date, Numeric, func, Relationship
+from sqlmodel import SQLModel, Field, Column, Integer, String, Text, Date, Numeric, func, Relationship
+from sqlmodel.sql.sqltypes import UTCDateTime  # patched in utils/config to store/return America/Chicago
 from decimal import Decimal
 
 
@@ -28,11 +29,11 @@ class BusinessJobBase(SQLModel):
         foreign_key="users.id"
     )
     created_at: datetime = Field(
-        sa_column=Column(DateTime(timezone=False), server_default=func.now())
+        sa_column=Column(UTCDateTime(), server_default=func.now())
     )
     updated_at: Optional[datetime] = Field(
         default=None,
-        sa_column=Column(DateTime(timezone=False), onupdate=func.now()),
+        sa_column=Column(UTCDateTime(), onupdate=func.now()),
     )
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
     need_to_invoice: bool = Field(default=False)

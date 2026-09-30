@@ -38,7 +38,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.interface.response_wrappers import SuccessResponse, error_response, success_response
 from src.app.middleware.jwt_auth import get_current_user
-from src.app.utils.helpers import utc_now, to_utc
+from src.app.utils.helpers import app_now, to_app_tz, app_today
 
 
 
@@ -372,7 +372,7 @@ def _compute_fab_progress_fields(plans: List[dict]) -> tuple[Optional[str], floa
         scheduled_end = p.get("scheduled_end_date")
         if scheduled_end:
             try:
-                candidate_end = scheduled_end if isinstance(scheduled_end, datetime) else to_utc(datetime.fromisoformat(str(scheduled_end)))
+                candidate_end = scheduled_end if isinstance(scheduled_end, datetime) else to_app_tz(datetime.fromisoformat(str(scheduled_end)))
             except Exception:
                 candidate_end = None
         if candidate_end is None:
@@ -380,7 +380,7 @@ def _compute_fab_progress_fields(plans: List[dict]) -> tuple[Optional[str], floa
             estimated_hours = p.get("estimated_hours")
             if scheduled_start:
                 try:
-                    start_dt = to_utc(datetime.fromisoformat(scheduled_start))
+                    start_dt = to_app_tz(datetime.fromisoformat(scheduled_start))
                     if estimated_hours is not None:
                         candidate_end = start_dt + timedelta(hours=float(estimated_hours))
                     else:
@@ -391,7 +391,7 @@ def _compute_fab_progress_fields(plans: List[dict]) -> tuple[Optional[str], floa
         # fallback to actual_end_date if needed
         if candidate_end is None and p.get("actual_end_date"):
             try:
-                candidate_end = to_utc(datetime.fromisoformat(p["actual_end_date"]))
+                candidate_end = to_app_tz(datetime.fromisoformat(p["actual_end_date"]))
             except Exception:
                 candidate_end = None
 
@@ -420,7 +420,7 @@ def _coalesce_shop_est_completion_date(
                 candidate_end = (
                     scheduled_end
                     if isinstance(scheduled_end, datetime)
-                    else to_utc(datetime.fromisoformat(str(scheduled_end)))
+                    else to_app_tz(datetime.fromisoformat(str(scheduled_end)))
                 )
             except Exception:
                 candidate_end = None
@@ -432,7 +432,7 @@ def _coalesce_shop_est_completion_date(
                 start_dt = (
                     scheduled_start
                     if isinstance(scheduled_start, datetime)
-                    else to_utc(datetime.fromisoformat(str(scheduled_start)))
+                    else to_app_tz(datetime.fromisoformat(str(scheduled_start)))
                 )
             except Exception:
                 continue
@@ -569,7 +569,7 @@ async def _transition_completed_cutlist_fabs_to_shop(
 
         fab.current_stage = "shop"
         fab.next_stage = None
-        fab.updated_at = utc_now()
+        fab.updated_at = app_now()
         fab.updated_by = updated_by
         updated = True
 
@@ -650,7 +650,7 @@ def _installer_install_scheduling_filter(user_id: int, date_filter: Optional[str
     ]
 
     scheduled_date = sa.cast(InstallScheduling.scheduled_install_date, sa.Date)
-    today = date.today()
+    today = app_today()
     if date_filter == "today":
         conditions.append(scheduled_date == today)
     elif date_filter == "next_day":
@@ -1057,7 +1057,7 @@ async def create_fab(
         next_stage=next_stage,
         status_id=1,
         created_by=current_user.id,
-        created_at=utc_now()
+        created_at=app_now()
     )
     
     db.add(fab)
@@ -2030,7 +2030,7 @@ async def get_fabs_with_shop_est_completion(
             ecd = f.get("estimated_completion_date")
             if ecd:
                 try:
-                    dt = to_utc(datetime.fromisoformat(ecd))
+                    dt = to_app_tz(datetime.fromisoformat(ecd))
                     month_key = dt.strftime("%Y-%m")
                     month_label = dt.strftime("%B %Y")   # e.g. "April 2026"
                     day_key = f"{dt.month}/{dt.day}/{dt.year}"  # e.g. "4/10/2026"
@@ -2599,7 +2599,7 @@ async def update_fab(
         # New drafter assigned
         fab.drafter_id = fab_data.drafter_id
         fab.drafter_assigned_by = current_user.id
-        fab.drafter_assigned_at = utc_now()
+        fab.drafter_assigned_at = app_now()
         fab.drafting_needed = True  # Set drafting_needed to True when drafter assigned
     
     for field, value in update_data.items():
@@ -2617,7 +2617,7 @@ async def update_fab(
             slab_smith_cust_needed=getattr(fab, "slab_smith_cust_needed", None),
         )
     
-    fab.updated_at = utc_now()
+    fab.updated_at = app_now()
     fab.updated_by = current_user.id
     
     # Create FabNotes entry if notes provided
@@ -2627,7 +2627,7 @@ async def update_fab(
             stage=note_stage,
             note=note_text,
             created_by=current_user.id,
-            created_at=utc_now()
+            created_at=app_now()
         )
         db.add(fab_note)
     
@@ -2654,7 +2654,7 @@ async def delete_fab(
     
     # Soft delete by setting status to deleted (assuming status_id 3 is deleted)
     fab.status_id = 3  # Deleted status
-    fab.updated_at = utc_now()
+    fab.updated_at = app_now()
     fab.updated_by = current_user.id
     
     await db.commit()
@@ -3732,7 +3732,7 @@ async def update_fab_stage(
         slab_smith_ag_needed=fab.slab_smith_ag_needed,
         slab_smith_cust_needed=getattr(fab, "slab_smith_cust_needed", None),
     )
-    fab.updated_at = utc_now()
+    fab.updated_at = app_now()
     fab.updated_by = current_user.id
     
     await db.commit()
@@ -3804,7 +3804,7 @@ async def _apply_templating_filters(
 
 def _apply_date_filter(query, date_filter: str):
     """Apply predefined date filters to a query."""
-    today = date.today()
+    today = app_today()
     
     if date_filter == "today":
         return query.where(Templating.schedule_start_date == today)
@@ -4052,7 +4052,7 @@ def _apply_stage_specific_date_filter(
     # Apply predefined date filter if provided
     if date_filter and date_field is not None:
         normalized_filter = date_filter.strip().lower()
-        today = date.today()
+        today = app_today()
 
         if normalized_filter == "today":
             if use_install_scheduling_date:
@@ -4158,7 +4158,7 @@ def _apply_date_field_filter(
 
     if date_filter:
         normalized_filter = date_filter.strip().lower()
-        today = date.today()
+        today = app_today()
 
         if normalized_filter == "today":
             query = query.where(date_field_cast == today)
@@ -6094,7 +6094,7 @@ async def update_fab_cost_of_stone(
         revenue_value = 0.0
     fab.gp = round(revenue_value - cost_value, 2)
 
-    fab.updated_at = utc_now()
+    fab.updated_at = app_now()
     fab.updated_by = current_user.id
 
     await db.commit()

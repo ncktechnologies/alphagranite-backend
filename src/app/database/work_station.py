@@ -3,7 +3,7 @@ from typing import Optional, List
 from sqlmodel import SQLModel, Field
 from sqlalchemy import Column
 from sqlalchemy.dialects.postgresql import JSONB
-from src.app.utils.helpers import utc_now
+from src.app.utils.helpers import app_now
 
 class WorkStation(SQLModel, table=True, extend_existing=True):
     __tablename__ = "work_stations"
@@ -15,7 +15,7 @@ class WorkStation(SQLModel, table=True, extend_existing=True):
     status_id: int = Field(foreign_key="status.value_id")
     planning_section_id: Optional[int] = Field(default=None, foreign_key="planning_sections.id")
     operator_ids: Optional[List[int]] = Field(default=None, sa_column=Column(JSONB))
-    created_at: datetime = Field(default_factory=utc_now)
+    created_at: datetime = Field(default_factory=app_now)
     created_by: int = Field(foreign_key="users.id")
     updated_at: Optional[datetime] = None
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")

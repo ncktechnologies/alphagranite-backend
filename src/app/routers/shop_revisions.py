@@ -27,7 +27,7 @@ from src.app.middleware.jwt_auth import get_current_user
 from src.app.service.background import send_notification
 from src.app.service.file import FileService
 from src.app.utils.config import SUPPORT_EMAIL
-from src.app.utils.helpers import error_response, success_response, utc_now
+from src.app.utils.helpers import error_response, success_response, app_now
 
 
 router = APIRouter(
@@ -138,7 +138,7 @@ async def create_shop_revision(
         if not assigned_to_user:
             raise error_response("Assigned user not found", 404)
 
-    now = utc_now()
+    now = app_now()
     revision = ShopRevision(
         fab_id=revision_data.fab_id,
         revision_note=revision_data.revision_note,
@@ -391,7 +391,7 @@ async def complete_shop_revision(
     if not revision:
         raise error_response("Shop revision not found", 404)
 
-    now = utc_now()
+    now = app_now()
     if revision_data and revision_data.revision_note:
         revision.revision_note = revision_data.revision_note
     if revision_data and revision_data.shop_revision_type is not None:
@@ -509,7 +509,7 @@ async def add_file_to_shop_revision(
     existing_file_ids.extend([str(file_id) for file_id in uploaded_file_ids])
     shop_revision.file_ids = ",".join(existing_file_ids)
 
-    shop_revision.updated_at = utc_now()
+    shop_revision.updated_at = app_now()
     shop_revision.updated_by = current_user.id
     db.add(shop_revision)
 

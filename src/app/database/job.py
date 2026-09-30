@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional, Dict, Any, TYPE_CHECKING
 from enum import Enum as PyEnum
-from src.app.utils.helpers import utc_now
+from src.app.utils.helpers import app_now
 from sqlmodel import (
     SQLModel,
     Field,
@@ -152,7 +152,7 @@ class JobApplicationBase(SQLModel):
     )
 
     applied_at: datetime = Field(
-        default_factory=utc_now,
+        default_factory=app_now,
         sa_column=Column(DateTime(timezone=True), server_default=func.now()),
     )
 
