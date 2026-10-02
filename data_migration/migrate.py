@@ -848,14 +848,13 @@ def make_stage_rows(ctx, r, fab_id, created):
         "status_id": ACTIVE, "created_at": created, "updated_at": now,
         "updated_by": M, "total_sqft": r.get("cut_sqft") or r.get("total_sqft"),
         "installation_date": parse_dt(r.get("install_date"))})
-    if (r.get("cost_of_stone", "").strip() or
-            parse_bool(r.get("cost_entered")) is not None):
-        one_per_fab(ctx, "cost_of_stones", "cost_of_stones", fab_id, {
-            "total_sqft": r.get("total_sqft"),
-            "total_cost": r.get("cost_of_stone"),
-            "is_completed": bool(parse_bool(r.get("cost_entered"))),
-            "status_id": ACTIVE, "created_at": created,
-            "updated_at": now, "updated_by": M})
+    # Cost of stone lives on fabs.cost_of_stone (set above), not in the separate
+    # cost_of_stones table. Remove rows earlier imports created there.
+    ctx.cur.execute(
+        "DELETE FROM cost_of_stones c WHERE c.fab_id=%s AND c.updated_by=%s"
+        " AND NOT EXISTS (SELECT 1 FROM fabs f WHERE f.cost_of_stone_id = c.id)",
+        (fab_id, M))
+    ctx.counts["cost_of_stones"]["deleted"] += ctx.cur.rowcount
     one_per_fab(ctx, "shop_plannings", "shop_plannings", fab_id, {
         "start_date": sched, "no_of_steps_needed": 5, "status_id": ACTIVE,
         "completed_steps": (5 if parse_bool(r.get("pre_shop_review_completed")) else 0),
