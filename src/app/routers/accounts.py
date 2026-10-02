@@ -11,7 +11,7 @@ from src.app.database.user import User
 from src.app.database.account import Account
 from src.app.database.business_job import BusinessJob
 from src.app.interface.business_schemas import (
-    AccountCreate, AccountUpdate, AccountResponse, JobResponse,
+    AccountCreate, AccountUpdate, AccountResponse, AccountStatusUpdate, JobResponse,
 )
 from src.app.utils.permissions import PermissionChecker
 from src.app.middleware.jwt_auth import get_current_user
@@ -23,6 +23,8 @@ from src.app.service.background import save_audit_event
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+ACCOUNT_ACTIVE_STATUS, ACCOUNT_INACTIVE_STATUS = 1, 2  # status.value_id
 
 
 @router.post("/accounts", response_model=SuccessResponse[AccountResponse], status_code=201)
@@ -112,6 +114,51 @@ async def create_account(
     return success_response(account_dict, "Account created successfully")
 
 
+async def _list_accounts(
+    db: AsyncSession,
+    *,
+    skip: int,
+    status_id: Optional[int],
+    search: Optional[str],
+    is_active: Optional[bool],
+) -> list:
+    query = select(Account)
+
+    # Apply filters
+    if is_active is not None:
+        query = query.where(Account.is_active.is_(is_active))
+    if status_id is not None:
+        query = query.where(Account.status_id == status_id)
+
+    if search:
+        search_term = f"%{search}%"
+        query = query.where(
+            (Account.name.ilike(search_term)) |
+            (Account.account_number.ilike(search_term))
+        )
+
+    # Apply pagination (skip only, no limit)
+    query = query.offset(skip).order_by(Account.name.asc())
+
+    result = await db.execute(query)
+    accounts = result.scalars().all()
+
+    # Add total_jobs count for each account
+    job_counts_result = await db.execute(
+        select(BusinessJob.account_id, func.count(BusinessJob.id))
+        .where(BusinessJob.account_id.in_([account.id for account in accounts]))
+        .group_by(BusinessJob.account_id)
+    )
+    job_counts = dict(job_counts_result.all())
+
+    accounts_with_jobs = []
+    for account in accounts:
+        account_dict = account.__dict__.copy()
+        account_dict['total_jobs'] = job_counts.get(account.id, 0)
+        accounts_with_jobs.append(account_dict)
+    return accounts_with_jobs
+
+
 @router.get("/accounts", response_model=SuccessResponse[List[AccountResponse]])
 async def get_accounts(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
@@ -120,40 +167,73 @@ async def get_accounts(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(PermissionChecker("accounts", "read"))
 ):
-    """Get list of accounts with optional filtering"""
-    
-    query = select(Account)
-    
-    # Apply filters
-    if status_id is not None:
-        query = query.where(Account.status_id == status_id)
-    
-    if search:
-        search_term = f"%{search}%"
-        query = query.where(
-            (Account.name.ilike(search_term)) | 
-            (Account.account_number.ilike(search_term))
-        )
-    
-    # Apply pagination (skip only, no limit)
-    query = query.offset(skip).order_by(Account.name.asc())
-    
-    result = await db.execute(query)
-    accounts = result.scalars().all()
-    
-    # Add total_jobs count for each account
-    accounts_with_jobs = []
-    for account in accounts:
-        job_count_result = await db.execute(
-            select(func.count(BusinessJob.id)).where(BusinessJob.account_id == account.id)
-        )
-        job_count = job_count_result.scalar() or 0
-        
-        account_dict = account.__dict__.copy()
-        account_dict['total_jobs'] = job_count
-        accounts_with_jobs.append(account_dict)
-    
-    return success_response(accounts_with_jobs, "Accounts fetched successfully")
+    """Get active accounts (for account selection). Inactive accounts are excluded."""
+    accounts = await _list_accounts(db, skip=skip, status_id=status_id, search=search, is_active=True)
+    return success_response(accounts, "Accounts fetched successfully")
+
+
+@router.get("/accounts/all", response_model=SuccessResponse[List[AccountResponse]])
+async def view_accounts(
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    status_id: Optional[int] = Query(None, description="Filter by status ID"),
+    is_active: Optional[bool] = Query(None, description="Filter by active flag; omit for all accounts"),
+    search: Optional[str] = Query(None, description="Search by name or account number"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(PermissionChecker("accounts", "read"))
+):
+    """Get all accounts, active and inactive (for the accounts management screen)."""
+    accounts = await _list_accounts(db, skip=skip, status_id=status_id, search=search, is_active=is_active)
+    return success_response(accounts, "Accounts fetched successfully")
+
+
+@router.patch("/accounts/{account_id}/status", response_model=SuccessResponse[AccountResponse])
+async def update_account_status(
+    account_id: int,
+    status_data: AccountStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(PermissionChecker("accounts", "update"))
+):
+    """Activate or deactivate an account. status_id is kept in step (1 Active / 2 Inactive)."""
+
+    result = await db.execute(select(Account).where(Account.id == account_id))
+    account = result.scalar_one_or_none()
+
+    if not account:
+        raise error_response("Account not found", 404)
+
+    old_values = {"is_active": account.is_active, "status_id": account.status_id}
+    account.is_active = status_data.is_active
+    account.status_id = ACCOUNT_ACTIVE_STATUS if status_data.is_active else ACCOUNT_INACTIVE_STATUS
+    account.updated_at = app_now()
+    account.updated_by = current_user.id
+
+    await save_audit_event(
+        db=db,
+        operation="UPDATE",
+        resource_type="account",
+        user_id=current_user.id,
+        message=f"{'Activated' if account.is_active else 'Deactivated'} account {account.name} (ID: {account.id})",
+        record_id=account.id,
+        changed_fields=["is_active", "status_id"],
+        old_values=old_values,
+        new_values={"is_active": account.is_active, "status_id": account.status_id},
+        activity_table_name="accounts",
+        auto_commit=False,
+    )
+
+    await db.commit()
+    await db.refresh(account)
+
+    job_count_result = await db.execute(
+        select(func.count(BusinessJob.id)).where(BusinessJob.account_id == account_id)
+    )
+    account_dict = account.__dict__.copy()
+    account_dict['total_jobs'] = job_count_result.scalar() or 0
+
+    return success_response(
+        account_dict,
+        f"Account {'activated' if account.is_active else 'deactivated'} successfully",
+    )
 
 
 @router.get("/accounts/{account_id}", response_model=SuccessResponse[AccountResponse])

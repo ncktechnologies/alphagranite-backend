@@ -117,6 +117,10 @@ class AccountUpdate(BaseModel):
     status_id: Optional[int] = None
 
 
+class AccountStatusUpdate(BaseModel):
+    is_active: bool = Field(..., description="false to deactivate the account, true to reactivate it")
+
+
 class AccountResponse(BaseModel):
     id: int
     name: str
@@ -127,6 +131,7 @@ class AccountResponse(BaseModel):
     phone: Optional[str]
     address: Optional[str]
     status_id: int
+    is_active: bool = True
     total_jobs: Optional[int] = 0
     created_at: datetime
     created_by: int
