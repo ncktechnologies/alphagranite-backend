@@ -1215,7 +1215,11 @@ async def get_fabs(
         )
 
     # Step 4: Apply pagination and ordering
-    query = _apply_pagination_and_ordering(query, skip, limit, current_stage, latest_templating)
+    needs_job_search = bool(search and (search_filter is None or type != "fab_id"))
+    query = _paginate_fab_list_query(
+        query, skip, limit, current_stage, latest_templating,
+        needs_job_search, bool(search and type == "account_name"),
+    )
 
     result = await db.execute(query)
     rows = result.all()
@@ -1251,9 +1255,10 @@ async def get_fabs(
 
     # Step 7: Get total count with stage-specific date filtering
     count_query = select(func.count(Fab.id)).select_from(Fab)
-    count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
-    count_query = count_query.join(Account, BusinessJob.account_id == Account.id, isouter=True)
-    count_query = count_query.outerjoin(latest_templating, sa.literal(True))
+    if needs_job_search:
+        count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
+    if search and type == "account_name":
+        count_query = count_query.join(Account, BusinessJob.account_id == Account.id, isouter=True)
     if current_stage == "shop" and not _is_all_plan_view:
         count_query = count_query.where(_active_shop_cut_plan_visibility_filter())
 
@@ -4213,6 +4218,30 @@ def _latest_install_scheduled_date_expr():
         .limit(1)
         .scalar_subquery()
     )
+
+def _paginate_fab_list_query(
+    query, skip: int, limit: int, current_stage: Optional[str], latest_templating,
+    needs_job_search: bool = False, needs_account_search: bool = False,
+):
+    """Select the requested FAB IDs before joining their detail records."""
+    page_query = select(Fab.id).select_from(Fab)
+    if needs_job_search or needs_account_search:
+        page_query = page_query.outerjoin(BusinessJob, Fab.job_id == BusinessJob.id)
+    if needs_account_search:
+        page_query = page_query.outerjoin(Account, BusinessJob.account_id == Account.id)
+    if current_stage == "templating":
+        page_query = page_query.outerjoin(latest_templating, sa.literal(True))
+    if query.whereclause is not None:
+        page_query = page_query.where(query.whereclause)
+    page_query = _apply_pagination_and_ordering(
+        page_query, skip, limit, current_stage, latest_templating,
+    ).order_by(Fab.id.asc())
+    page = page_query.subquery("fab_page")
+    query = query.where(Fab.id.in_(select(page.c.id)))
+    return _apply_pagination_and_ordering(
+        query, 0, limit, current_stage, latest_templating,
+    ).order_by(Fab.id.asc())
+
 
 def _apply_pagination_and_ordering(query, skip: int, limit: int, current_stage: Optional[str], latest_templating):
     """Apply pagination and stage-specific ordering."""
