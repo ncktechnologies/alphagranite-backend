@@ -121,6 +121,7 @@ async def _list_accounts(
     status_id: Optional[int],
     search: Optional[str],
     is_active: Optional[bool],
+    limit: Optional[int] = None,
 ) -> list:
     query = select(Account)
 
@@ -137,8 +138,10 @@ async def _list_accounts(
             (Account.account_number.ilike(search_term))
         )
 
-    # Apply pagination (skip only, no limit)
+    # Apply pagination (no limit unless one is given)
     query = query.offset(skip).order_by(Account.name.asc())
+    if limit is not None:
+        query = query.limit(limit)
 
     result = await db.execute(query)
     accounts = result.scalars().all()
@@ -175,6 +178,7 @@ async def get_accounts(
 @router.get("/accounts/all", response_model=SuccessResponse[List[AccountResponse]])
 async def view_accounts(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: Optional[int] = Query(None, ge=1, le=1000, description="Number of records to return; omit for all"),
     status_id: Optional[int] = Query(None, description="Filter by status ID"),
     is_active: Optional[bool] = Query(None, description="Filter by active flag; omit for all accounts"),
     search: Optional[str] = Query(None, description="Search by name or account number"),
@@ -182,7 +186,8 @@ async def view_accounts(
     current_user: User = Depends(PermissionChecker("accounts", "read"))
 ):
     """Get all accounts, active and inactive (for the accounts management screen)."""
-    accounts = await _list_accounts(db, skip=skip, status_id=status_id, search=search, is_active=is_active)
+    accounts = await _list_accounts(db, skip=skip, status_id=status_id, search=search,
+                                    is_active=is_active, limit=limit)
     return success_response(accounts, "Accounts fetched successfully")
 
 

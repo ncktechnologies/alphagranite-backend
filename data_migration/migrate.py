@@ -134,6 +134,12 @@ def parse_thickness_mm(v):
     return None
 
 
+def plan_key(name):
+    """Planning section names compare like the app's _normalize_shop_plan_name:
+    uppercase letters and digits only ("Cut - Saw" == "CUT-SAW" == "CUTSAW")."""
+    return "".join(ch for ch in (name or "").upper() if ch.isalnum())
+
+
 class Ctx:
     def __init__(self, conn, dry_run=False):
         self.conn = conn
@@ -213,9 +219,9 @@ class Ctx:
         self.cur.execute("SELECT id, job_id FROM fabs")
         for _id, job_id in self.cur.fetchall():
             self.fabs[_id] = job_id
-        self.cur.execute("SELECT id, plan_name FROM planning_sections")
+        self.cur.execute("SELECT id, plan_name FROM planning_sections ORDER BY id")
         for _id, name in self.cur.fetchall():
-            self.plan_sections[(name or "").strip().upper()] = _id
+            self.plan_sections.setdefault(plan_key(name), _id)
 
     def load_employees(self, data):
         self.cur.execute("SELECT id, first_name, last_name, hcp_employee_id FROM users"
@@ -362,24 +368,19 @@ class Ctx:
         self.backlog("workstation", name, context)
         return _id
 
-    def planning_section(self, name, context=""):
-        key = name.strip().upper()
-        if key in self.plan_sections:
-            return self.plan_sections[key]
-        self.cur.execute("SELECT id FROM planning_sections WHERE upper(plan_name)=%s", (key,))
-        row = self.cur.fetchone()
-        if row:
-            self.plan_sections[key] = row[0]
-            return row[0]
-        self.cur.execute(
-            "INSERT INTO planning_sections(plan_name, is_active, status_id, created_at, created_by)"
-            " VALUES(%s, true, %s, %s, %s) RETURNING id",
-            (key, ACTIVE, self.now, self.mig_user))
-        _id = self.cur.fetchone()[0]
-        self.plan_sections[key] = _id
-        self.counts["planning_sections"]["inserted"] += 1
-        self.backlog("planning_section", key, context)
-        return _id
+    def planning_section(self, name):
+        """Existing planning section id for `name` (never creates one)."""
+        return self.plan_sections[plan_key(name)]
+
+    def require_planning_sections(self, names):
+        """Stop before importing if a planning section the import needs is missing."""
+        missing = sorted({n for n in names if plan_key(n) not in self.plan_sections})
+        if missing:
+            self.cur.execute("SELECT plan_name FROM planning_sections ORDER BY plan_name")
+            existing = ", ".join(r[0] for r in self.cur.fetchall()) or "(none)"
+            sys.exit(f"Missing planning section(s): {', '.join(missing)}.\n"
+                     f"Existing: {existing}.\n"
+                     "Create or rename them in Odyssey (or adjust PLAN_BY_WS), then re-run.")
 
     def account(self, raw, job_number=""):
         name = (raw or "").strip()
@@ -414,9 +415,10 @@ def read_csvs(input_dir):
 
 
 WS_BY_ACTIVITY = {"CUT": "SAW 1", "WJ": "WATERJET", "MITER": "MITER 1"}
-PLAN_BY_WS = {"CUT": "CUT", "EDGING": "EDGING", "MITER": "MITER",
-              "CNC": "CNC", "QC": "HANDWORK", "WJ": "WJ",
-              "RESURFACE": "RESURFACING", "POLISH": "HANDWORK"}
+# Shop operation -> existing planning section (matched like the app does:
+# case/punctuation-insensitive). The migration never creates planning sections.
+PLAN_BY_WS = {"CUT": "CUT - SAW", "WJ": "CUT - WJ", "EDGING": "EDGING",
+              "MITER": "MITER", "CNC": "CNC", "QC": "HANDWORK"}
 
 
 def resolve_station(ctx, activity, machine, context):
@@ -876,18 +878,25 @@ def make_stage_rows(ctx, r, fab_id, created):
                  "cnc_employee_scheduled")),
         ("QC", ("qc_date_scheduled", "qc_hours_scheduled", "qc_percent",
                 "qc_date_completed", "qc_by", "qc_machine_scheduled",
-                "qc_employee_scheduled"))]
-    seq = {"CUT": 1, "EDGING": 2, "MITER": 3, "CNC": 4, "QC": 5}
+                "qc_employee_scheduled")),
+        ("WJ", ("wj_date_scheduled", "wj_hours_scheduled", "wj_percent",
+                "wj_date_completed", "wj_by", "wj_machine_scheduled",
+                "wj_employee_scheduled"))]
+    seq = {"CUT": 1, "WJ": 1, "EDGING": 2, "MITER": 3, "CNC": 4, "QC": 5}
+    # wj_percent is filled in ("0") on almost every FAB, so a WJ plan needs real
+    # water-jet work: linear feet, a scheduled/completed date or who did it.
+    wj_work = ((parse_float(r.get("wj_linft")) or 0) > 0
+               or any(r.get(c, "").strip() for c in ("wj_date_scheduled", "wj_date_completed", "wj_by")))
     for ws, cols in ws_groups:
         vals = [r.get(c, "").strip() for c in cols]
-        if not any(vals):
+        if not any(vals) or (ws == "WJ" and not wj_work):
             continue
         sched_s, hours, pct, done_d, by, mach, emp = vals
         # An install-complete FAB finished all shop work, whatever Caspio's % says
         # (the app only treats a FAB as install complete when every plan is at 100%).
         pct_i = 100 if complete else parse_int(pct)
         ws_id = resolve_station(ctx, ws, mach, f"fab {fab_id} {ws}")
-        plan_id = ctx.planning_section(PLAN_BY_WS[ws], f"fab {fab_id} {ws}")
+        plan_id = ctx.planning_section(PLAN_BY_WS[ws])
         # Who did the work (clock number), else who was scheduled (name).
         operator = (ctx.employees.by_clock_number(f"shop_cut_plans.user_id ({ws.lower()}_by)", by)
                     or ctx.employees.by_name(
@@ -1264,6 +1273,7 @@ def main():
     ctx.sync_id_sequences()
     ctx.ensure_mig_user()
     ctx.load_caches()
+    ctx.require_planning_sections(PLAN_BY_WS.values())
     data = read_csvs(args.input)
     ctx.load_employees(data)
 
