@@ -313,6 +313,26 @@ def _pending_cnc_widget_filter():
     )
 
 
+def _pending_install_scheduling_widget_filter():
+    already_scheduled_for_install_exists = (
+        select(InstallScheduling.id)
+        .where(
+            InstallScheduling.fab_id == Fab.id,
+            InstallScheduling.installer_id.isnot(None),
+            InstallScheduling.scheduled_install_date.isnot(None),
+        )
+        .exists()
+    )
+    return and_(
+        Fab.current_stage.is_distinct_from("install_completion"),
+        or_(
+            Fab.shop_est_completion_date.isnot(None),
+            Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+        ),
+        ~already_scheduled_for_install_exists,
+    )
+
+
 def _add_total_cut_lnft(fab_dict: dict) -> None:
     # Uses wj_linft (existing model field), with fallback to wj_lnft if present.
     saw_cut_lnft = float(fab_dict.get("saw_cut_lnft") or 0.0)
@@ -1922,32 +1942,14 @@ async def get_fabs_with_shop_est_completion(
 
     install_shop_est_stage_filter = Fab.current_stage == "install_scheduling"
 
-    # Filter for FABs with shop_est_completion_date set OR PUNCHOUT fab types
-    shop_est_completion_filter = or_(
-        Fab.shop_est_completion_date.isnot(None),
-        Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
-    )
-
-    # Exclude FABs that are already scheduled for install (assigned installer + scheduled date).
-    already_scheduled_for_install_exists = (
-        select(InstallScheduling.id)
-        .where(
-            InstallScheduling.fab_id == Fab.id,
-            InstallScheduling.installer_id.isnot(None),
-            InstallScheduling.scheduled_install_date.isnot(None),
-        )
-        .exists()
-    )
+    shop_est_completion_filter = _pending_install_scheduling_widget_filter()
 
     if effective_current_stage == "install_scheduling":
         query = query.where(install_shop_est_stage_filter)
     elif current_stage:
         query = query.where(_stage_filter_condition(current_stage))
 
-    query = query.where(
-        shop_est_completion_filter,
-        ~already_scheduled_for_install_exists,
-    )
+    query = query.where(shop_est_completion_filter)
 
     # Apply search filter if present
     if search_filter is not None:
@@ -2115,10 +2117,7 @@ async def get_fabs_with_shop_est_completion(
     count_query = count_query.join(Account, BusinessJob.account_id == Account.id, isouter=True)
     count_query = count_query.outerjoin(latest_templating, sa.literal(True))
 
-    count_query = count_query.where(
-        shop_est_completion_filter,
-        ~already_scheduled_for_install_exists,
-    )
+    count_query = count_query.where(shop_est_completion_filter)
 
     # Apply all basic filters to count query
     if job_id is not None:
@@ -2223,10 +2222,7 @@ async def get_fabs_with_shop_est_completion(
         elif current_stage:
             stage_totals_query = stage_totals_query.where(_stage_filter_condition(current_stage))
 
-        stage_totals_query = stage_totals_query.where(
-            shop_est_completion_filter,
-            ~already_scheduled_for_install_exists,
-        )
+        stage_totals_query = stage_totals_query.where(shop_est_completion_filter)
 
         if job_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.job_id == job_id)
@@ -3438,26 +3434,12 @@ async def get_all_stages(
 
     # Keep install_scheduling count aligned with the install-to-schedule widget
     # list behavior from /fabs/shop-est-completion when scoped to this stage.
-    shop_est_or_install_filter = or_(
-        Fab.shop_est_completion_date.isnot(None),
-        Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
-    )
-
-    already_scheduled_for_install_exists = (
-        select(InstallScheduling.id)
-        .where(
-            InstallScheduling.fab_id == Fab.id,
-            InstallScheduling.installer_id.isnot(None),
-            InstallScheduling.scheduled_install_date.isnot(None),
-        )
-        .exists()
-    )
+    shop_est_or_install_filter = _pending_install_scheduling_widget_filter()
 
     install_scheduling_count_result = await db.execute(
         select(func.count(Fab.id)).where(
-            Fab.status_id == 1,
+            Fab.status_id.in_([0, 1]),
             shop_est_or_install_filter,
-            ~already_scheduled_for_install_exists,
         )
     )
     install_scheduling_count = install_scheduling_count_result.scalar() or 0
@@ -3465,9 +3447,8 @@ async def get_all_stages(
     install_scheduling_ids_result = await db.execute(
         select(Fab.id)
         .where(
-            Fab.status_id == 1,
+            Fab.status_id.in_([0, 1]),
             shop_est_or_install_filter,
-            ~already_scheduled_for_install_exists,
         )
         .order_by(Fab.id.desc())
         .limit(10)

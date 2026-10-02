@@ -216,3 +216,55 @@ async def test_dashboard_cnc_count_and_recent_ids_use_same_exclusion():
     assert "count(fabs.id)" in cnc_queries[0]
     for sql in cnc_queries:
         assert "fabs.current_stage IS DISTINCT FROM 'install_completion'" in sql
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", [None, "shop", "install_scheduling", "install_completion"])
+@pytest.mark.parametrize("status_id", [None, 2])
+async def test_shop_est_widget_applies_exclusion_to_all_queries(monkeypatch, stage, status_id):
+    result = Mock()
+    result.all.return_value = []
+    result.scalar.return_value = 0
+    result.first.return_value = None
+    db = SimpleNamespace(execute=AsyncMock(return_value=result))
+    monkeypatch.setattr(fabs, "_batch_load_fab_related_data", AsyncMock())
+    monkeypatch.setattr(fabs, "get_plans_map_for_fabs", AsyncMock(return_value={}))
+    monkeypatch.setattr(fabs, "_batch_load_install_scheduling_responses", AsyncMock(return_value={}))
+    kwargs = {
+        name: parameter.default.default
+        for name, parameter in inspect.signature(fabs.get_fabs_with_shop_est_completion).parameters.items()
+        if name not in {"db", "current_user"}
+    }
+    kwargs.update(skip=0, limit=25, type="fab_id", current_stage=stage, status_id=status_id,
+                  db=db, current_user=SimpleNamespace(id=1))
+
+    response = await fabs.get_fabs_with_shop_est_completion(**kwargs)
+
+    assert response["data"]["data"] == []
+    assert db.execute.await_count == (3 if stage else 2)
+    for call in db.execute.await_args_list:
+        sql = compile_sql(call.args[0])
+        assert "fabs.current_stage IS DISTINCT FROM 'install_completion'" in sql
+        assert "fabs.status_id IN (0, 1)" in sql if status_id is None else "fabs.status_id = 2" in sql
+
+
+@pytest.mark.asyncio
+async def test_dashboard_install_scheduling_count_and_ids_match_widget_eligibility():
+    result = Mock()
+    result.all.return_value = []
+    result.scalar.return_value = 0
+    db = SimpleNamespace(execute=AsyncMock(return_value=result))
+
+    await fabs.get_all_stages(db=db, current_user=SimpleNamespace(id=1))
+
+    widget_queries = [
+        compile_sql(call.args[0]) for call in db.execute.await_args_list
+        if "fabs.shop_est_completion_date IS NOT NULL" in compile_sql(call.args[0])
+    ]
+    assert len(widget_queries) == 2
+    assert "count(fabs.id)" in widget_queries[0]
+    for sql in widget_queries:
+        assert "fabs.current_stage IS DISTINCT FROM 'install_completion'" in sql
+        assert "fabs.status_id IN (0, 1)" in sql
+        assert "install_schedulings.installer_id IS NOT NULL" in sql
+        assert "install_schedulings.scheduled_install_date IS NOT NULL" in sql
