@@ -1,9 +1,10 @@
 import inspect
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from sqlalchemy import Column, DateTime, Integer, MetaData, Table, create_engine, select
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, MetaData, String, Table, create_engine, func, select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.sql import visitors
 from sqlalchemy.sql.selectable import Subquery
@@ -129,3 +130,89 @@ async def test_list_enriches_only_page_and_counts_without_detail_joins(monkeypat
     assert "count(fabs.id)" in count_sql
     assert "JOIN" not in count_sql
     assert "templatings" not in count_sql
+
+
+def test_cnc_widget_excludes_install_completion_from_ids_and_count():
+    metadata = MetaData()
+    fab_table = Table(
+        Fab.__tablename__, metadata, Column("id", Integer, primary_key=True),
+        Column("current_stage", String), Column("cnc_linft", Float),
+    )
+    cnc_table = Table(
+        fabs.CNCDrafting.__tablename__, metadata,
+        Column("id", Integer, primary_key=True), Column("fab_id", Integer),
+        Column("created_at", DateTime), Column("is_completed", Boolean),
+    )
+    engine = create_engine("sqlite:///:memory:")
+    try:
+        metadata.create_all(engine)
+        with engine.begin() as connection:
+            connection.execute(fab_table.insert(), [
+                {"id": 1, "current_stage": "install_completion", "cnc_linft": 10},
+                {"id": 2, "current_stage": "shop", "cnc_linft": 10},
+                {"id": 3, "current_stage": "install_scheduling", "cnc_linft": 10},
+                {"id": 4, "current_stage": None, "cnc_linft": 10},
+                {"id": 5, "current_stage": "shop", "cnc_linft": 10},
+                {"id": 6, "current_stage": "shop", "cnc_linft": 0},
+                {"id": 7, "current_stage": "install_completion", "cnc_linft": 10},
+                {"id": 8, "current_stage": "shop", "cnc_linft": None},
+                {"id": 9, "current_stage": "shop", "cnc_linft": 10},
+                {"id": 10, "current_stage": "shop", "cnc_linft": 10},
+            ])
+            connection.execute(cnc_table.insert(), [
+                {"id": draft_id, "fab_id": fab_id, "created_at": datetime(2026, 10, 2), "is_completed": completed}
+                for draft_id, fab_id, completed in [
+                    (1, 1, False), (2, 2, False), (3, 4, False), (4, 5, True),
+                    (5, 9, True), (6, 9, False), (7, 10, False), (8, 10, True),
+                ]
+            ])
+            predicate = fabs._pending_cnc_widget_filter()
+            ids = connection.execute(select(Fab.id).where(predicate).order_by(Fab.id)).scalars().all()
+            count = connection.execute(select(func.count(Fab.id)).where(predicate)).scalar_one()
+
+        assert ids == [2, 3, 4, 9]
+        assert count == len(ids)
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cnc_widget_applies_exclusion_to_list_count_and_stage_totals(monkeypatch):
+    result = Mock()
+    result.all.return_value = []
+    result.scalar.return_value = 0
+    result.first.return_value = None
+    db = SimpleNamespace(execute=AsyncMock(return_value=result))
+    monkeypatch.setattr(fabs, "_batch_load_fab_related_data", AsyncMock())
+    monkeypatch.setattr(fabs, "get_plans_map_for_fabs", AsyncMock(return_value={}))
+    kwargs = {
+        name: parameter.default.default
+        for name, parameter in inspect.signature(fabs.get_fabs_for_cnc_widget).parameters.items()
+        if name not in {"db", "current_user"}
+    }
+    kwargs.update(skip=0, limit=25, type="fab_id", current_stage="shop", db=db, current_user=SimpleNamespace(id=1))
+
+    await fabs.get_fabs_for_cnc_widget(**kwargs)
+
+    assert db.execute.await_count == 3
+    for call in db.execute.await_args_list:
+        assert "fabs.current_stage IS DISTINCT FROM 'install_completion'" in compile_sql(call.args[0])
+
+
+@pytest.mark.asyncio
+async def test_dashboard_cnc_count_and_recent_ids_use_same_exclusion():
+    result = Mock()
+    result.all.return_value = []
+    result.scalar.return_value = 0
+    db = SimpleNamespace(execute=AsyncMock(return_value=result))
+
+    await fabs.get_all_stages(db=db, current_user=SimpleNamespace(id=1))
+
+    cnc_queries = [
+        compile_sql(call.args[0]) for call in db.execute.await_args_list
+        if fabs.CNCDrafting.__tablename__ in compile_sql(call.args[0])
+    ]
+    assert len(cnc_queries) == 2
+    assert "count(fabs.id)" in cnc_queries[0]
+    for sql in cnc_queries:
+        assert "fabs.current_stage IS DISTINCT FROM 'install_completion'" in sql

@@ -303,6 +303,7 @@ def _pending_cnc_widget_filter():
     )
 
     return and_(
+        Fab.current_stage.is_distinct_from("install_completion"),
         Fab.cnc_linft.isnot(None),
         Fab.cnc_linft > 0,
         or_(
