@@ -309,6 +309,11 @@ async def test_installer_report_blanks_future_weeks_and_builds_annual_months(mon
     monkeypatch.setattr(reports, "_hcp_weekly_labor_totals", _weekly)
     monkeypatch.setattr(reports, "_hcp_active_employee_count_for_month", _roster)
 
+    async def _no_sub_labor(*_args, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(reports, "subcontractor_labor_by_week", _no_sub_labor)
+
     response = await reports.get_owner_weekly_installer_labor_cost_report(
         year=2026, month=9, total_employees=None, overhead_per_week=18512.69, week_ending_weekday=FRIDAY,
         payroll_overrides_json=None, db=_EmptyDb(), current_user=None,

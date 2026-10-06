@@ -13,6 +13,7 @@ from src.app.database.templating import Templating
 from src.app.interface.response_wrappers import SuccessResponse, success_response
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.utils.helpers import app_now
+from src.app.service.performance_data import breakeven_gross_profit_for_period, get_static_data, gross_profit_delta
 
 router = APIRouter()
 
@@ -142,6 +143,21 @@ async def get_dashboard(
     )
     gp_result = await db.execute(gp_query)
     gross_profit = float(gp_result.scalar() or 0)
+
+    # Gross Profit Delta = gross profit - breakeven gross profit (Performance static data,
+    # Total Expenses / 12 per month, scaled to the period). "all" has no breakeven, so it
+    # compares this month's gross profit with the monthly breakeven instead.
+    delta_period = time_period if time_period in ("today", "this_week", "this_month") else "this_month"
+    delta_gross_profit = gross_profit
+    if delta_period != time_period:
+        month_start = end_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        delta_gross_profit = float(
+            (await db.execute(
+                select(func.sum(Fab.gp)).where(Fab.gp.isnot(None), Fab.created_at >= month_start)
+            )).scalar() or 0
+        )
+    static_data = await get_static_data(db, end_date.year)
+    breakeven_gross_profit = breakeven_gross_profit_for_period(static_data["total_expenses"], delta_period)
     
     # 7. Newly Assigned FABs (recent assignments)
     newly_assigned_query = select(
@@ -284,7 +300,11 @@ async def get_dashboard(
         "finance": {
             "revenue_installed": round(revenue_installed, 2),
             "revenue_templated": round(revenue_templated, 2),
-            "gross_profit": round(gross_profit, 2)
+            "gross_profit": round(gross_profit, 2),
+            "gross_profit_delta": gross_profit_delta(delta_gross_profit, breakeven_gross_profit),
+            "breakeven_gross_profit": round(breakeven_gross_profit, 2) if breakeven_gross_profit is not None else None,
+            "delta_gross_profit": round(delta_gross_profit, 2),
+            "delta_period": delta_period,
         },
         "newly_assigned_fabs": newly_assigned_fabs,
         "paused_jobs": paused_jobs,

@@ -1113,10 +1113,11 @@ async def _run_owner_weekly_fabrication_labor_cost(
         minimum=0,
         maximum=20000,
     )
-    overhead_per_week = _parse_bounded_float(
+    # Omitted -> the report uses the Performance static data overhead for the year.
+    overhead_per_week = None if params.get("overhead_per_week") in (None, "") else _parse_bounded_float(
         params.get("overhead_per_week"),
         field_name="overhead_per_week",
-        default=38512.69,
+        default=0,
         minimum=0,
         maximum=10000000,
     )
@@ -1168,10 +1169,11 @@ async def _run_owner_weekly_installer_labor_cost(
         minimum=0,
         maximum=20000,
     )
-    overhead_per_week = _parse_bounded_float(
+    # Omitted -> the report uses the Performance static data overhead for the year.
+    overhead_per_week = None if params.get("overhead_per_week") in (None, "") else _parse_bounded_float(
         params.get("overhead_per_week"),
         field_name="overhead_per_week",
-        default=38512.69,
+        default=0,
         minimum=0,
         maximum=10000000,
     )
