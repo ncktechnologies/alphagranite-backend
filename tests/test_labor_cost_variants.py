@@ -197,7 +197,38 @@ def test_pdf_builds_from_report_data():
             "weekly_breakdown": [{"week_ending": "2026-09-04", "has_data": True, **week("combined")}],
             "totals": {"has_data": True, **week("combined")},
         },
-        "annual_monthly_summary": [{"month": "September", "number_of_weeks": 5, "gross_revenue": 60000}],
+        "annual_report": {
+            "year": 2026,
+            "monthly_breakdown": [{"month": "September", "month_number": 9, **week("combined")}],
+            "totals": {"has_data": True, **week("combined")},
+        },
     }
     pdf = build_labor_cost_pdf(data)
     assert pdf.startswith(b"%PDF") and len(pdf) > 1500
+
+
+# ── Annual summary (fabrication) ─────────────────────────────────────────────
+
+def _fab_week(completed_sqft, labor, revenue, overhead=1000.0):
+    return {
+        "number_of_days": 5, "cut_sqft_saw": completed_sqft, "completed_sqft": completed_sqft,
+        "gross_revenue": revenue, "gross_profit": revenue / 2, "wages_basic_shop_yard": labor,
+        "overtime_shop_yard": 0.0, "total_labor_cost": labor, "regular_hours": 100.0, "overtime_hours": 0.0,
+        "total_hours": 100.0, "total_head_count_inc_yard": 5.0, "total_employees": 10.0, "overhead_per_week": overhead,
+    }
+
+
+def test_fabrication_year_totals_recalculate_from_all_weeks():
+    from src.app.routers.reports import _fabrication_period_totals
+
+    january = [_fab_week(100.0, 1000.0, 10000.0), _fab_week(300.0, 2000.0, 30000.0)]
+    february = [_fab_week(600.0, 3000.0, 60000.0)]
+    jan, feb = _fabrication_period_totals(january), _fabrication_period_totals(february)
+    year = _fabrication_period_totals(january + february)
+
+    assert year["completed_sqft"] == jan["completed_sqft"] + feb["completed_sqft"] == 1000.0
+    assert year["total_labor_cost"] == 6000.0 and year["overhead_per_week"] == 3000.0
+    assert year["number_of_weeks"] == 3
+    # 6000 / 1000, not the average of January (7.5) and February (5.0).
+    assert year["labor_cost_per_sq_ft"] == 6.0
+    assert jan["labor_cost_per_sq_ft"] == 7.5 and feb["labor_cost_per_sq_ft"] == 5.0

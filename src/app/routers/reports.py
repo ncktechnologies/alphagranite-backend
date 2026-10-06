@@ -1238,6 +1238,64 @@ def _install_completed_fabs_subquery():
     )
 
 
+def _fabrication_period_totals(weekly_rows: list[dict]) -> dict:
+    """Roll weekly fabrication rows up into one row of the same shape (a month or the whole year).
+
+    Amounts and hours are summed, head counts averaged over staffed weeks, and
+    every ratio is recalculated from the sums.
+    """
+    week_count = len(weekly_rows)
+    # Average head counts over weeks that have values so weeks without an HCP pull don't drag them to zero.
+    staffed_head_counts = [_to_float(row["total_head_count_inc_yard"]) for row in weekly_rows if _to_float(row["total_head_count_inc_yard"]) > 0]
+    staffed_total_employees = [_to_float(row["total_employees"]) for row in weekly_rows if _to_float(row.get("total_employees", 0)) > 0]
+
+    totals = {
+        "number_of_weeks": week_count,
+        "number_of_days": int(sum(_to_float(row["number_of_days"]) for row in weekly_rows)),
+        "cut_sqft_saw": round(sum(_to_float(row["cut_sqft_saw"]) for row in weekly_rows), 2),
+        "completed_sqft": round(sum(_to_float(row["completed_sqft"]) for row in weekly_rows), 2),
+        "gross_revenue": round(sum(_to_float(row["gross_revenue"]) for row in weekly_rows), 2),
+        "gross_profit": round(sum(_to_float(row["gross_profit"]) for row in weekly_rows), 2),
+        "wages_basic_shop_yard": round(sum(_to_float(row["wages_basic_shop_yard"]) for row in weekly_rows), 2),
+        "overtime_shop_yard": round(sum(_to_float(row["overtime_shop_yard"]) for row in weekly_rows), 2),
+        "total_labor_cost": round(sum(_to_float(row["total_labor_cost"]) for row in weekly_rows), 2),
+        "regular_hours": round(sum(_to_float(row["regular_hours"]) for row in weekly_rows), 2),
+        "overtime_hours": round(sum(_to_float(row["overtime_hours"]) for row in weekly_rows), 2),
+        "total_hours": round(sum(_to_float(row["total_hours"]) for row in weekly_rows), 2),
+        "total_head_count_inc_yard": round(_safe_div(sum(staffed_head_counts), len(staffed_head_counts)), 2),
+        "total_employees": round(_safe_div(sum(staffed_total_employees), len(staffed_total_employees)), 2),
+        "overhead_per_week": round(sum(_to_float(row.get("overhead_per_week")) for row in weekly_rows), 2),
+    }
+
+    totals["average_sqft_per_day"] = round(_safe_div(totals["completed_sqft"], totals["number_of_days"]), 2)
+    totals["average_revenue_per_day"] = round(_safe_div(totals["gross_revenue"], totals["number_of_days"]), 2)
+    totals["cost_of_overtime_pct"] = round(_safe_div(totals["overtime_shop_yard"], totals["wages_basic_shop_yard"]) * 100, 2)
+    totals["overtime_hours_pct"] = round(_safe_div(totals["overtime_hours"], totals["total_hours"]) * 100, 2)
+    totals["shop_labor_per_hour"] = round(_safe_div(totals["total_labor_cost"], totals["total_hours"]) * totals["total_head_count_inc_yard"], 2)
+    # The period rate uses the average weekly overhead so the $/hr rate doesn't scale with week count.
+    totals["shop_overhead_per_hour"] = round(
+        _safe_div(
+            _safe_div(totals["overhead_per_week"], totals["number_of_weeks"]) * totals["total_head_count_inc_yard"],
+            totals["total_employees"] * 8 * 5,
+        ),
+        2,
+    )
+    totals["shop_labor_overhead_per_hour"] = round(totals["shop_labor_per_hour"] + totals["shop_overhead_per_hour"], 2)
+    totals["manpower_cost_per_hour"] = round(_safe_div(totals["shop_labor_overhead_per_hour"], totals["total_head_count_inc_yard"]), 2)
+    totals["sqft_per_labor_hour"] = round(_safe_div(totals["completed_sqft"], totals["total_hours"]), 2)
+    totals["shop_productivity_sqft_per_hour"] = round(totals["sqft_per_labor_hour"] * totals["total_head_count_inc_yard"], 2)
+    totals["labor_cost_per_sq_ft"] = round(_safe_div(totals["total_labor_cost"], totals["completed_sqft"]), 2)
+    totals["labor_cost_pct_per_dollar_sold"] = round(_safe_div(totals["total_labor_cost"], totals["gross_revenue"]) * 100, 2)
+    totals["shop_overhead_cost_per_sqft"] = round(
+        _safe_div(totals["shop_overhead_per_hour"], totals["completed_sqft"]) * 8 * totals["number_of_days"], 2
+    )
+    totals["shop_total_cost_per_sqft"] = round(totals["labor_cost_per_sq_ft"] + totals["shop_overhead_cost_per_sqft"], 2)
+    totals["gross_profit_per_sf_completed"] = round(_safe_div(totals["gross_profit"], totals["completed_sqft"]), 2)
+    totals["gross_profit_less_shop_total_cost_psf"] = round(totals["gross_profit_per_sf_completed"] - totals["shop_total_cost_per_sqft"], 2)
+    totals["gross_revenue_per_sqft_fabricated"] = round(_safe_div(totals["gross_revenue"], totals["completed_sqft"]), 2)
+    return totals
+
+
 @router.get("/reports/owner/weekly-fabrication-labor-cost", response_model=SuccessResponse[dict])
 async def get_owner_weekly_fabrication_labor_cost_report(
     year: int = Query(..., ge=2000, le=2100),
@@ -1286,7 +1344,6 @@ async def get_owner_weekly_fabrication_labor_cost_report(
     async def _compute_month(month_num: int) -> dict:
         windows = _week_windows_for_month(year, month_num, week_ending_weekday)
         weekly_rows: list[dict] = []
-        week_overheads: list[float] = []
 
         for window in windows:
             week_key = window["week_end"].isoformat()
@@ -1409,60 +1466,12 @@ async def get_owner_weekly_fabrication_labor_cost_report(
                     "gross_profit_per_sf_completed": round(gross_profit_per_sf_completed, 2),
                     "gross_profit_less_shop_total_cost_psf": round(gross_profit_less_shop_total_cost_psf, 2),
                     "gross_revenue_per_sqft_fabricated": round(gross_revenue_per_sqft_fabricated, 2),
+                    "overhead_per_week": round(float(week_overhead), 2),
                     "hcp_payroll_snapshot_id": hcp_totals.get("snapshot_id"),
                 }
             )
-            week_overheads.append(float(week_overhead))
 
-        week_count = len(weekly_rows)
-        # Average head counts over weeks that have values so weeks without an HCP pull don't drag them to zero.
-        staffed_head_counts = [_to_float(row["total_head_count_inc_yard"]) for row in weekly_rows if _to_float(row["total_head_count_inc_yard"]) > 0]
-        staffed_total_employees = [_to_float(row["total_employees"]) for row in weekly_rows if _to_float(row.get("total_employees", 0)) > 0]
-
-        totals = {
-            "number_of_weeks": week_count,
-            "number_of_days": int(sum(_to_float(row["number_of_days"]) for row in weekly_rows)),
-            "cut_sqft_saw": round(sum(_to_float(row["cut_sqft_saw"]) for row in weekly_rows), 2),
-            "completed_sqft": round(sum(_to_float(row["completed_sqft"]) for row in weekly_rows), 2),
-            "gross_revenue": round(sum(_to_float(row["gross_revenue"]) for row in weekly_rows), 2),
-            "gross_profit": round(sum(_to_float(row["gross_profit"]) for row in weekly_rows), 2),
-            "wages_basic_shop_yard": round(sum(_to_float(row["wages_basic_shop_yard"]) for row in weekly_rows), 2),
-            "overtime_shop_yard": round(sum(_to_float(row["overtime_shop_yard"]) for row in weekly_rows), 2),
-            "total_labor_cost": round(sum(_to_float(row["total_labor_cost"]) for row in weekly_rows), 2),
-            "regular_hours": round(sum(_to_float(row["regular_hours"]) for row in weekly_rows), 2),
-            "overtime_hours": round(sum(_to_float(row["overtime_hours"]) for row in weekly_rows), 2),
-            "total_hours": round(sum(_to_float(row["total_hours"]) for row in weekly_rows), 2),
-            "total_head_count_inc_yard": round(_safe_div(sum(staffed_head_counts), len(staffed_head_counts)), 2),
-            "total_employees": round(_safe_div(sum(staffed_total_employees), len(staffed_total_employees)), 2),
-            "overhead_per_week": round(sum(week_overheads), 2),
-        }
-
-        totals["average_sqft_per_day"] = round(_safe_div(totals["completed_sqft"], totals["number_of_days"]), 2)
-        totals["average_revenue_per_day"] = round(_safe_div(totals["gross_revenue"], totals["number_of_days"]), 2)
-        totals["cost_of_overtime_pct"] = round(_safe_div(totals["overtime_shop_yard"], totals["wages_basic_shop_yard"]) * 100, 2)
-        totals["overtime_hours_pct"] = round(_safe_div(totals["overtime_hours"], totals["total_hours"]) * 100, 2)
-        totals["shop_labor_per_hour"] = round(_safe_div(totals["total_labor_cost"], totals["total_hours"]) * totals["total_head_count_inc_yard"], 2)
-        # Monthly rate uses the average weekly overhead so the $/hr rate doesn't scale with week count.
-        totals["shop_overhead_per_hour"] = round(
-            _safe_div(
-                _safe_div(totals["overhead_per_week"], totals["number_of_weeks"]) * totals["total_head_count_inc_yard"],
-                totals["total_employees"] * 8 * 5,
-            ),
-            2,
-        )
-        totals["shop_labor_overhead_per_hour"] = round(totals["shop_labor_per_hour"] + totals["shop_overhead_per_hour"], 2)
-        totals["manpower_cost_per_hour"] = round(_safe_div(totals["shop_labor_overhead_per_hour"], totals["total_head_count_inc_yard"]), 2)
-        totals["sqft_per_labor_hour"] = round(_safe_div(totals["completed_sqft"], totals["total_hours"]), 2)
-        totals["shop_productivity_sqft_per_hour"] = round(totals["sqft_per_labor_hour"] * totals["total_head_count_inc_yard"], 2)
-        totals["labor_cost_per_sq_ft"] = round(_safe_div(totals["total_labor_cost"], totals["completed_sqft"]), 2)
-        totals["labor_cost_pct_per_dollar_sold"] = round(_safe_div(totals["total_labor_cost"], totals["gross_revenue"]) * 100, 2)
-        totals["shop_overhead_cost_per_sqft"] = round(
-            _safe_div(totals["shop_overhead_per_hour"], totals["completed_sqft"]) * 8 * totals["number_of_days"], 2
-        )
-        totals["shop_total_cost_per_sqft"] = round(totals["labor_cost_per_sq_ft"] + totals["shop_overhead_cost_per_sqft"], 2)
-        totals["gross_profit_per_sf_completed"] = round(_safe_div(totals["gross_profit"], totals["completed_sqft"]), 2)
-        totals["gross_profit_less_shop_total_cost_psf"] = round(totals["gross_profit_per_sf_completed"] - totals["shop_total_cost_per_sqft"], 2)
-        totals["gross_revenue_per_sqft_fabricated"] = round(_safe_div(totals["gross_revenue"], totals["completed_sqft"]), 2)
+        totals = _fabrication_period_totals(weekly_rows)
 
         return {
             "weekly_breakdown": weekly_rows,
@@ -1471,26 +1480,31 @@ async def get_owner_weekly_fabrication_labor_cost_report(
             "month_number": month_num,
         }
 
-    monthly_report = await _compute_month(month)
+    months = [await _compute_month(month_num) for month_num in range(1, 13)]
+    monthly_report = months[month - 1]
 
-    annual_monthly_summary = []
-    for month_num in range(1, 13):
-        month_data = await _compute_month(month_num)
-        totals = month_data["totals"]
-        annual_monthly_summary.append(
-            {
-                "month": calendar.month_name[month_num],
-                "month_number": month_num,
-                "number_of_weeks": int(_to_float(totals.get("number_of_weeks", 0))),
-                "completed_sqft": round(_to_float(totals.get("completed_sqft", 0)), 2),
-                "gross_revenue": round(_to_float(totals.get("gross_revenue", 0)), 2),
-                "gross_profit": round(_to_float(totals.get("gross_profit", 0)), 2),
-                "total_labor_cost": round(_to_float(totals.get("total_labor_cost", 0)), 2),
-                "total_hours": round(_to_float(totals.get("total_hours", 0)), 2),
-                "labor_cost_pct_per_dollar_sold": round(_to_float(totals.get("labor_cost_pct_per_dollar_sold", 0)), 2),
-                "gross_profit_less_shop_total_cost_psf": round(_to_float(totals.get("gross_profit_less_shop_total_cost_psf", 0)), 2),
-            }
-        )
+    # Annual view: one row per month in the same shape as a weekly row, plus the year's totals.
+    annual_monthly_breakdown = [
+        {"month": month_data["month"], "month_number": month_data["month_number"], **month_data["totals"]}
+        for month_data in months
+    ]
+    annual_totals = _fabrication_period_totals([row for month_data in months for row in month_data["weekly_breakdown"]])
+
+    annual_monthly_summary = [
+        {
+            "month": row["month"],
+            "month_number": row["month_number"],
+            "number_of_weeks": int(_to_float(row.get("number_of_weeks", 0))),
+            "completed_sqft": row["completed_sqft"],
+            "gross_revenue": row["gross_revenue"],
+            "gross_profit": row["gross_profit"],
+            "total_labor_cost": row["total_labor_cost"],
+            "total_hours": row["total_hours"],
+            "labor_cost_pct_per_dollar_sold": row["labor_cost_pct_per_dollar_sold"],
+            "gross_profit_less_shop_total_cost_psf": row["gross_profit_less_shop_total_cost_psf"],
+        }
+        for row in annual_monthly_breakdown
+    ]
 
     month_start = date(year, month, 1)
     _, last_day = calendar.monthrange(year, month)
@@ -1543,6 +1557,15 @@ async def get_owner_weekly_fabrication_labor_cost_report(
                 "has_default_override": isinstance(payroll_overrides.get("_default"), dict),
             },
             "monthly_report": monthly_report,
+            "annual_report": {
+                "year": year,
+                "period": {
+                    "start_date": date(year, 1, 1).isoformat(),
+                    "end_date": date(year, 12, 31).isoformat(),
+                },
+                "monthly_breakdown": annual_monthly_breakdown,
+                "totals": annual_totals,
+            },
             "annual_monthly_summary": annual_monthly_summary,
         },
         "Owner weekly fabrication labor cost analysis report generated",

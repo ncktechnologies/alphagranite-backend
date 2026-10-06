@@ -45,7 +45,7 @@ def build_labor_cost_pdf(data: dict) -> bytes:
     from reportlab.lib.pagesizes import landscape, letter
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import inch
-    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Table, TableStyle
 
     monthly = data.get("monthly_report") or {}
     weeks: list[dict] = monthly.get("weekly_breakdown") or []
@@ -85,52 +85,46 @@ def build_labor_cost_pdf(data: dict) -> bytes:
         Paragraph(f"Weekly Breakdown – {month_label}", section_style),
     ]
 
-    header = ["METRIC", *[_week_label(w["week_ending"]) for w in weeks], "TOTAL"]
-    body = [
-        [row["label"], *[format_metric(w.get(row["key"]), row["format"]) for w in weeks],
-         format_metric(totals.get(row["key"]), row["format"])]
-        for row in metric_rows
-    ]
     usable_width = landscape(letter)[0] - 0.8 * inch
-    label_width = 2.6 * inch
-    value_width = (usable_width - label_width) / max(len(header) - 1, 1)
-    table = Table([header, *body], colWidths=[label_width, *[value_width] * (len(header) - 1)], repeatRows=1)
 
-    commands = [
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("BACKGROUND", (0, 0), (-1, 0), header_bg),
-        ("FONTSIZE", (0, 0), (-1, -1), 7.5),
-        ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("GRID", (0, 0), (-1, -1), 0.3, border),
-        ("TOPPADDING", (0, 0), (-1, -1), 2.5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
-        ("FONTNAME", (-1, 1), (-1, -1), "Helvetica-Bold"),  # TOTAL column, as on screen
-    ]
-    for index, row in enumerate(metric_rows, start=1):
-        commands.extend(row_style_commands(row.get("style"), index, colors))
-    table.setStyle(TableStyle(commands))
-    story.append(table)
-
-    summary = data.get("annual_monthly_summary") or []
-    if summary:
-        story.append(Spacer(1, 6))
-        story.append(Paragraph(f"Annual Monthly Summary – {period.get('start_date', '')[:4]}", section_style))
-        summary_columns = _summary_columns(summary[0])
-        summary_table = Table(
-            [[label for _, label, _ in summary_columns],
-             *[[format_metric(item.get(key), fmt) if fmt else str(item.get(key) or "-") for key, _, fmt in summary_columns]
-               for item in summary]],
-            repeatRows=1,
-        )
-        summary_table.setStyle(TableStyle([
+    def pivot_table(column_labels: list[str], column_values: list[dict], period_totals: dict,
+                    label_width: float, font_size: float):
+        """Metric rows x period columns + TOTAL, styled like the web table."""
+        header = ["METRIC", *column_labels, "TOTAL"]
+        body = [
+            [row["label"], *[format_metric(values.get(row["key"]), row["format"]) for values in column_values],
+             format_metric(period_totals.get(row["key"]), row["format"])]
+            for row in metric_rows
+        ]
+        value_width = (usable_width - label_width) / max(len(header) - 1, 1)
+        table = Table([header, *body], colWidths=[label_width, *[value_width] * (len(header) - 1)], repeatRows=1)
+        commands = [
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("BACKGROUND", (0, 0), (-1, 0), header_bg),
-            ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+            ("FONTSIZE", (0, 0), (-1, -1), font_size),
             ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("GRID", (0, 0), (-1, -1), 0.3, border),
-        ]))
-        story.append(summary_table)
+            ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+            ("FONTNAME", (-1, 1), (-1, -1), "Helvetica-Bold"),  # TOTAL column, as on screen
+        ]
+        for index, row in enumerate(metric_rows, start=1):
+            commands.extend(row_style_commands(row.get("style"), index, colors))
+        table.setStyle(TableStyle(commands))
+        return table
+
+    story.append(pivot_table([_week_label(w["week_ending"]) for w in weeks], weeks, totals, 2.6 * inch, 7.5))
+
+    # Annual summary: the same rows month by month with the year's total, as on screen.
+    annual = data.get("annual_report") or {}
+    months: list[dict] = annual.get("monthly_breakdown") or []
+    if months:
+        year = annual.get("year") or period.get("start_date", "")[:4]
+        story.append(PageBreak())
+        story.append(Paragraph(f"Annual Monthly Summary – {year}", section_style))
+        story.append(pivot_table([str(m.get("month", ""))[:3].upper() for m in months], months,
+                                 annual.get("totals") or {}, 2.1 * inch, 6.3))
 
     doc.build(story)
     return buf.getvalue()
@@ -148,23 +142,6 @@ def row_style_commands(style: Optional[str], row_index: int, colors) -> list[tup
         return [("FONTNAME", (0, row_index), (-1, row_index), "Helvetica-Bold")]
     return []
 
-
-_SUMMARY_COLUMNS = [
-    ("month", "MONTH", None),
-    ("number_of_weeks", "WEEKS", "days"),
-    ("completed_sqft", "SQFT", "number"),
-    ("gross_revenue", "GROSS REVENUE", "currency"),
-    ("gross_profit", "GROSS PROFIT", "currency"),
-    ("total_labor_cost", "LABOR COST", "currency"),
-    ("total_hours", "TOTAL HRS", "number"),
-    ("labor_cost_pct_per_dollar_sold", "LABOR % OF $ SOLD", "percent"),
-    ("gross_profit_less_installer_total_cost_psf", "GP LESS COST/SQFT", "currency"),
-    ("gross_profit_less_shop_total_cost_psf", "GP LESS COST/SQFT", "currency"),
-]
-
-
-def _summary_columns(sample: dict) -> list[tuple]:
-    return [column for column in _SUMMARY_COLUMNS if column[0] in sample]
 
 
 def pdf_filename(report_key: str, year: int, month: int) -> str:
