@@ -392,4 +392,4 @@ def test_each_report_shows_its_widget_groups():
     from src.app.service.labor_cost_report_widgets import FABRICATION_WIDGET_GROUPS, INSTALLER_WIDGET_GROUPS
 
     assert FABRICATION_WIDGET_GROUPS == ("revenue", "wages", "overhead")
-    assert INSTALLER_WIDGET_GROUPS == {"ag": ("revenue", "wages", "overhead"), "subs": (), "combined": ("revenue", "overhead")}
+    assert INSTALLER_WIDGET_GROUPS == {"ag": ("revenue", "wages", "overhead"), "subs": (), "combined": ("revenue", "wages", "overhead")}
