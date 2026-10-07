@@ -20,6 +20,7 @@ from src.app.routers.reports import (
     _week_windows_for_month,
 )
 from src.app.service.hcp_payroll_ingestion import pay_period_for_pull
+from src.app.service.performance_data import derive_static_data
 
 FRIDAY = 4
 
@@ -314,6 +315,11 @@ async def test_installer_report_blanks_future_weeks_and_builds_annual_months(mon
 
     monkeypatch.setattr(reports, "subcontractor_labor_by_week", _no_sub_labor)
 
+    async def _static_data(_db, year):
+        return derive_static_data(total_expenses=None, total_wages=240_000.0, breakeven_gross_revenue=None, year=year)
+
+    monkeypatch.setattr(reports, "get_static_data", _static_data)
+
     response = await reports.get_owner_weekly_installer_labor_cost_report(
         year=2026, month=9, total_employees=None, overhead_per_week=18512.69, week_ending_weekday=FRIDAY,
         payroll_overrides_json=None, db=_EmptyDb(), current_user=None,
@@ -340,3 +346,13 @@ async def test_installer_report_blanks_future_weeks_and_builds_annual_months(mon
     assert annual["totals"]["total_labor_cost"] == 15034.61
     assert annual["totals"]["weeks_with_data"] == sum(m["weeks_with_data"] for m in months.values())
     assert data["annual_monthly_summary"][9]["total_labor_cost"] is None
+
+    # Alpha Granite installers: wage and overhead widgets only, from September's totals.
+    widgets = {w["key"]: w for w in data["widgets"]}
+    assert list(widgets) == [
+        "wages_regular_delta", "wages_overtime_delta", "overtime_regular_pct_delta",
+        "overhead_per_week", "overhead_per_employee_week", "overhead_per_employee_day",
+    ]
+    assert widgets["wages_regular_delta"]["value"] == round(9737.75 - 20_000, 2)  # 240,000 / 12
+    assert widgets["wages_overtime_delta"]["value"] == round(5296.86 - (20_000 - 9737.75), 2)
+    assert widgets["overhead_per_employee_week"]["value"] == round(18512.69 / 40, 2)

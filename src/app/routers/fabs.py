@@ -3759,9 +3759,9 @@ async def _apply_templating_filters(
     
     # Apply date range filters
     if schedule_start_date is not None:
-        templating_query = templating_query.where(Templating.schedule_start_date >= schedule_start_date)
+        templating_query = templating_query.where(sa.cast(Templating.schedule_start_date, sa.Date) >= schedule_start_date)
     if schedule_due_date is not None:
-        templating_query = templating_query.where(Templating.schedule_due_date <= schedule_due_date)
+        templating_query = templating_query.where(sa.cast(Templating.schedule_due_date, sa.Date) <= schedule_due_date)
     
     # Apply schedule status filter
     if schedule_status == "scheduled":
@@ -3790,38 +3790,39 @@ async def _apply_templating_filters(
 
 
 def _apply_date_filter(query, date_filter: str):
-    """Apply predefined date filters to a query."""
+    """Apply predefined date filters to a query (by the calendar day the templating is scheduled)."""
     today = app_today()
+    scheduled_day = sa.cast(Templating.schedule_start_date, sa.Date)
     
     if date_filter == "today":
-        return query.where(Templating.schedule_start_date == today)
+        return query.where(scheduled_day == today)
     elif date_filter == "this_week":
         start = today - timedelta(days=today.weekday())
         end = start + timedelta(days=6)
-        return query.where(Templating.schedule_start_date.between(start, end))
+        return query.where(scheduled_day.between(start, end))
     elif date_filter == "last_week":
         # Start from last Monday
         start = today - timedelta(days=today.weekday() + 7)
         end = start + timedelta(days=6)
-        return query.where(Templating.schedule_start_date.between(start, end))
+        return query.where(scheduled_day.between(start, end))
     elif date_filter == "this_month":
         start = today.replace(day=1)
         end = (start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
-        return query.where(Templating.schedule_start_date.between(start, end))
+        return query.where(scheduled_day.between(start, end))
     elif date_filter == "last_month":
         first = today.replace(day=1)
         last_month_end = first - timedelta(days=1)
         last_month_start = last_month_end.replace(day=1)
-        return query.where(Templating.schedule_start_date.between(last_month_start, last_month_end))
+        return query.where(scheduled_day.between(last_month_start, last_month_end))
     elif date_filter == "next_week":
         # Next Monday
         start = today + timedelta(days=(7 - today.weekday()))
         end = start + timedelta(days=6)
-        return query.where(Templating.schedule_start_date.between(start, end))
+        return query.where(scheduled_day.between(start, end))
     elif date_filter == "next_month":
         first_next = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
         last_next = (first_next + timedelta(days=32)).replace(day=1) - timedelta(days=1)
-        return query.where(Templating.schedule_start_date.between(first_next, last_next))
+        return query.where(scheduled_day.between(first_next, last_next))
     
     return query
 

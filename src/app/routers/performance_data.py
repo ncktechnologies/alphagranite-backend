@@ -49,7 +49,7 @@ def report_weeks_for_year(year: int) -> list[dict]:
                 "week_ending": window["week_end"].isoformat(),
                 "week_start": window["overlap_start"].isoformat(),
                 "month_number": month,
-                "number_of_days": window["number_of_days"],
+                "number_of_days": window["number_of_weekdays"],  # working days (Mon-Fri), as on the reports
             })
     return weeks
 

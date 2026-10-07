@@ -1,5 +1,6 @@
 import os
 import pathlib
+from datetime import date, datetime, time
 from dotenv import load_dotenv
 from functools import lru_cache
 from typing import AsyncGenerator
@@ -18,6 +19,8 @@ def _use_app_timezone_for_datetimes() -> None:
     timestamptz and Postgres stores them in the session TimeZone (pinned to
     America/Chicago on the engine below); reads come back naive and are
     labelled America/Chicago. Naive input is assumed to already be Chicago time.
+    A plain date compared with one of these columns is taken as midnight that
+    day, the same as Postgres does when it compares a date with a timestamp.
     """
     try:
         from sqlmodel.sql.sqltypes import UTCDateTime
@@ -25,6 +28,8 @@ def _use_app_timezone_for_datetimes() -> None:
         return
 
     def process_bind_param(self, value, dialect):
+        if isinstance(value, date) and not isinstance(value, datetime):
+            value = datetime.combine(value, time.min)
         return to_app_tz(value)
 
     def process_result_value(self, value, dialect):

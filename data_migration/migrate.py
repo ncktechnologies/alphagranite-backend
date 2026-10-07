@@ -22,6 +22,7 @@ import re
 import sys
 from collections import defaultdict
 from datetime import datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from zoneinfo import ZoneInfo
 
 import psycopg2
@@ -60,7 +61,7 @@ def needed(not_needed_val, default=True):
     return (not b) if b is not None else default
 
 
-def parse_float(v):
+def parse_decimal(v):
     if v is None:
         return None
     s = str(v).strip().lower().replace(",", "").replace("$", "")
@@ -68,14 +69,24 @@ def parse_float(v):
     if s in ("", "n/a", "na", "none", "-", "--"):
         return None
     try:
-        return float(s)
-    except ValueError:
+        return Decimal(s)
+    except InvalidOperation:
+        return None
+
+
+def parse_float(v):
+    value = parse_decimal(v)
+    if value is None or not value.is_finite():
+        return None
+    try:
+        return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    except InvalidOperation:
         return None
 
 
 def parse_int(v):
-    f = parse_float(v)
-    return int(f) if f is not None else None
+    value = parse_decimal(v)
+    return int(value) if value is not None else None
 
 
 def parse_dt(v):
@@ -112,14 +123,14 @@ def parse_duration_sec(v):
     s = str(v).strip().lower()
     if not s:
         return None
-    num = parse_float(s)
+    num = parse_decimal(s)
     if num is None:
         return None
     if "hour" in s or s.endswith("h"):
-        return int(num * 3600)
+        return int(num * Decimal(3600))
     if "sec" in s:
         return int(num)
-    return int(num * 60)
+    return int(num * Decimal(60))
 
 
 def parse_thickness_mm(v):
@@ -534,8 +545,8 @@ def migrate(ctx, data):
     for jn, rows in jobs_agg.items():
         first = rows[0]
         acct_id = ctx.account(first.get("account"), jn)
-        sqft = sum(parse_float(r.get("total_sqft")) or 0 for r in rows)
-        rev = sum(parse_float(r.get("revenue")) or 0 for r in rows)
+        sqft = round(sum(parse_float(r.get("total_sqft")) or 0 for r in rows), 2)
+        rev = round(sum(parse_float(r.get("revenue")) or 0 for r in rows), 2)
         starts = [created_date(r) for r in rows]
         starts = [d for d in starts if d]
         name = next((r.get("job_name", "").strip() for r in rows
@@ -772,7 +783,7 @@ def make_stage_rows(ctx, r, fab_id, created):
         "scheduled_end_date": created,
         "drafter_end_date": parse_dt(r.get("draft_date_completed")),
         "status_id": ACTIVE, "created_at": created, "updated_at": now,
-        "updated_by": M, "total_sqft_required_to_draft": r.get("total_sqft") or "0",
+        "updated_by": M, "total_sqft_required_to_draft": parse_float(r.get("total_sqft")) or 0,
         "draft_note": r.get("draft_notes", "").strip() or None,
         "is_redrafting": False,
         "is_completed": bool(parse_bool(r.get("draft_completed")))})
@@ -791,7 +802,7 @@ def make_stage_rows(ctx, r, fab_id, created):
         "slab_smith_type": "CUST", "drafter_id": M, "status_id": ACTIVE,
         "start_date": created,
         "end_date": parse_dt(r.get("slabsmith_completion_date")),
-        "total_sqft_completed": r.get("total_sqft") or None,
+        "total_sqft_completed": parse_float(r.get("total_sqft")),
         "is_completed": bool(parse_bool(r.get("slabsmith_complete"))),
         "slabsmith_completed_date": parse_dt(r.get("slabsmith_completion_date")),
         "created_at": created, "updated_at": now, "updated_by": M})
@@ -810,7 +821,7 @@ def make_stage_rows(ctx, r, fab_id, created):
         "drafter_end_date": parse_dt(r.get("final_date_completed")),
         "is_completed": bool(parse_bool(r.get("final_completed"))),
         "status_id": ACTIVE, "created_at": created, "updated_at": now,
-        "updated_by": M, "total_sqft_required_to_draft": r.get("total_sqft") or "0",
+        "updated_by": M, "total_sqft_required_to_draft": parse_float(r.get("total_sqft")) or 0,
         "notes": json.dumps({"migrated_final_notes": r["final_notes"].strip()})
                  if r.get("final_notes", "").strip() else None})
     ctx.person(r.get("final_by"), f"fab {fab_id} final_by")
@@ -848,7 +859,7 @@ def make_stage_rows(ctx, r, fab_id, created):
         "is_completed": bool(parse_bool(r.get("complete"))),
         "shop_schedule_date": parse_dt(r.get("cut_date_scheduled")),
         "status_id": ACTIVE, "created_at": created, "updated_at": now,
-        "updated_by": M, "total_sqft": r.get("cut_sqft") or r.get("total_sqft"),
+        "updated_by": M, "total_sqft": parse_float(r.get("cut_sqft") or r.get("total_sqft")),
         "installation_date": parse_dt(r.get("install_date"))})
     # Cost of stone lives on fabs.cost_of_stone (set above), not in the separate
     # cost_of_stones table. Remove rows earlier imports created there.
@@ -941,7 +952,7 @@ def make_stage_rows(ctx, r, fab_id, created):
             "scheduled_start_date": parse_dt(r.get("wj_date_scheduled")),
             "scheduled_end_date": parse_dt(r.get("wj_date_scheduled")),
             "actual_start_date": parse_dt(r.get("wj_date_scheduled")),
-            "actual_end_date": done_d, "total_ln_ft": r.get("wj_linft"),
+            "actual_end_date": done_d, "total_ln_ft": parse_float(r.get("wj_linft")),
             "completed_ln_ft": None,
             "is_completed": bool(done_d),
             "status_id": ACTIVE, "created_at": created,
@@ -954,7 +965,7 @@ def make_stage_rows(ctx, r, fab_id, created):
             "is_completed": bool(done_d),
             "status_id": ACTIVE, "created_at": created,
             "updated_at": now, "updated_by": M,
-            "total_ln_ft": r.get("wj_linft")})
+            "total_ln_ft": parse_float(r.get("wj_linft"))})
     # resurface
     if any((r.get(c, "").strip() for c in ("resurface_sqft", "resurface_percent",
                                            "resurface_date_completed"))):
@@ -964,8 +975,8 @@ def make_stage_rows(ctx, r, fab_id, created):
                 "resurface_schedulings.technician_id (resurface_by)", r.get("resurface_by")),
             "scheduled_start_date": sched, "scheduled_end_date": sched,
             "actual_start_date": sched, "actual_end_date": done_d,
-            "total_sqft": r.get("resurface_sqft"),
-            "completed_sqft": r.get("resurface_sqft") if done_d else None,
+            "total_sqft": parse_float(r.get("resurface_sqft")),
+            "completed_sqft": parse_float(r.get("resurface_sqft")) if done_d else None,
             "is_completed": bool(done_d),
             "status_id": ACTIVE, "created_at": created,
             "updated_at": now, "updated_by": M,
@@ -979,7 +990,7 @@ def make_stage_rows(ctx, r, fab_id, created):
             "scheduled_install_date": inst_d or comp_d,
             "scheduled_end_date": inst_d or comp_d,
             "actual_install_date": comp_d if complete else None,
-            "total_sqft": r.get("total_sqft"),
+            "total_sqft": parse_float(r.get("total_sqft")),
             "is_completed": complete,
             "status_id": ACTIVE, "created_at": created,
             "updated_at": now, "updated_by": M,

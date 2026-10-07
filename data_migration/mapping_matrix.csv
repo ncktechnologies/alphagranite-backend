@@ -155,12 +155,11 @@ Fab_Status,redo_person,revisions,person_name,Direct,Also fabs.redo_requested_by 
 Fab_Status,redo_person,fabs,redo_requested_by,Transform-Deferred,Name->users; null + backlog.
 Fab_Status,redo_cost,fabs,redo_total_sqft,Transform,"CAUTION: source is cost but target col is sqft; store cost text in revisions.revision_notes, set redo_total_sqft=null + flag. See note."
 Fab_Status,redo_cost,revisions,revision_notes,Transform,Archive redo_cost text here: REDO COST=<val>.
-Fab_Status,revenue,fabs,revenue,Transform,To float.
-Fab_Status,revenue,business_jobs,project_value,Transform,SUM(revenue) per job_number.
-Fab_Status,cost_of_stone,fabs,cost_of_stone,Transform,To float. Also cost_of_stones.total_cost text mirror.
-Fab_Status,cost_of_stone,cost_of_stones,total_cost,Transform,varchar; one cost_of_stones row per fab if cost fields present.
-Fab_Status,cost_entered,cost_of_stones,is_completed,Transform,Bool: cost_entered=true -> is_completed true.
-Fab_Status,gp,fabs,gp,Transform,To float.
+Fab_Status,revenue,fabs,revenue,Transform,Decimal rounded to 2 places.
+Fab_Status,revenue,business_jobs,project_value,Transform,Sum FAB revenue per job_number and round to 2 places.
+Fab_Status,cost_of_stone,fabs,cost_of_stone,Transform,Decimal rounded to 2 places; do not write to cost_of_stones or fabs.cost_of_stone_id.
+Fab_Status,cost_entered,,,Skip,Not used; no cost_of_stones mirror row is created.
+Fab_Status,gp,fabs,gp,Transform,Decimal rounded to 2 places.
 Fab_Status,saw_cut_lnft,fabs,saw_cut_lnft,Transform,No Caspio source; null (shop detail only).
 Fab_Status,saw_miter_lnft,fabs,saw_miter_lnft,Transform,No source; null.
 Fab_Status,wj_miter_lnft,fabs,wj_miter_lnft,Transform,No source; null.

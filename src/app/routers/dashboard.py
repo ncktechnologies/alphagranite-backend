@@ -157,7 +157,7 @@ async def get_dashboard(
             )).scalar() or 0
         )
     static_data = await get_static_data(db, end_date.year)
-    breakeven_gross_profit = breakeven_gross_profit_for_period(static_data["total_expenses"], delta_period)
+    breakeven_gross_profit = breakeven_gross_profit_for_period(static_data["total_expenses"], delta_period, end_date.year)
     
     # 7. Newly Assigned FABs (recent assignments)
     newly_assigned_query = select(

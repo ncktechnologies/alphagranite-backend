@@ -11,6 +11,8 @@ Imported FABs are flagged `fabs.is_migrated = true` with `fabs.migration_source 
 Mapping rules worth knowing:
 
 - Caspio checkboxes export as `-1` (checked) / `0` (unchecked).
+- Imported decimal measurements and money values are rounded to 2 decimal places; integer and duration conversions retain their existing behavior.
+- Cost of stone is stored in `fabs.cost_of_stone`; the importer does not create `cost_of_stones` rows or set `fabs.cost_of_stone_id`.
 - The Fab_Status **Complete** checkbox means install complete. Those FABs get `current_stage = 'install_completion'`, `next_stage = NULL` and stay Active (status 1), the same as FABs completed in the app. They also get a completed `install_schedulings` row and a completed `install_completions` row, and their shop plans are set to 100%, so they match the app's `install_status=complete` filter.
 - Incomplete FABs are placed on the Odyssey stage matching their Caspio flags (templating, pre_draft_review, … cut_list, install_scheduling, install_completion). No `install_completions` row is created for them, so installers can complete them in the app.
 - Caspio `install_date` is the install date. Caspio `completion_date` is the shop completion date: it is used only when `install_date` is blank, and the raw value is kept in `fabs.notes`.
