@@ -359,7 +359,7 @@ def test_wage_widgets_use_the_monthly_wages_budget():
     assert widgets["overtime_regular_pct_delta"]["breakeven"] == 30.0
     assert widgets["overtime_regular_pct_delta"]["value"] == 10.0
     assert widgets["overtime_regular_pct_delta"]["format"] == "percent"
-    assert {w["good_when"] for w in widgets.values()} == {"negative"}
+    assert {w["good_when"] for w in widgets.values()} == {"positive"}
 
 
 def test_overhead_widgets_per_employee():
