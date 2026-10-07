@@ -8,7 +8,7 @@ widgets that apply to it:
   revenue  - Gross Revenue, Gross Profit and Average Revenue per Day deltas
              (actual - breakeven; positive is good)
   wages    - Wages Regular, Wages Overtime and Overtime/Regular % deltas
-             (actual - breakeven; positive is good)
+             (actual - breakeven; positive is bad)
   overhead - Overhead / Week, per Employee / Week and per Employee / Day
 
 Wages breakevens come from Total Wages / 12 (the monthly wages budget):
@@ -36,7 +36,7 @@ NO_REGULAR_WAGES_NOTE = "No regular wages this month"
 # Widget groups per report, in display order.
 FABRICATION_WIDGET_GROUPS = (REVENUE, WAGES, OVERHEAD)
 INSTALLER_WIDGET_GROUPS = {
-    INSTALLER_VARIANT_AG: (WAGES, OVERHEAD),
+    INSTALLER_VARIANT_AG: (REVENUE, WAGES, OVERHEAD),
     INSTALLER_VARIANT_SUBS: (),
     INSTALLER_VARIANT_COMBINED: (REVENUE, OVERHEAD),
 }
@@ -108,12 +108,12 @@ def build_labor_cost_widgets(
         overtime_pct_be = overtime_be / regular * 100 if has_regular and overtime_be is not None else None
         widgets += [
             _widget("wages_regular_delta", WAGES, "Wages Regular Delta",
-                    _delta(regular, wages_budget), breakeven=_round(wages_budget), good_when=GOOD_WHEN_POSITIVE),
+                    _delta(regular, wages_budget), breakeven=_round(wages_budget), good_when=GOOD_WHEN_NEGATIVE),
             _widget("wages_overtime_delta", WAGES, "Wages Overtime Delta",
-                    _delta(overtime, overtime_be), breakeven=_round(overtime_be), good_when=GOOD_WHEN_POSITIVE),
+                    _delta(overtime, overtime_be), breakeven=_round(overtime_be), good_when=GOOD_WHEN_NEGATIVE),
             _widget("overtime_regular_pct_delta", WAGES, "Overtime/Regular Delta",
                     _delta(overtime_pct, overtime_pct_be), fmt="percent", breakeven=_round(overtime_pct_be),
-                    good_when=GOOD_WHEN_POSITIVE,
+                    good_when=GOOD_WHEN_NEGATIVE,
                     missing_note=NO_STATIC_DATA_NOTE if wages_budget is None else NO_REGULAR_WAGES_NOTE),
         ]
 

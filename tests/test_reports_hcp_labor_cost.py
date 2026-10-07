@@ -350,6 +350,7 @@ async def test_installer_report_blanks_future_weeks_and_builds_annual_months(mon
     # Alpha Granite installers: wage and overhead widgets only, from September's totals.
     widgets = {w["key"]: w for w in data["widgets"]}
     assert list(widgets) == [
+        "gross_revenue_delta", "gross_profit_delta", "average_revenue_per_day_delta",
         "wages_regular_delta", "wages_overtime_delta", "overtime_regular_pct_delta",
         "overhead_per_week", "overhead_per_employee_week", "overhead_per_employee_day",
     ]

@@ -359,7 +359,7 @@ def test_wage_widgets_use_the_monthly_wages_budget():
     assert widgets["overtime_regular_pct_delta"]["breakeven"] == 30.0
     assert widgets["overtime_regular_pct_delta"]["value"] == 10.0
     assert widgets["overtime_regular_pct_delta"]["format"] == "percent"
-    assert {w["good_when"] for w in widgets.values()} == {"positive"}
+    assert {w["good_when"] for w in widgets.values()} == {"negative"}
 
 
 def test_overhead_widgets_per_employee():
@@ -392,4 +392,4 @@ def test_each_report_shows_its_widget_groups():
     from src.app.service.labor_cost_report_widgets import FABRICATION_WIDGET_GROUPS, INSTALLER_WIDGET_GROUPS
 
     assert FABRICATION_WIDGET_GROUPS == ("revenue", "wages", "overhead")
-    assert INSTALLER_WIDGET_GROUPS == {"ag": ("wages", "overhead"), "subs": (), "combined": ("revenue", "overhead")}
+    assert INSTALLER_WIDGET_GROUPS == {"ag": ("revenue", "wages", "overhead"), "subs": (), "combined": ("revenue", "overhead")}
