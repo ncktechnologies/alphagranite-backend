@@ -5928,6 +5928,7 @@ async def get_fabs_cost_of_stone_queue(
     limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
     search: Optional[str] = Query(None, description="Search value"),
     type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, fab_info, account_name"),
+    fab_type: Optional[str] = Query(None, description="Filter by fab type"),
     date_filter: Optional[str] = Query(None, description="Predefined date filter: today, this_week, last_week, this_month, last_month, next_week, next_month"),
     sct_completed_start: Optional[date] = Query(None, description="Filter by sct_completed_date on or after this date (YYYY-MM-DD)"),
     sct_completed_end: Optional[date] = Query(None, description="Filter by sct_completed_date on or before this date (YYYY-MM-DD)"),
@@ -5992,6 +5993,9 @@ async def get_fabs_cost_of_stone_queue(
         sct_completed_start,
         sct_completed_end,
     )
+
+    if fab_type:
+        base_query = base_query.where(Fab.fab_type.ilike(f"%{fab_type}%"))
 
     search_filter = None
     if search and type:

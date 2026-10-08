@@ -19,7 +19,7 @@ Fab_Status,creation_date,fabs,created_at,Transform,CST->UTC naive; fallback now(
 Fab_Status,creation_date,business_jobs,created_at,Transform,MIN(creation_date) per job_number.
 Fab_Status,creation_date,business_jobs,start_date,Transform,Date part of MIN(creation_date) per job.
 Fab_Status,template_not_needed,fabs,template_needed,Transform,Invert boolean: needed = NOT not_needed. Null->True.
-Fab_Status,template_date_scheduled,templatings,schedule_start_date,Transform,One templatings row per fab; schedule_due_date=same or +1d if missing.
+Fab_Status,template_date_scheduled,templatings,schedule_start_date,Transform,One templatings row per fab; schedule_due_date=same. Blank in Caspio -> both dates NULL and is_templating_schedule=false (unscheduled) unless template_completed.
 Fab_Status,template_completed,templatings,is_completed,Transform,Bool; also fabs.template_received/template_review_complete derivation.
 Fab_Status,template_completed,fabs,template_received,Transform,template_received = template_completed OR template_date_completed present.
 Fab_Status,template_date_completed,fabs,template_completed_date,Direct,

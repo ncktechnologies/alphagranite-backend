@@ -767,15 +767,20 @@ def make_stage_rows(ctx, r, fab_id, created):
     complete = fab_id in ctx.complete_fabs
     sched = parse_dt(r.get("shop_date_scheduled")) or created
     # templatings / draftings / slab_smiths / sales_cts / final_programmings
+    # No Caspio scheduled date: leave the dates blank and the row unscheduled, so the
+    # FAB shows with no date in Template Scheduling and can be scheduled in the app.
+    template_scheduled = parse_dt(r.get("template_date_scheduled"))
+    template_completed = bool(parse_bool(r.get("template_completed")))
     one_per_fab(ctx, "templatings", "templatings", fab_id, {
-        "schedule_start_date": parse_dt(r.get("template_date_scheduled")) or created,
-        "schedule_due_date": parse_dt(r.get("template_date_scheduled")) or created,
+        "schedule_start_date": template_scheduled,
+        "schedule_due_date": template_scheduled,
         "technician_id": ctx.employees.by_list_id(
             "templatings.technician_id (template_by)", "template", r.get("template_by")) or M,
         "actual_start_date": None,
         "actual_end_date": parse_dt(r.get("template_date_completed")),
-        "is_templating_schedule": True, "rescheduled": False,
-        "is_completed": bool(parse_bool(r.get("template_completed"))),
+        "is_templating_schedule": template_scheduled is not None or template_completed,
+        "rescheduled": False,
+        "is_completed": template_completed,
         "status_id": ACTIVE, "created_at": created, "updated_at": now,
         "updated_by": M})
     one_per_fab(ctx, "draftings", "draftings", fab_id, {
