@@ -47,6 +47,21 @@ def test_pagination_limits_ids_before_detail_joins(stage):
     assert sql.endswith("LIMIT 25 OFFSET 0")
 
 
+@pytest.mark.parametrize("stage", ["shop", "drafting"])
+def test_list_filters_are_not_repeated_outside_page(stage):
+    latest = latest_templating()
+    query = fabs._build_fab_list_query(
+        None, None, None, None, stage, None, None, None, latest,
+    )
+    sql = compile_sql(fabs._paginate_fab_list_query(query, 0, 25, stage, latest))
+    before_page, rest = sql.split("(SELECT fabs.id AS id", 1)
+    outer_sql = before_page + rest.split(") AS fab_page", 1)[1]
+
+    assert "fabs.current_stage = " in rest
+    assert "fabs.current_stage = " not in outer_sql
+    assert "shop_cut_plans" not in outer_sql
+
+
 def test_search_and_filters_apply_before_pagination():
     latest = latest_templating()
     query = fabs._build_fab_list_query(

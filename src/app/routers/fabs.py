@@ -1184,7 +1184,6 @@ async def get_fabs(
     else:
         search_filter = None
 
-    _is_all_plan_view = isinstance(plan_view, str) and plan_view.strip().lower() == "all"
     query = _build_fab_list_query(
         job_id, fab_type, sales_person_id, status_id, current_stage, next_stage,
         None,  # search is handled below
@@ -1195,9 +1194,6 @@ async def get_fabs(
         drafter_id,
         plan_view,
     )
-
-    if current_stage == "shop" and not _is_all_plan_view:
-        query = query.where(_active_shop_cut_plan_visibility_filter())
 
     if installer_assignment_filter is not None:
         query = query.where(installer_assignment_filter)
@@ -1280,8 +1276,6 @@ async def get_fabs(
         count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
     if search and type == "account_name":
         count_query = count_query.join(Account, BusinessJob.account_id == Account.id, isouter=True)
-    if current_stage == "shop" and not _is_all_plan_view:
-        count_query = count_query.where(_active_shop_cut_plan_visibility_filter())
 
     # Apply all basic filters to count query
     if job_id is not None:
@@ -1387,8 +1381,6 @@ async def get_fabs(
             func.sum(Fab.no_of_pieces).label("no_of_pieces")
         ).select_from(Fab).where(_stage_filter_condition(current_stage, plan_view))
 
-        if current_stage == "shop" and not _is_all_plan_view:
-            stage_totals_query = stage_totals_query.where(_active_shop_cut_plan_visibility_filter())
         if current_stage == "install_completion" and _installer_scheduling_filter is not None:
             stage_totals_query = stage_totals_query.where(_installer_scheduling_filter)
 
@@ -3827,31 +3819,8 @@ def _apply_date_filter(query, date_filter: str):
     return query
 
 
-def _build_fab_list_query(
-    job_id: Optional[int],
-    fab_type: Optional[str],
-    sales_person_id: Optional[int],
-    status_id: Optional[int],
-    current_stage: Optional[str],
-    next_stage: Optional[str],
-    search: Optional[str],
-    templating_fab_ids: Optional[List[int]],
-    latest_templating,
-    shop_date_start: Optional[date] = None,
-    shop_date_end: Optional[date] = None,
-    template_completed_start: Optional[date] = None,
-    template_completed_end: Optional[date] = None,
-    predraft_completed_start: Optional[date] = None,
-    predraft_completed_end: Optional[date] = None,
-    draft_completed_start: Optional[date] = None,
-    draft_completed_end: Optional[date] = None,
-    sct_completed_start: Optional[date] = None,
-    sct_completed_end: Optional[date] = None,
-    date_filter: Optional[str] = None,
-    drafter_id: Optional[int] = None,
-    plan_view: Optional[str] = None,
-) -> select:
-    """Build the main FAB list query with all joins."""
+def _fab_list_detail_select(latest_templating) -> select:
+    """FAB list columns and detail joins, without any filters."""
     from sqlalchemy.orm import aliased
     
     TechnicianUser = aliased(User)
@@ -3896,6 +3865,36 @@ def _build_fab_list_query(
     query = query.join(TechnicianUser, latest_templating.c.technician_id == TechnicianUser.id, isouter=True)
     query = query.join(DrafterUser, Fab.drafter_id == DrafterUser.id, isouter=True)
     query = query.join(DrafterAssignedByUser, Fab.drafter_assigned_by == DrafterAssignedByUser.id, isouter=True)
+
+    return query
+
+
+def _build_fab_list_query(
+    job_id: Optional[int],
+    fab_type: Optional[str],
+    sales_person_id: Optional[int],
+    status_id: Optional[int],
+    current_stage: Optional[str],
+    next_stage: Optional[str],
+    search: Optional[str],
+    templating_fab_ids: Optional[List[int]],
+    latest_templating,
+    shop_date_start: Optional[date] = None,
+    shop_date_end: Optional[date] = None,
+    template_completed_start: Optional[date] = None,
+    template_completed_end: Optional[date] = None,
+    predraft_completed_start: Optional[date] = None,
+    predraft_completed_end: Optional[date] = None,
+    draft_completed_start: Optional[date] = None,
+    draft_completed_end: Optional[date] = None,
+    sct_completed_start: Optional[date] = None,
+    sct_completed_end: Optional[date] = None,
+    date_filter: Optional[str] = None,
+    drafter_id: Optional[int] = None,
+    plan_view: Optional[str] = None,
+) -> select:
+    """Build the main FAB list query with all joins."""
+    query = _fab_list_detail_select(latest_templating)
     
     # Apply basic filters
     if job_id is not None:
@@ -4220,7 +4219,8 @@ def _paginate_fab_list_query(
         page_query, skip, limit, current_stage, latest_templating,
     ).order_by(Fab.id.asc())
     page = page_query.subquery("fab_page")
-    query = query.where(Fab.id.in_(select(page.c.id)))
+    # Re-applying the list filters here made Postgres join every matching FAB before narrowing to the page.
+    query = _fab_list_detail_select(latest_templating).where(Fab.id.in_(select(page.c.id)))
     return _apply_pagination_and_ordering(
         query, 0, limit, current_stage, latest_templating,
     ).order_by(Fab.id.asc())
