@@ -1,5 +1,10 @@
 # Alpha Granite Backend - Docker Deployment Guide
 
+For the production stack sharing a host with staging, follow
+[PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md). It uses a separate Compose
+file and explicit database bootstrap; the older automatic-migration instructions
+below do not apply to that production stack.
+
 ## 🚀 Quick Start Deployment
 
 ### Prerequisites

@@ -56,9 +56,9 @@ LAST_NAME = _env_default("SUPERUSER_LAST_NAME", "Admin")
 
 async def _create_superuser_async():
     # Import SessionLocal lazily so config loads with env vars applied
-    from src.app.utils.config import SessionLocal, DATABASE_URL
+    from src.app.utils.config import SessionLocal
 
-    print(f"Using DATABASE_URL: {DATABASE_URL}")
+    print("Creating superuser in the configured database.")
 
     async with SessionLocal() as db:  # type: ignore
         # Seed Status with value_id=1 if missing
