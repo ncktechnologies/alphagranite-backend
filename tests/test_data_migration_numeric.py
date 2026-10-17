@@ -1,6 +1,7 @@
 import sys
 import sqlite3
 import csv
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -13,6 +14,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "data_migration"))
 from migrate import Ctx, parse_duration_sec, parse_float, parse_int
 from split_fab_status import split_csv
 from clear_unreviewed_shop_plans import cleanup, read_target_fab_ids
+from backfill_predraft_completed_dates import read_review_dates
 from data_migration.backfill_completed_cnc_draftings import backfill, read_csv_fab_ids
 
 
@@ -114,6 +116,32 @@ def test_unreviewed_shop_cleanup_refuses_ambiguous_csv(tmp_path, contents):
     source.write_text(contents)
     with pytest.raises(ValueError):
         read_target_fab_ids(source)
+
+
+def test_predraft_backfill_reads_review_dates_for_requested_ids_only(tmp_path):
+    source = tmp_path / "active.csv"
+    source.write_text(
+        "fab_id,pre_draft_review\n1,9/18/2026 1:03:33 PM\n2,\n3,10/15/2026 7:12:12 PM\n"
+    )
+
+    assert read_review_dates(source, [1, 3]) == {
+        1: datetime(2026, 9, 18, 13, 3, 33),
+        3: datetime(2026, 10, 15, 19, 12, 12),
+    }
+
+
+@pytest.mark.parametrize("contents, fab_ids", [
+    ("fab_id,pre_draft_review\n1,9/18/2026 1:03:33 PM\n", [1, 2]),
+    ("fab_id,pre_draft_review\n1,\n", [1]),
+    ("fab_id,pre_draft_review\n1,not a date\n", [1]),
+    ("fab_id,pre_draft_review\n1,9/18/2026\n1,9/19/2026\n", [1]),
+    ("fab_id,draft_date_completed\n1,9/18/2026\n", [1]),
+])
+def test_predraft_backfill_refuses_missing_or_ambiguous_dates(tmp_path, contents, fab_ids):
+    source = tmp_path / "active.csv"
+    source.write_text(contents)
+    with pytest.raises(ValueError):
+        read_review_dates(source, fab_ids)
 
 
 @pytest.mark.parametrize("apply", [False, True])
