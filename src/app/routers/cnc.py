@@ -233,7 +233,7 @@ async def manage_cnc_session(
         if not active_session:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No active CNC session found to end")
 
-        end_time = session_data.session_end_time or timestamp
+        end_time = strip_timezone(session_data.session_end_time or timestamp)
 
         if active_session.current_pause_start_time:
             pause_duration = int((end_time - strip_timezone(active_session.current_pause_start_time)).total_seconds())
