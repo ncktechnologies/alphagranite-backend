@@ -5,8 +5,10 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from pydantic import ValidationError
 
-from src.app.interface.business_schemas import CNCDraftingSessionAction, FinalProgrammingSessionUpdate, SlabSmithSessionUpdate
-from src.app.routers import cnc, final_programming, slabsmith
+from src.app.interface.business_schemas import (
+    CNCDraftingSessionAction, DraftingSessionAction, FinalProgrammingSessionUpdate, SlabSmithSessionUpdate,
+)
+from src.app.routers import cnc, drafting, final_programming, slabsmith
 from src.app.utils.helpers import APP_TZ
 
 
@@ -84,9 +86,15 @@ async def test_stage_session_status_returns_latest_non_null_progress(status_hand
     "2026-10-17T10:00:00", "2026-10-17T10:00:00-05:00", "2026-10-17T15:00:00Z",
 ])
 @pytest.mark.parametrize("paused", [False, True])
-async def test_cnc_session_end_normalizes_client_datetimes(monkeypatch, end_field, end_value, paused):
+@pytest.mark.parametrize("router, handler, schema", [
+    (cnc, cnc.manage_cnc_session, CNCDraftingSessionAction),
+    (drafting, drafting.manage_drafting_session, DraftingSessionAction),
+])
+async def test_session_end_normalizes_client_datetimes(
+    monkeypatch, end_field, end_value, paused, router, handler, schema,
+):
     end_time = datetime(2026, 10, 17, 10, tzinfo=APP_TZ)
-    monkeypatch.setattr(cnc, "app_now", lambda: end_time)
+    monkeypatch.setattr(router, "app_now", lambda: end_time)
     session = SimpleNamespace(
         id=11, fab_id=7, drafter_id=3, status="paused" if paused else "drafting",
         session_start_time=datetime(2026, 10, 17, 9, tzinfo=APP_TZ),
@@ -101,9 +109,9 @@ async def test_cnc_session_end_normalizes_client_datetimes(monkeypatch, end_fiel
     db.add = Mock()
     db.commit = AsyncMock()
     db.refresh = AsyncMock()
-    payload = CNCDraftingSessionAction(action="end", drafter_id=3, **{end_field: end_value})
+    payload = schema(action="end", drafter_id=3, **{end_field: end_value})
 
-    response = await cnc.manage_cnc_session(
+    response = await handler(
         fab_id=7, session_data=payload, db=db, current_user=SimpleNamespace(id=3),
     )
 

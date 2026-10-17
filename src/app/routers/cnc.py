@@ -66,7 +66,7 @@ async def manage_cnc_session(
         raise error_response("Drafter not found", 404)
 
     action = session_data.action.lower()
-    timestamp = session_data.timestamp or strip_timezone(app_now())
+    timestamp = strip_timezone(session_data.timestamp or app_now())
 
     # Get active session for this fab
     active_session_result = await db.execute(
