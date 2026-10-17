@@ -24,7 +24,9 @@ services:
       - ${STATIC_HOST_DIR:-/var/www/production/backend/alphagranite-backend/static}:/app/static
       - ./alembic/versions:/app/alembic/versions
     entrypoint: []
-    command: uvicorn src.app.main:app --host 0.0.0.0 --port 8003
+    command: uvicorn src.app.main:app --host 0.0.0.0 --port 8003 --workers 4
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8003/health/"]
     environment:
       - TZ=America/Chicago
       - APP_TIMEZONE=America/Chicago
@@ -33,6 +35,7 @@ services:
       - BASE_URL=${BASE_URL:-https://api.odysseytracker.com}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
       - HCP_PAYROLL_SCHEDULER_ENABLED=false   # celery beat owns scheduling
+      - EOM_STATUS_REPORT_ENABLED=false
     depends_on:
       redis:
         condition: service_healthy
@@ -100,6 +103,27 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+
+  monthly_reports:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ${APP_ENV_FILE:-.env.production}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./logs:/app/logs
+    entrypoint: []
+    command: python -m src.app.service.monthly_end_of_month_status_report
+    healthcheck:
+      disable: true
+    environment:
+      - TZ=America/Chicago
+      - APP_TIMEZONE=America/Chicago
+      - EOM_STATUS_REPORT_ENABLED=true
+      - HCP_PAYROLL_SCHEDULER_ENABLED=false
 
   nginx:
     image: nginx:alpine

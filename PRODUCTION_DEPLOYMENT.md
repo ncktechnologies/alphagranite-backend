@@ -180,3 +180,104 @@ curl --fail https://api.staging.odysseytracker.com/health/
 Expected CORS origin: `https://ag.odysseytracker.com`. Ensure PostgreSQL and
 production static storage have scheduled, tested backups before go-live.
 Do not use `docker compose down -v`: it removes persistent project volumes.
+
+## Scaling the Server-Specific Compose Stack
+
+The active production server uses `docker-compose.yml`, not the optional
+`compose.production.yml` setup described above. Its upgraded VM has 8 CPUs and
+8 GB RAM, shared with PostgreSQL. The server-specific Compose file now runs:
+
+- Four Uvicorn workers with CPU shares 2048 and no hard CPU/memory cap.
+- Two Celery worker processes and exactly one Celery beat service.
+- Exactly one `monthly_reports` service for monthly emails. API workers disable
+  both in-process schedulers. The report service explicitly enables monthly
+  reports, independently of the shared env file's flag.
+- An API health check on the actual internal port, 8003.
+
+The monthly report flag previously had inverted semantics. The corrected code
+uses `true` to enable and `false` to disable. Transfer BOTH the updated Compose
+file and `src/app/service/monthly_end_of_month_status_report.py` to the server.
+Deploying only the Compose change with an old image risks duplicate report jobs.
+Do not scale `monthly_reports` or `celery_beat` beyond one instance. There is no
+distributed report lock; run this reporting service in only the intended stack.
+
+From the production checkout, rebuild first; then stop the old API before
+starting the new dedicated report scheduler:
+
+```bash
+dc() {
+  docker compose --env-file .env.production -f docker-compose.yml -p ag_production "$@"
+}
+dc config --quiet
+dc build web monthly_reports
+dc stop web
+dc up -d --no-deps web monthly_reports
+dc logs --tail=100 web monthly_reports
+dc ps
+```
+
+There is a brief API interruption. Existing workers, Redis and beat are not
+recreated by these commands. No image build or service deployment is performed
+by editing files locally. Rebuild/recreate any other deployed API image that
+uses the old inverted flag before relying on its flag value.
+
+### PostgreSQL Memory Baseline
+
+These are starting values for PostgreSQL sharing this 8 GB VM with the app, not
+benchmark-derived settings. Record existing values and retain a backup of the
+server configuration first. Run as the PostgreSQL administrator, outside an
+explicit transaction, against the intended instance:
+
+```sql
+SELECT name, setting, unit, context, pending_restart
+FROM pg_settings
+WHERE name IN ('shared_buffers', 'effective_cache_size', 'work_mem',
+               'maintenance_work_mem', 'autovacuum_work_mem',
+               'max_connections', 'max_parallel_workers',
+               'max_parallel_workers_per_gather');
+```
+
+For a standard non-managed PostgreSQL instance, after reviewing the current
+settings, apply the baseline outside an explicit transaction:
+
+```sql
+ALTER SYSTEM SET shared_buffers = '2GB';
+ALTER SYSTEM SET effective_cache_size = '4GB';
+ALTER SYSTEM SET work_mem = '4MB';
+ALTER SYSTEM SET maintenance_work_mem = '256MB';
+ALTER SYSTEM SET autovacuum_work_mem = '64MB';
+ALTER SYSTEM SET max_parallel_workers = '4';
+ALTER SYSTEM SET max_parallel_workers_per_gather = '2';
+SELECT pg_reload_conf();
+```
+
+`shared_buffers` requires a PostgreSQL restart; plan a maintenance window and
+restart the actual database instance, not the Docker API. On a conventional
+Ubuntu systemd installation, `sudo systemctl restart postgresql` restarts the
+PostgreSQL service and may affect every cluster managed by that service. Use
+`pg_lsclusters` and a cluster-specific restart if other clusters must stay up.
+Run elevated commands directly on the server. Verify afterward:
+
+```sql
+SELECT name, setting, unit, pending_restart
+FROM pg_settings
+WHERE name IN ('shared_buffers', 'effective_cache_size', 'work_mem',
+               'maintenance_work_mem', 'autovacuum_work_mem');
+ANALYZE;
+```
+
+`effective_cache_size` is a planner estimate, not reserved memory. `work_mem`
+applies per query operation, potentially per parallel worker, so large global
+values can exhaust RAM. Keep autovacuum enabled. Do not increase
+`max_connections` just because CPU count increased: SQLAlchemy pools are
+per process (defaults allow up to 15 connections per API worker, or 60 for four
+workers, plus background jobs and administrative clients). Review aggregate
+connection demand and the current server limit before increasing worker counts.
+If PostgreSQL is managed or containerized, change its owning configuration
+instead of assuming host systemd or `ALTER SYSTEM` controls it.
+
+Check `docker stats --no-stream`, `free -h`, and `vmstat 1 5` under representative
+traffic. More workers improve concurrency, not necessarily the latency of a
+single expensive FAB query. Follow up with `EXPLAIN (ANALYZE, BUFFERS)` and
+measured index changes for slow SQL; avoid raising global memory settings merely
+to make PostgreSQL consume otherwise useful filesystem cache.
