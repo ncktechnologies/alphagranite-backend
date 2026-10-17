@@ -198,7 +198,7 @@ class Ctx:
                 continue
             self.cur.execute(
                 f'SELECT setval(%s, m) FROM (SELECT max("{col}") AS m FROM "{tbl}") x'
-                f" WHERE m > (SELECT last_value FROM {seq})", (seq,))
+                f" WHERE m >= (SELECT last_value FROM {seq})", (seq,))
 
     def ensure_mig_user(self):
         self.cur.execute("SELECT id FROM users WHERE username=%s", (MIG_USER,))
