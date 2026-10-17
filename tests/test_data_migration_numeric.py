@@ -16,6 +16,32 @@ from clear_unreviewed_shop_plans import cleanup, read_target_fab_ids
 from data_migration.backfill_completed_cnc_draftings import backfill, read_csv_fab_ids
 
 
+@pytest.mark.parametrize("apply", [False, True])
+def test_completed_cnc_backfill_ignores_explicit_fabs(apply):
+    cursor = Mock()
+    cursor.fetchall.side_effect = [[(1,)], [(1,)], [], [(1,)]]
+    cursor.fetchone.side_effect = [(7,), (3,)]
+    connection = Mock()
+    connection.cursor.return_value.__enter__ = Mock(return_value=cursor)
+    connection.cursor.return_value.__exit__ = Mock(return_value=False)
+
+    assert backfill(connection, [1, 15376, 15484], apply=apply) == [1]
+
+    fab_queries = [call.args for call in cursor.execute.call_args_list
+                   if "WHERE id = ANY(%s)" in call.args[0] or "WHERE f.id = ANY(%s)" in call.args[0]]
+    assert fab_queries
+    for query, parameters in fab_queries:
+        assert parameters[-1] == [1]
+
+
+def test_completed_cnc_backfill_skips_database_when_only_ignored_fabs():
+    connection = Mock()
+
+    assert backfill(connection, [15376, 15484], apply=True) == []
+
+    connection.cursor.assert_not_called()
+
+
 def test_completed_cnc_backfill_reads_unique_csv_ids(tmp_path):
     source = tmp_path / "active.csv"
     source.write_text("fab_id,complete\n3,0\n1,-1\n3,0\n")

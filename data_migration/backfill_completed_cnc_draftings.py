@@ -10,6 +10,9 @@ from dotenv import load_dotenv
 import psycopg2
 
 
+IGNORED_FAB_IDS = {15376, 15484}
+
+
 def read_csv_fab_ids(path: Path) -> list[int]:
     fab_ids = set()
     with path.open(encoding="utf-8-sig", newline="") as stream:
@@ -27,6 +30,13 @@ def read_csv_fab_ids(path: Path) -> list[int]:
 
 
 def backfill(connection, fab_ids, *, apply=False, drafter_id=None):
+    ignored_ids = sorted(set(fab_ids) & IGNORED_FAB_IDS)
+    fab_ids = sorted(set(fab_ids) - IGNORED_FAB_IDS)
+    if ignored_ids:
+        print(f"Explicitly ignored FAB IDs: {ignored_ids}")
+    if not fab_ids:
+        print("No FABs remain after exclusions; nothing to change.")
+        return []
     with connection.cursor() as cursor:
         cursor.execute("SET LOCAL statement_timeout = '120s'")
         cursor.execute("SET LOCAL lock_timeout = '10s'")
