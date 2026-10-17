@@ -12,6 +12,104 @@ sys.path.insert(0, str(PROJECT_ROOT / "data_migration"))
 
 from migrate import Ctx, parse_duration_sec, parse_float, parse_int
 from split_fab_status import split_csv
+from clear_unreviewed_shop_plans import cleanup, read_target_fab_ids
+
+
+def test_unreviewed_shop_cleanup_reads_explicit_false_ids_only(tmp_path):
+    source = tmp_path / "active.csv"
+    source.write_text(
+        "fab_id,pre_shop_review_completed\n1,0\n2,false\n3,-1\n4,true\n5,\n1,0\n"
+    )
+
+    assert read_target_fab_ids(source) == [1, 2]
+
+
+@pytest.mark.parametrize("contents", [
+    "fab_id,pre_shop_review_completed\n1,0\n1,-1\n",
+    "fab_id,pre_shop_review_completed\ninvalid,0\n",
+    "fab_id,complete\n1,0\n",
+])
+def test_unreviewed_shop_cleanup_refuses_ambiguous_csv(tmp_path, contents):
+    source = tmp_path / "active.csv"
+    source.write_text(contents)
+    with pytest.raises(ValueError):
+        read_target_fab_ids(source)
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_unreviewed_shop_cleanup_limits_changes_to_csv_ids(apply):
+    cursor = Mock()
+    cursor.fetchall.side_effect = [[(1,), (2,)], [(10,)], []]
+    cursor.fetchone.side_effect = [(0,), (0,), (2,)]
+    connection = Mock()
+    connection.cursor.return_value.__enter__ = Mock(return_value=cursor)
+    connection.cursor.return_value.__exit__ = Mock(return_value=False)
+
+    cleanup(connection, [1, 2], apply=apply)
+
+    writes = [call.args for call in cursor.execute.call_args_list
+              if call.args[0].startswith(("UPDATE", "DELETE"))]
+    if apply:
+        assert len(writes) == 2
+        assert writes[0] == ("DELETE FROM public.shop_cut_plans WHERE id = ANY(%s)", ([10],))
+        assert "SET shop_est_completion_date = NULL" in writes[1][0]
+        assert writes[1][1] == ([1, 2],)
+    else:
+        assert writes == []
+
+
+@pytest.mark.parametrize("sessions, events, files, message", [
+    ([(20,)], 1, 0, "Timer history exists"),
+    ([], 0, 1, "Linked files exist"),
+])
+def test_unreviewed_shop_cleanup_blocks_dependencies_without_consent(sessions, events, files, message):
+    cursor = Mock()
+    cursor.fetchall.side_effect = [[(1,)], [(10,)], sessions]
+    cursor.fetchone.side_effect = [(events,), (files,), (1,)]
+    connection = Mock()
+    connection.cursor.return_value.__enter__ = Mock(return_value=cursor)
+    connection.cursor.return_value.__exit__ = Mock(return_value=False)
+
+    with pytest.raises(ValueError, match=message):
+        cleanup(connection, [1], apply=True)
+
+    assert not any(call.args[0].startswith(("DELETE", "UPDATE"))
+                   for call in cursor.execute.call_args_list)
+
+
+def test_unreviewed_shop_cleanup_removes_only_approved_dependencies():
+    cursor = Mock()
+    cursor.fetchall.side_effect = [[(1,)], [(10,)], [(20,)]]
+    cursor.fetchone.side_effect = [(1,), (1,), (1,)]
+    connection = Mock()
+    connection.cursor.return_value.__enter__ = Mock(return_value=cursor)
+    connection.cursor.return_value.__exit__ = Mock(return_value=False)
+
+    cleanup(connection, [1], apply=True, delete_timer_history=True, detach_files=True)
+
+    writes = [call.args for call in cursor.execute.call_args_list
+              if call.args[0].startswith(("UPDATE", "DELETE"))]
+    assert len(writes) == 5
+    assert writes[0][0].startswith("DELETE FROM public.shop_cut_plan_timer_events")
+    assert writes[0][1] == ([10], [20])
+    assert writes[1][1] == ([20],)
+    assert writes[2] == ("UPDATE public.files SET task_id = NULL WHERE task_id = ANY(%s)", ([10],))
+    assert writes[3][1] == ([10],)
+    assert writes[4][1] == ([1],)
+
+
+def test_unreviewed_shop_cleanup_refuses_missing_fabs():
+    cursor = Mock()
+    cursor.fetchall.return_value = []
+    connection = Mock()
+    connection.cursor.return_value.__enter__ = Mock(return_value=cursor)
+    connection.cursor.return_value.__exit__ = Mock(return_value=False)
+
+    with pytest.raises(ValueError, match="missing from database"):
+        cleanup(connection, [1], apply=True)
+
+    assert not any(call.args[0].startswith(("DELETE", "UPDATE"))
+                   for call in cursor.execute.call_args_list)
 
 
 @pytest.mark.parametrize("apply", [False, True])
