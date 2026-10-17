@@ -30,10 +30,10 @@ def latest_templating():
 
 
 @pytest.mark.parametrize("plan_view, expected_ids", [
-    (None, [1, 5, 6, 9]),
-    ("all", [1, 8, 9]),
+    (None, [1, 2, 3, 4, 5, 6, 7, 9, 10]),
+    ("all", [1, 2, 3, 8, 9, 10]),
 ])
-def test_shop_visibility_requires_completed_cutlist(plan_view, expected_ids):
+def test_shop_visibility_does_not_require_completed_cutlist_globally(plan_view, expected_ids):
     metadata = MetaData()
     fab_table = Table(
         Fab.__tablename__, metadata, Column("id", Integer, primary_key=True),
@@ -59,6 +59,7 @@ def test_shop_visibility_requires_completed_cutlist(plan_view, expected_ids):
                     (7, "cut_list", False, None),
                     (8, "shop", True, datetime(2026, 10, 17)),
                     (9, "shop", True, None), (10, "shop", False, None),
+                    (11, "cut_list", False, None),
                 ]
             ])
             connection.execute(plan_table.insert(), [
@@ -83,7 +84,7 @@ def test_shop_visibility_requires_completed_cutlist(plan_view, expected_ids):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("plan_view", [None, "all"])
-async def test_shop_list_count_and_totals_require_completed_cutlist(monkeypatch, plan_view):
+async def test_shop_list_count_and_totals_use_existing_visibility(monkeypatch, plan_view):
     result = Mock()
     result.all.return_value = []
     result.scalar.return_value = 0
@@ -106,7 +107,12 @@ async def test_shop_list_count_and_totals_require_completed_cutlist(monkeypatch,
 
     assert db.execute.await_count == 3
     for call in db.execute.await_args_list:
-        assert "fabs.cutlist_complete IS true" in compile_sql(call.args[0])
+        sql = compile_sql(call.args[0])
+        if plan_view == "all":
+            assert "fabs.cutlist_complete IS true" not in sql
+        else:
+            assert "fabs.cutlist_complete IS true" in sql
+            assert "EXISTS" in sql
 
 
 def test_shop_plan_indexes_cover_visibility_and_page_loading():
