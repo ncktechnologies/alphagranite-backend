@@ -13,6 +13,60 @@ sys.path.insert(0, str(PROJECT_ROOT / "data_migration"))
 from migrate import Ctx, parse_duration_sec, parse_float, parse_int
 from split_fab_status import split_csv
 from clear_unreviewed_shop_plans import cleanup, read_target_fab_ids
+from data_migration.backfill_completed_cnc_draftings import backfill, read_csv_fab_ids
+
+
+def test_completed_cnc_backfill_reads_unique_csv_ids(tmp_path):
+    source = tmp_path / "active.csv"
+    source.write_text("fab_id,complete\n3,0\n1,-1\n3,0\n")
+
+    assert read_csv_fab_ids(source) == [1, 3]
+
+
+@pytest.mark.parametrize("contents", ["complete\n0\n", "fab_id\n0\n", "fab_id\ninvalid\n"])
+def test_completed_cnc_backfill_rejects_invalid_csv(tmp_path, contents):
+    source = tmp_path / "active.csv"
+    source.write_text(contents)
+    with pytest.raises(ValueError):
+        read_csv_fab_ids(source)
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_completed_cnc_backfill_skips_existing_and_other_sections(apply):
+    cursor = Mock()
+    cursor.fetchall.side_effect = [[(1,), (2,), (3,)], [(1,), (2,)], [(2,)], [(1,)]]
+    cursor.fetchone.side_effect = [(7,), (3,)]
+    connection = Mock()
+    connection.cursor.return_value.__enter__ = Mock(return_value=cursor)
+    connection.cursor.return_value.__exit__ = Mock(return_value=False)
+
+    assert backfill(connection, [1, 2, 3], apply=apply) == [1]
+
+    statements = [call.args for call in cursor.execute.call_args_list]
+    assert any("p.planning_section_id = 1" in query for query, *rest in statements)
+    writes = [arguments for arguments in statements if arguments[0].startswith(("INSERT", "UPDATE", "DELETE"))]
+    if apply:
+        assert len(writes) == 1
+        query, parameters = writes[0]
+        assert query.startswith("INSERT INTO public.cnc_draftings")
+        assert "NOT EXISTS" in query
+        assert "true, 3, false, true" in query
+        assert parameters[0] == 7
+        assert parameters[-1] == [1]
+    else:
+        assert writes == []
+
+
+def test_completed_cnc_backfill_rerun_does_not_insert():
+    cursor = Mock()
+    cursor.fetchall.side_effect = [[(1,)], [(1,)], [(1,)]]
+    connection = Mock()
+    connection.cursor.return_value.__enter__ = Mock(return_value=cursor)
+    connection.cursor.return_value.__exit__ = Mock(return_value=False)
+
+    assert backfill(connection, [1], apply=True) == []
+    assert not any(call.args[0].startswith(("INSERT", "UPDATE", "DELETE"))
+                   for call in cursor.execute.call_args_list)
 
 
 def test_unreviewed_shop_cleanup_reads_explicit_false_ids_only(tmp_path):
