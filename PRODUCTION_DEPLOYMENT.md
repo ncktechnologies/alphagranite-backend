@@ -281,3 +281,72 @@ traffic. More workers improve concurrency, not necessarily the latency of a
 single expensive FAB query. Follow up with `EXPLAIN (ANALYZE, BUFFERS)` and
 measured index changes for slow SQL; avoid raising global memory settings merely
 to make PostgreSQL consume otherwise useful filesystem cache.
+
+## Shop FAB List Indexes
+
+The shop FAB list uses correlated checks on `shop_cut_plans.fab_id` and
+`coalesce(work_percentage, 0) < 100` for page selection, counts and stage totals.
+PostgreSQL does not automatically index foreign keys. Revision
+`20261017_120000` adds a general FAB lookup index and a partial incomplete-plan
+index. The model declares both so fresh model-based schemas include them too.
+No list fields, visibility rules, pagination, or totals are changed.
+
+Check existing production indexes first; the database may contain indexes not
+represented in repository migrations:
+
+```sql
+SELECT indexname, indexdef
+FROM pg_indexes
+WHERE schemaname = 'public' AND tablename = 'shop_cut_plans';
+```
+
+After transferring the new migration and updated model to the production
+checkout and taking a backup, use the server-specific Compose file:
+
+```bash
+dc() {
+  docker compose --env-file .env.production -f docker-compose.yml -p ag_production "$@"
+}
+dc build web
+dc run --rm --no-deps -T web alembic current
+dc run --rm --no-deps -T web alembic upgrade 20261017_120000
+```
+
+The migration uses `CREATE INDEX CONCURRENTLY` in an autocommit block. This
+allows normal writes during the build, but consumes I/O and can wait for old
+transactions. It must not be wrapped in an external database transaction.
+If a concurrent build fails, inspect index validity before retrying: an
+invalid index with the same name is not repaired by `IF NOT EXISTS`.
+
+For a direct DBA-managed deployment instead, run the following individually,
+outside an explicit transaction, on the production database. These are the
+same definitions used by the migration; later running it will skip their names:
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_shop_cut_plans_fab_id
+  ON public.shop_cut_plans (fab_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_shop_cut_plans_incomplete_fab_id
+  ON public.shop_cut_plans (fab_id)
+  WHERE coalesce(work_percentage, 0) < 100;
+ANALYZE public.shop_cut_plans;
+ANALYZE public.fabs;
+```
+
+Verify both indexes are valid after either deployment path:
+
+```sql
+SELECT indexrelid::regclass AS index_name, indisvalid, indisready
+FROM pg_index
+WHERE indexrelid IN (
+  'public.ix_shop_cut_plans_fab_id'::regclass,
+  'public.ix_shop_cut_plans_incomplete_fab_id'::regclass
+);
+```
+
+Re-measure the same authenticated request several times before and after,
+including the first request and warm requests separately. More API workers do
+not remove these per-request SQL costs. If latency remains high, capture
+individual SQL timings and PostgreSQL `EXPLAIN (ANALYZE, BUFFERS)` for the page,
+count and totals queries before changing enrichment or adding caching.
+Index-definition tests and pagination regressions are not a production latency
+benchmark; live improvement remains unverified until deployment and measurement.

@@ -8,6 +8,7 @@ from sqlalchemy import Boolean, Column, DateTime, Float, Integer, MetaData, Stri
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.sql import visitors
 from sqlalchemy.sql.selectable import Subquery
+from sqlalchemy.schema import CreateIndex
 
 from src.app.database.business_job import BusinessJob
 from src.app.database.fab import Fab
@@ -26,6 +27,102 @@ def latest_templating():
         select(Templating).where(Templating.fab_id == Fab.id)
         .order_by(Templating.id.desc()).limit(1).lateral("latest_templating")
     )
+
+
+@pytest.mark.parametrize("plan_view, expected_ids", [
+    (None, [1, 5, 6, 9]),
+    ("all", [1, 8, 9]),
+])
+def test_shop_visibility_requires_completed_cutlist(plan_view, expected_ids):
+    metadata = MetaData()
+    fab_table = Table(
+        Fab.__tablename__, metadata, Column("id", Integer, primary_key=True),
+        Column("current_stage", String), Column("cutlist_complete", Boolean),
+        Column("shop_est_completion_date", DateTime),
+    )
+    plan_table = Table(
+        fabs.ShopCutPlan.__tablename__, metadata,
+        Column("id", Integer, primary_key=True), Column("fab_id", Integer),
+        Column("work_percentage", Integer),
+    )
+    engine = create_engine("sqlite:///:memory:")
+    try:
+        metadata.create_all(engine)
+        with engine.begin() as connection:
+            connection.execute(fab_table.insert(), [
+                {"id": fab_id, "current_stage": stage, "cutlist_complete": complete,
+                 "shop_est_completion_date": estimated}
+                for fab_id, stage, complete, estimated in [
+                    (1, "shop", True, None), (2, "shop", False, None),
+                    (3, "shop", None, None), (4, "install_scheduling", False, None),
+                    (5, "install_scheduling", True, None), (6, "cut_list", True, None),
+                    (7, "cut_list", False, None),
+                    (8, "shop", True, datetime(2026, 10, 17)),
+                    (9, "shop", True, None), (10, "shop", False, None),
+                ]
+            ])
+            connection.execute(plan_table.insert(), [
+                {"id": plan_id, "fab_id": fab_id, "work_percentage": percentage}
+                for plan_id, fab_id, percentage in [
+                    (1, 4, 0), (2, 5, 0), (3, 7, 0),
+                    (4, 8, 100), (5, 9, 100), (6, 10, 0),
+                ]
+            ])
+            predicate = fabs._stage_filter_condition("shop", plan_view)
+            actual_ids = connection.execute(
+                select(Fab.id).where(predicate).order_by(Fab.id)
+            ).scalars().all()
+            total = connection.execute(
+                select(func.count(Fab.id)).where(predicate)
+            ).scalar_one()
+        assert actual_ids == expected_ids
+        assert total == len(expected_ids)
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("plan_view", [None, "all"])
+async def test_shop_list_count_and_totals_require_completed_cutlist(monkeypatch, plan_view):
+    result = Mock()
+    result.all.return_value = []
+    result.scalar.return_value = 0
+    result.first.return_value = None
+    db = SimpleNamespace(execute=AsyncMock(return_value=result))
+    for loader in (
+        "_batch_load_fab_related_data", "get_plans_map_for_fabs",
+        "_batch_load_resurface_scheduling_responses", "_batch_load_install_scheduling_responses",
+    ):
+        monkeypatch.setattr(fabs, loader, AsyncMock(return_value={}))
+    kwargs = {
+        name: parameter.default.default
+        for name, parameter in inspect.signature(fabs.get_fabs).parameters.items()
+        if name not in {"db", "current_user"}
+    }
+    kwargs.update(current_stage="shop", plan_view=plan_view, skip=0, limit=25,
+                  db=db, current_user=SimpleNamespace(id=1))
+
+    await fabs.get_fabs(**kwargs)
+
+    assert db.execute.await_count == 3
+    for call in db.execute.await_args_list:
+        assert "fabs.cutlist_complete IS true" in compile_sql(call.args[0])
+
+
+def test_shop_plan_indexes_cover_visibility_and_page_loading():
+    indexes = {index.name: index for index in fabs.ShopCutPlan.__table__.indexes}
+
+    assert "ix_shop_cut_plans_fab_id" in indexes
+    assert "ix_shop_cut_plans_incomplete_fab_id" in indexes
+    lookup_sql = str(CreateIndex(indexes["ix_shop_cut_plans_fab_id"]).compile(
+        dialect=postgresql.dialect(),
+    ))
+    incomplete_sql = str(CreateIndex(indexes["ix_shop_cut_plans_incomplete_fab_id"]).compile(
+        dialect=postgresql.dialect(),
+    ))
+    assert "ON shop_cut_plans (fab_id)" in lookup_sql
+    assert "ON shop_cut_plans (fab_id)" in incomplete_sql
+    assert "WHERE coalesce(work_percentage, 0) < 100" in incomplete_sql
 
 
 @pytest.mark.parametrize("stage", [None, "drafting", "templating", "install_completion"])

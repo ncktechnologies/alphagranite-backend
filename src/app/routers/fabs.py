@@ -238,6 +238,7 @@ def _active_shop_cut_plan_visibility_filter():
     """Visibility for current_stage=shop listing.
 
     Rules:
+        - Require cutlist_complete=true for every visible FAB.
         - Keep FAB visible in Shop Planning while any shop cut plan row is incomplete
           (work_percentage < 100), even if shop_est_completion_date is set.
                 - Keep FABs whose plans are all 100% visible until shop_est_completion_date is set.
@@ -279,17 +280,19 @@ def _active_shop_cut_plan_visibility_filter():
 
     cut_list_ready_for_shop_visibility = and_(
         Fab.current_stage == "cut_list",
-        Fab.cutlist_complete.is_(True),
         has_active_shop_plan_work,
     )
 
     # Include FABs from any stage with incomplete shop plans
     any_stage_with_incomplete_shop_plans = any_incomplete_shop_plan_exists
 
-    return or_(
-        shop_stage_visibility,
-        cut_list_ready_for_shop_visibility,
-        any_stage_with_incomplete_shop_plans,
+    return and_(
+        Fab.cutlist_complete.is_(True),
+        or_(
+            shop_stage_visibility,
+            cut_list_ready_for_shop_visibility,
+            any_stage_with_incomplete_shop_plans,
+        ),
     )
 
 
@@ -604,12 +607,12 @@ def _stage_filter_condition(stage_name: str, plan_view: Optional[str] = None):
     - install_scheduling uses its redirected visibility rule
     - final_programming includes pending cut_list FABs with a shop date
     - cut_list excludes FABs counted as pending final_programming
-    - shop shows FABs with incomplete plans or a missing shop estimate, or all shop FABs when plan_view='all'
+    - shop requires a completed cutlist in both active and all-plan views
     - all other stages use exact stage match
     """
     _is_all_plan_view = isinstance(plan_view, str) and plan_view.strip().lower() == "all"
     if stage_name == "shop" and _is_all_plan_view:
-        return Fab.current_stage == stage_name
+        return and_(Fab.current_stage == stage_name, Fab.cutlist_complete.is_(True))
     if stage_name == "install_completion":
         completed_install_schedule_exists = (
             select(InstallScheduling.id)
