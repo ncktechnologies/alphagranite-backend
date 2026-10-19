@@ -1,7 +1,7 @@
 # Template for docker-compose.yml, which is NOT tracked: each server/branch keeps
 # its own copy. Copy this file to docker-compose.yml and set the per-environment
 # defaults (APP_ENV_FILE, STATIC_HOST_DIR, BASE_URL), or set them in the env file
-# passed with --env-file. Defaults below are dev's.
+# passed with --env-file. Defaults below are staging's.
 services:
 
   # FastAPI Application
@@ -11,16 +11,16 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
-      - ${APP_ENV_FILE:-.env.dev}
+      - ${APP_ENV_FILE:-.env.staging}
     ports:
-      - "${WEB_HOST_PORT:-8000}:8000"
+      - "127.0.0.1:${WEB_HOST_PORT:-8002}:8000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./static/uploads:/app/static/uploads
       - ./static/defaults:/app/static/defaults
       - ./logs:/app/logs
-      - ${STATIC_HOST_DIR:-/var/www/demo/backend/alphagranite-backend/static}:/app/static
+      - ${STATIC_HOST_DIR:-/var/www/staging/backend/alphagranite-backend/static}:/app/static
       - ./alembic/versions:/app/alembic/versions
     entrypoint: []
     command: uvicorn src.app.main:app --host 0.0.0.0 --port 8000
@@ -29,7 +29,7 @@ services:
       - APP_TIMEZONE=America/Chicago
       - FILE_UPLOAD_ROOT=/app/static   # root for FileService
       - UPLOAD_DIR=/app/static/jobs    # if your code reads this
-      - BASE_URL=${BASE_URL:-https://api.demo.odysseytracker.com}
+      - BASE_URL=${BASE_URL:-https://api.staging.odysseytracker.com}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
       - HCP_PAYROLL_SCHEDULER_ENABLED=false   # celery beat owns scheduling
     depends_on:
@@ -56,12 +56,12 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
-      - ${APP_ENV_FILE:-.env.dev}
+      - ${APP_ENV_FILE:-.env.staging}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./logs:/app/logs
-      - ${STATIC_HOST_DIR:-/var/www/demo/backend/alphagranite-backend/static}:/app/static
+      - ${STATIC_HOST_DIR:-/var/www/staging/backend/alphagranite-backend/static}:/app/static
     entrypoint: []
     command: celery -A src.app.tasks.celery_app.celery_app worker --loglevel=info --concurrency=2
     healthcheck:
@@ -71,7 +71,7 @@ services:
       - APP_TIMEZONE=America/Chicago
       - FILE_UPLOAD_ROOT=/app/static
       - UPLOAD_DIR=/app/static/jobs
-      - BASE_URL=${BASE_URL:-https://api.demo.odysseytracker.com}
+      - BASE_URL=${BASE_URL:-https://api.staging.odysseytracker.com}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
     depends_on:
       redis:
@@ -83,7 +83,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
-      - ${APP_ENV_FILE:-.env.dev}
+      - ${APP_ENV_FILE:-.env.staging}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -105,8 +105,7 @@ services:
     environment:
       - TZ=America/Chicago
     ports:
-      - "${NGINX_HTTP_HOST_PORT:-8080}:80"
-      - "${NGINX_HTTPS_HOST_PORT:-8443}:443"
+      - "127.0.0.1:${NGINX_HTTP_HOST_PORT:-8082}:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./certbot/conf:/etc/letsencrypt:ro
