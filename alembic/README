@@ -1,1 +1,49 @@
 Generic single-database configuration.
+
+Known Schema Drift Reconciliation (20261019_120000)
+-------------------------------------------------
+This online-only migration restores the confirmed missing schema objects from
+20260930_120000, 20261002_120000 and 20261006_120000:
+- fabs.is_migrated and fabs.migration_source, plus the migration flag index.
+- accounts.is_active and its index.
+- performance_static_data and subcontractor_weekly_labor, their indexes and
+	updated_by foreign keys.
+
+Existing values are preserved. Newly created flags use the original defaults
+(is_migrated=false, is_active=true). Missing performance tables are created
+empty; historical financial data cannot be recovered by this migration.
+Incompatible definitions, duplicate unique keys, orphaned foreign keys or missing
+required values cause failure rather than guessing, deleting or coercing data.
+Take a database backup before applying. PostgreSQL runs the repair transactionally
+with a 5-second lock timeout and a 60-second statement timeout. Downgrade is
+intentionally refused because restored objects may already contain important data.
+
+Staging currently records the server-only merge revision 043a0c77f7ac, whose
+parents include 20261017_120000. The reconciliation also follows 20261017_120000;
+it deliberately does not reference server-only migration files absent from this
+repository. Preserve all those server files when deploying the new migration.
+
+From /var/www/staging/backend/alphagranite-backend, after verifying DATABASE_URL
+targets alpha_granite_staging:
+
+		docker compose --env-file .env.staging -p ag_staging exec web alembic heads
+		docker compose --env-file .env.staging -p ag_staging exec web alembic upgrade heads
+		docker compose --env-file .env.staging -p ag_staging exec web alembic current
+
+On this staging graph, current should then list both 043a0c77f7ac and
+20261019_120000. This is intentional: do not stamp over either revision or
+downgrade. A single canonical head requires bringing the server-only branches
+into version control and committing a merge migration after both histories are
+available. A migration on the local chain alone can use upgrade head.
+
+This is a targeted repair, not a complete certification of all database objects
+against application metadata or the server-only branches. Subsequent schema
+changes must continue to use normal reviewed migrations.
+
+Focused tests (SQLite by default; PostgreSQL integration requires an isolated
+database named schema_reconciliation_test):
+
+		python -m pytest tests/test_schema_reconciliation.py -q
+
+Set SCHEMA_RECONCILIATION_TEST_URL to a SQLAlchemy psycopg2 URL for that dedicated
+test database to exercise PostgreSQL behavior. Tests roll back their changes.
