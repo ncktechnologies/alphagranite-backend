@@ -43,6 +43,27 @@ from src.app.interface.response_wrappers import SuccessResponse, success_respons
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.routers.fabs import CUT_PLAN_NAMES, CUT_SAW_PLAN_NAMES, CUT_WJ_PLAN_NAMES, FAB_STAGES, PUNCHOUT_REDIRECT_FAB_TYPES, _active_shop_cut_plan_visibility_filter, _cut_plan_key_expr, _get_shop_current_stage, _pending_cnc_widget_filter, _stage_filter_condition
 from src.app.service.hcp_payroll_ingestion import pay_period_for_pull
+from src.app.service.labor_cost_report_rows import (
+    FABRICATION_TITLE,
+    INSTALLER_TITLES,
+    INSTALLER_VARIANT_AG,
+    INSTALLER_VARIANT_COMBINED,
+    INSTALLER_VARIANT_SUBS,
+    fabrication_metric_rows,
+    installer_metric_rows,
+)
+from src.app.service.labor_cost_report_pdf import build_labor_cost_pdf, pdf_filename
+from src.app.service.labor_cost_report_widgets import (
+    FABRICATION_WIDGET_GROUPS,
+    INSTALLER_WIDGET_GROUPS,
+    build_labor_cost_widgets,
+)
+from src.app.service.performance_data import (
+    WORK_DAYS_PER_WEEK,
+    get_static_data,
+    subcontractor_labor_by_week,
+    weekly_overhead_for_year,
+)
 from src.app.service.monthly_end_of_month_status_report import send_monthly_end_of_month_status_report
 from src.app.utils.helpers import error_response, app_now, to_app_tz, app_today
 
@@ -606,6 +627,11 @@ def _safe_div(numerator: float, denominator: float) -> float:
     return numerator / denominator
 
 
+def _weekdays_between(start: date, end: date) -> int:
+    """Mon-Fri days from start to end inclusive (0 when end is before start)."""
+    return sum(1 for offset in range((end - start).days + 1) if (start + timedelta(days=offset)).weekday() < 5)
+
+
 def _week_windows_for_month(year: int, month: int, week_ending_weekday: int = 4) -> list[dict]:
     month_start = date(year, month, 1)
     _, last_day = calendar.monthrange(year, month)
@@ -626,11 +652,17 @@ def _week_windows_for_month(year: int, month: int, week_ending_weekday: int = 4)
                 "overlap_start": overlap_start,
                 "overlap_end": overlap_end,
                 "number_of_days": (overlap_end - overlap_start).days + 1,
+                "number_of_weekdays": _weekdays_between(overlap_start, overlap_end),
             }
         )
         current_week_end = current_week_end + timedelta(days=7)
 
-    if not windows or windows[-1]["overlap_end"] < month_end:
+    if windows and windows[-1]["overlap_end"] < month_end and _weekdays_between(windows[-1]["overlap_end"] + timedelta(days=1), month_end) == 0:
+        # Month ends on a Saturday/Sunday: no working days left, so those weekend days
+        # join the last Friday week instead of showing as a week of their own.
+        windows[-1]["overlap_end"] = month_end
+        windows[-1]["number_of_days"] = (month_end - windows[-1]["overlap_start"]).days + 1
+    elif not windows or windows[-1]["overlap_end"] < month_end:
         # Partial trailing week: starts the day after the last full week so no day is counted twice.
         trailing_week_end = month_end
         trailing_week_start = windows[-1]["week_end"] + timedelta(days=1) if windows else month_start
@@ -642,6 +674,7 @@ def _week_windows_for_month(year: int, month: int, week_ending_weekday: int = 4)
                 "overlap_start": overlap_start,
                 "overlap_end": month_end,
                 "number_of_days": (month_end - overlap_start).days + 1,
+                "number_of_weekdays": _weekdays_between(overlap_start, month_end),
             }
         )
 
@@ -687,6 +720,33 @@ def _week_ending_for_period(period_start: date, period_end: date, week_ending_we
     midpoint = period_start + (period_end - period_start) / 2
     windows = _week_windows_for_month(midpoint.year, midpoint.month, week_ending_weekday)
     return next(w["week_end"] for w in windows if w["overlap_start"] <= midpoint <= w["overlap_end"])
+
+
+def _pay_week_report_shares(period_start: date, period_end: date, year: int, week_ending_weekday: int) -> dict[str, float]:
+    """Share of an HCP pay week that belongs to each report week of `year`, by weekdays.
+
+    A pay week cut by a month end (e.g. Mon Sep 28 - Sun Oct 4) is split across
+    the two report weeks it touches: 3 of its 5 weekdays fall in September's last
+    week and 2 in October's first, so they get 3/5 and 2/5 of its wages and hours.
+    """
+    weekdays = [period_start + timedelta(days=i) for i in range((period_end - period_start).days + 1)]
+    weekdays = [day for day in weekdays if day.weekday() < 5]
+    if not weekdays:
+        return {}
+    counts: dict[str, int] = defaultdict(int)
+    windows_by_month: dict[tuple[int, int], list[dict]] = {}
+    for day in weekdays:
+        if day.year != year:
+            continue
+        month_key = (day.year, day.month)
+        if month_key not in windows_by_month:
+            windows_by_month[month_key] = _week_windows_for_month(day.year, day.month, week_ending_weekday)
+        window = next(w for w in windows_by_month[month_key] if w["overlap_start"] <= day <= w["overlap_end"])
+        counts[window["week_end"].isoformat()] += 1
+    return {week_key: count / len(weekdays) for week_key, count in counts.items()}
+
+
+_HCP_ADDITIVE_FIELDS = ("wages_basic", "overtime_wages", "total_labor_cost", "regular_hours", "overtime_hours", "total_hours")
 
 
 def _summarize_hcp_labor_rows(rows: list, user_id_by_employee_id: dict[str, int]) -> dict:
@@ -738,9 +798,11 @@ async def _hcp_weekly_labor_totals(
 ) -> dict[str, dict]:
     """HCP payroll totals for cost centers starting with the prefix, keyed by report week-ending date (ISO).
 
-    Each HCP pull covers one Mon-Sun pay week (the week before the pull). That
-    week is placed into its report week for the year; when the same week was
-    pulled more than once the most recent pull wins. Weeks with no pull are absent.
+    Each HCP pull covers one Mon-Sun pay week; when the same pay week was pulled
+    more than once the most recent pull wins. A pay week's wages, overtime and
+    hours are shared out to the report weeks holding its weekdays (see
+    _pay_week_report_shares), so a week cut by a month end is split, not
+    counted twice. Head count is not prorated. Weeks with no pull are absent.
     """
     range_start = date(year, 1, 1) - timedelta(days=7)
     range_end = date(year, 12, 31) + timedelta(days=7)
@@ -760,29 +822,29 @@ async def _hcp_weekly_labor_totals(
         )
     ).all()
 
-    latest_by_week: dict[str, dict] = {}
+    latest_by_period: dict[tuple[date, date], dict] = {}
     for snapshot_id, period_start, period_end, pulled_at in snapshots:
         period_start, period_end = _hcp_snapshot_period(period_start, period_end, pulled_at)
-        week_end = _week_ending_for_period(period_start, period_end, week_ending_weekday)
-        if week_end.year != year:
+        shares = _pay_week_report_shares(period_start, period_end, year, week_ending_weekday)
+        if not shares:
             continue
-        week_key = week_end.isoformat()
-        current = latest_by_week.get(week_key)
+        current = latest_by_period.get((period_start, period_end))
         if current is None or (pulled_at, snapshot_id) > (current["pulled_at"], current["snapshot_id"]):
-            latest_by_week[week_key] = {
+            latest_by_period[(period_start, period_end)] = {
                 "snapshot_id": snapshot_id,
                 "period_start": period_start,
                 "period_end": period_end,
                 "pulled_at": pulled_at,
+                "shares": shares,
             }
 
-    if not latest_by_week:
+    if not latest_by_period:
         return {}
 
     rows = (
         await db.execute(
             select(HcpPayrollReportRow).where(
-                HcpPayrollReportRow.snapshot_id.in_({s["snapshot_id"] for s in latest_by_week.values()}),
+                HcpPayrollReportRow.snapshot_id.in_({s["snapshot_id"] for s in latest_by_period.values()}),
                 HcpPayrollReportRow.row_kind == "detail",
                 func.lower(HcpPayrollReportRow.cost_center_name).like(f"{cost_center_prefix.lower()}%"),
             )
@@ -801,16 +863,37 @@ async def _hcp_weekly_labor_totals(
     for row in rows:
         rows_by_snapshot[row.snapshot_id].append(row)
 
-    return {
-        week_key: {
-            **_summarize_hcp_labor_rows(rows_by_snapshot.get(source["snapshot_id"], []), user_id_by_employee_id),
-            "snapshot_id": source["snapshot_id"],
-            "period_start": source["period_start"].isoformat(),
-            "period_end": source["period_end"].isoformat(),
-            "pulled_at": source["pulled_at"].isoformat(),
-        }
-        for week_key, source in latest_by_week.items()
-    }
+    return _allocate_hcp_pay_weeks(
+        [
+            {**source, "totals": _summarize_hcp_labor_rows(rows_by_snapshot.get(source["snapshot_id"], []), user_id_by_employee_id)}
+            for source in latest_by_period.values()
+        ]
+    )
+
+
+def _allocate_hcp_pay_weeks(pay_weeks: list[dict]) -> dict[str, dict]:
+    """Spread pay-week totals over report weeks by each pay week's `shares` (see _pay_week_report_shares)."""
+    by_week: dict[str, dict] = {}
+    for pay_week in pay_weeks:
+        for week_key, share in pay_week["shares"].items():
+            entry = by_week.setdefault(week_key, {**{field: 0.0 for field in _HCP_ADDITIVE_FIELDS}, "head_count": 0, "_share": -1.0})
+            for field in _HCP_ADDITIVE_FIELDS:
+                entry[field] += pay_week["totals"][field] * share
+            entry["head_count"] = max(entry["head_count"], pay_week["totals"]["head_count"])
+            if share > entry["_share"]:  # the pay week supplying most of this report week names the source
+                entry.update({
+                    "_share": share,
+                    "pay_week_share": round(share, 4),
+                    "snapshot_id": pay_week["snapshot_id"],
+                    "period_start": pay_week["period_start"].isoformat(),
+                    "period_end": pay_week["period_end"].isoformat(),
+                    "pulled_at": pay_week["pulled_at"].isoformat(),
+                })
+    for entry in by_week.values():
+        entry.pop("_share")
+        for field in _HCP_ADDITIVE_FIELDS:
+            entry[field] = round(entry[field], 2)
+    return by_week
 
 
 async def _hcp_active_employee_count_for_month(db: AsyncSession, year: int, month: int) -> Optional[int]:
@@ -1142,7 +1225,7 @@ def _report_sections(report_key: str, data: dict, layout: str = "default") -> li
             ("annual_monthly_summary", data.get("annual_monthly_summary", [])),
         ]
 
-    if report_key == "weekly-installer-labor-cost":
+    if report_key in ("weekly-installer-labor-cost", "weekly-installer-labor-cost-subs", "weekly-installer-labor-cost-combined"):
         monthly_report = data.get("monthly_report", {})
         annual_report = data.get("annual_report", {})
         totals_rows = _rows_from_mapping(monthly_report.get("totals", {}))
@@ -1227,6 +1310,64 @@ def _install_completed_fabs_subquery():
     )
 
 
+def _fabrication_period_totals(weekly_rows: list[dict]) -> dict:
+    """Roll weekly fabrication rows up into one row of the same shape (a month or the whole year).
+
+    Amounts and hours are summed, head counts averaged over staffed weeks, and
+    every ratio is recalculated from the sums.
+    """
+    week_count = len(weekly_rows)
+    # Average head counts over weeks that have values so weeks without an HCP pull don't drag them to zero.
+    staffed_head_counts = [_to_float(row["total_head_count_inc_yard"]) for row in weekly_rows if _to_float(row["total_head_count_inc_yard"]) > 0]
+    staffed_total_employees = [_to_float(row["total_employees"]) for row in weekly_rows if _to_float(row.get("total_employees", 0)) > 0]
+
+    totals = {
+        "number_of_weeks": week_count,
+        "number_of_days": int(sum(_to_float(row["number_of_days"]) for row in weekly_rows)),
+        "cut_sqft_saw": round(sum(_to_float(row["cut_sqft_saw"]) for row in weekly_rows), 2),
+        "completed_sqft": round(sum(_to_float(row["completed_sqft"]) for row in weekly_rows), 2),
+        "gross_revenue": round(sum(_to_float(row["gross_revenue"]) for row in weekly_rows), 2),
+        "gross_profit": round(sum(_to_float(row["gross_profit"]) for row in weekly_rows), 2),
+        "wages_basic_shop_yard": round(sum(_to_float(row["wages_basic_shop_yard"]) for row in weekly_rows), 2),
+        "overtime_shop_yard": round(sum(_to_float(row["overtime_shop_yard"]) for row in weekly_rows), 2),
+        "total_labor_cost": round(sum(_to_float(row["total_labor_cost"]) for row in weekly_rows), 2),
+        "regular_hours": round(sum(_to_float(row["regular_hours"]) for row in weekly_rows), 2),
+        "overtime_hours": round(sum(_to_float(row["overtime_hours"]) for row in weekly_rows), 2),
+        "total_hours": round(sum(_to_float(row["total_hours"]) for row in weekly_rows), 2),
+        "total_head_count_inc_yard": round(_safe_div(sum(staffed_head_counts), len(staffed_head_counts)), 2),
+        "total_employees": round(_safe_div(sum(staffed_total_employees), len(staffed_total_employees)), 2),
+        "overhead_per_week": round(sum(_to_float(row.get("overhead_per_week")) for row in weekly_rows), 2),
+    }
+
+    totals["average_sqft_per_day"] = round(_safe_div(totals["completed_sqft"], totals["number_of_days"]), 2)
+    totals["average_revenue_per_day"] = round(_safe_div(totals["gross_revenue"], totals["number_of_days"]), 2)
+    totals["cost_of_overtime_pct"] = round(_safe_div(totals["overtime_shop_yard"], totals["wages_basic_shop_yard"]) * 100, 2)
+    totals["overtime_hours_pct"] = round(_safe_div(totals["overtime_hours"], totals["total_hours"]) * 100, 2)
+    totals["shop_labor_per_hour"] = round(_safe_div(totals["total_labor_cost"], totals["total_hours"]) * totals["total_head_count_inc_yard"], 2)
+    # Overhead over the period's working hours (8 per working day), so short weeks don't skew the rate.
+    totals["shop_overhead_per_hour"] = round(
+        _safe_div(
+            totals["overhead_per_week"] * totals["total_head_count_inc_yard"],
+            totals["total_employees"] * 8 * totals["number_of_days"],
+        ),
+        2,
+    )
+    totals["shop_labor_overhead_per_hour"] = round(totals["shop_labor_per_hour"] + totals["shop_overhead_per_hour"], 2)
+    totals["manpower_cost_per_hour"] = round(_safe_div(totals["shop_labor_overhead_per_hour"], totals["total_head_count_inc_yard"]), 2)
+    totals["sqft_per_labor_hour"] = round(_safe_div(totals["completed_sqft"], totals["total_hours"]), 2)
+    totals["shop_productivity_sqft_per_hour"] = round(totals["sqft_per_labor_hour"] * totals["total_head_count_inc_yard"], 2)
+    totals["labor_cost_per_sq_ft"] = round(_safe_div(totals["total_labor_cost"], totals["completed_sqft"]), 2)
+    totals["labor_cost_pct_per_dollar_sold"] = round(_safe_div(totals["total_labor_cost"], totals["gross_revenue"]) * 100, 2)
+    totals["shop_overhead_cost_per_sqft"] = round(
+        _safe_div(totals["shop_overhead_per_hour"], totals["completed_sqft"]) * 8 * totals["number_of_days"], 2
+    )
+    totals["shop_total_cost_per_sqft"] = round(totals["labor_cost_per_sq_ft"] + totals["shop_overhead_cost_per_sqft"], 2)
+    totals["gross_profit_per_sf_completed"] = round(_safe_div(totals["gross_profit"], totals["completed_sqft"]), 2)
+    totals["gross_profit_less_shop_total_cost_psf"] = round(totals["gross_profit_per_sf_completed"] - totals["shop_total_cost_per_sqft"], 2)
+    totals["gross_revenue_per_sqft_fabricated"] = round(_safe_div(totals["gross_revenue"], totals["completed_sqft"]), 2)
+    return totals
+
+
 @router.get("/reports/owner/weekly-fabrication-labor-cost", response_model=SuccessResponse[dict])
 async def get_owner_weekly_fabrication_labor_cost_report(
     year: int = Query(..., ge=2000, le=2100),
@@ -1234,7 +1375,9 @@ async def get_owner_weekly_fabrication_labor_cost_report(
     total_employees: Optional[int] = Query(
         None, ge=0, description="Display header value for total employees; defaults to the latest HCP roster active employee count"
     ),
-    overhead_per_week: float = Query(38512.69, ge=0, description="Default overhead amount per week"),
+    overhead_per_week: Optional[float] = Query(
+        None, ge=0, description="Overhead per week; defaults to Performance static data (overhead weekly) for the year"
+    ),
     week_ending_weekday: int = Query(4, ge=0, le=6, description="Week ending day: Monday=0 ... Sunday=6"),
     payroll_overrides_json: Optional[str] = Query(
         None,
@@ -1253,6 +1396,9 @@ async def get_owner_weekly_fabrication_labor_cost_report(
     payroll_overrides, payroll_error = _parse_payroll_overrides(payroll_overrides_json)
     if payroll_error:
         return success_response(None, payroll_error, status_code=400)
+    overhead_per_week, overhead_source = await _resolve_overhead_per_week(
+        db, year, overhead_per_week, _FABRICATION_OVERHEAD_FALLBACK
+    )
 
     hcp_weekly = await _hcp_weekly_labor_totals(db, "fabrication", year, week_ending_weekday)
     roster_weekly = await _hcp_weekly_roster_counts(db, year, week_ending_weekday)
@@ -1270,7 +1416,6 @@ async def get_owner_weekly_fabrication_labor_cost_report(
     async def _compute_month(month_num: int) -> dict:
         windows = _week_windows_for_month(year, month_num, week_ending_weekday)
         weekly_rows: list[dict] = []
-        week_overheads: list[float] = []
 
         for window in windows:
             week_key = window["week_end"].isoformat()
@@ -1312,7 +1457,8 @@ async def get_owner_weekly_fabrication_labor_cost_report(
             gross_revenue = _to_float(completion_metrics[1] if completion_metrics else 0.0)
             gross_profit = _to_float(completion_metrics[2] if completion_metrics else 0.0)
 
-            number_of_days = int(window["number_of_days"])
+            # Working days only (Mon-Fri): 5 for a full week, e.g. 3 and 2 for a week cut by a month end.
+            number_of_days = int(window["number_of_weekdays"])
             avg_sqft_per_day = _safe_div(completed_sqft, number_of_days)
             avg_revenue_per_day = _safe_div(gross_revenue, number_of_days)
 
@@ -1327,7 +1473,10 @@ async def get_owner_weekly_fabrication_labor_cost_report(
             overtime_shop_yard = _payroll_value(payroll_overrides, week_key, "overtime_shop_yard", hcp_totals["overtime_wages"])
             regular_hours = _payroll_value(payroll_overrides, week_key, "regular_hours", hcp_totals["regular_hours"])
             overtime_hours = _payroll_value(payroll_overrides, week_key, "overtime_hours", hcp_totals["overtime_hours"])
-            week_overhead = _payroll_value(payroll_overrides, week_key, "overhead_per_week", overhead_per_week)
+            # Overhead per week is for a full working week; short weeks get their weekday share.
+            week_overhead = _payroll_value(payroll_overrides, week_key, "overhead_per_week", overhead_per_week) * (
+                number_of_days / WORK_DAYS_PER_WEEK
+            )
 
             total_labor_cost_override = _payroll_value(payroll_overrides, week_key, "total_labor_cost", -1.0)
             total_labor_cost = (
@@ -1346,7 +1495,7 @@ async def get_owner_weekly_fabrication_labor_cost_report(
             total_hours = regular_hours + overtime_hours
             overtime_hours_pct = _safe_div(overtime_hours, total_hours) * 100
             shop_labor_per_hour = _safe_div(total_labor_cost, total_hours) * head_count
-            shop_overhead_per_hour = _safe_div(week_overhead * head_count, week_total_employees * 8 * 5)
+            shop_overhead_per_hour = _safe_div(week_overhead * head_count, week_total_employees * 8 * number_of_days)
             shop_labor_overhead_per_hour = shop_labor_per_hour + shop_overhead_per_hour
             manpower_cost_per_hour = _safe_div(shop_labor_overhead_per_hour, head_count)
 
@@ -1393,60 +1542,12 @@ async def get_owner_weekly_fabrication_labor_cost_report(
                     "gross_profit_per_sf_completed": round(gross_profit_per_sf_completed, 2),
                     "gross_profit_less_shop_total_cost_psf": round(gross_profit_less_shop_total_cost_psf, 2),
                     "gross_revenue_per_sqft_fabricated": round(gross_revenue_per_sqft_fabricated, 2),
+                    "overhead_per_week": round(float(week_overhead), 2),
                     "hcp_payroll_snapshot_id": hcp_totals.get("snapshot_id"),
                 }
             )
-            week_overheads.append(float(week_overhead))
 
-        week_count = len(weekly_rows)
-        # Average head counts over weeks that have values so weeks without an HCP pull don't drag them to zero.
-        staffed_head_counts = [_to_float(row["total_head_count_inc_yard"]) for row in weekly_rows if _to_float(row["total_head_count_inc_yard"]) > 0]
-        staffed_total_employees = [_to_float(row["total_employees"]) for row in weekly_rows if _to_float(row.get("total_employees", 0)) > 0]
-
-        totals = {
-            "number_of_weeks": week_count,
-            "number_of_days": int(sum(_to_float(row["number_of_days"]) for row in weekly_rows)),
-            "cut_sqft_saw": round(sum(_to_float(row["cut_sqft_saw"]) for row in weekly_rows), 2),
-            "completed_sqft": round(sum(_to_float(row["completed_sqft"]) for row in weekly_rows), 2),
-            "gross_revenue": round(sum(_to_float(row["gross_revenue"]) for row in weekly_rows), 2),
-            "gross_profit": round(sum(_to_float(row["gross_profit"]) for row in weekly_rows), 2),
-            "wages_basic_shop_yard": round(sum(_to_float(row["wages_basic_shop_yard"]) for row in weekly_rows), 2),
-            "overtime_shop_yard": round(sum(_to_float(row["overtime_shop_yard"]) for row in weekly_rows), 2),
-            "total_labor_cost": round(sum(_to_float(row["total_labor_cost"]) for row in weekly_rows), 2),
-            "regular_hours": round(sum(_to_float(row["regular_hours"]) for row in weekly_rows), 2),
-            "overtime_hours": round(sum(_to_float(row["overtime_hours"]) for row in weekly_rows), 2),
-            "total_hours": round(sum(_to_float(row["total_hours"]) for row in weekly_rows), 2),
-            "total_head_count_inc_yard": round(_safe_div(sum(staffed_head_counts), len(staffed_head_counts)), 2),
-            "total_employees": round(_safe_div(sum(staffed_total_employees), len(staffed_total_employees)), 2),
-            "overhead_per_week": round(sum(week_overheads), 2),
-        }
-
-        totals["average_sqft_per_day"] = round(_safe_div(totals["completed_sqft"], totals["number_of_days"]), 2)
-        totals["average_revenue_per_day"] = round(_safe_div(totals["gross_revenue"], totals["number_of_days"]), 2)
-        totals["cost_of_overtime_pct"] = round(_safe_div(totals["overtime_shop_yard"], totals["wages_basic_shop_yard"]) * 100, 2)
-        totals["overtime_hours_pct"] = round(_safe_div(totals["overtime_hours"], totals["total_hours"]) * 100, 2)
-        totals["shop_labor_per_hour"] = round(_safe_div(totals["total_labor_cost"], totals["total_hours"]) * totals["total_head_count_inc_yard"], 2)
-        # Monthly rate uses the average weekly overhead so the $/hr rate doesn't scale with week count.
-        totals["shop_overhead_per_hour"] = round(
-            _safe_div(
-                _safe_div(totals["overhead_per_week"], totals["number_of_weeks"]) * totals["total_head_count_inc_yard"],
-                totals["total_employees"] * 8 * 5,
-            ),
-            2,
-        )
-        totals["shop_labor_overhead_per_hour"] = round(totals["shop_labor_per_hour"] + totals["shop_overhead_per_hour"], 2)
-        totals["manpower_cost_per_hour"] = round(_safe_div(totals["shop_labor_overhead_per_hour"], totals["total_head_count_inc_yard"]), 2)
-        totals["sqft_per_labor_hour"] = round(_safe_div(totals["completed_sqft"], totals["total_hours"]), 2)
-        totals["shop_productivity_sqft_per_hour"] = round(totals["sqft_per_labor_hour"] * totals["total_head_count_inc_yard"], 2)
-        totals["labor_cost_per_sq_ft"] = round(_safe_div(totals["total_labor_cost"], totals["completed_sqft"]), 2)
-        totals["labor_cost_pct_per_dollar_sold"] = round(_safe_div(totals["total_labor_cost"], totals["gross_revenue"]) * 100, 2)
-        totals["shop_overhead_cost_per_sqft"] = round(
-            _safe_div(totals["shop_overhead_per_hour"], totals["completed_sqft"]) * 8 * totals["number_of_days"], 2
-        )
-        totals["shop_total_cost_per_sqft"] = round(totals["labor_cost_per_sq_ft"] + totals["shop_overhead_cost_per_sqft"], 2)
-        totals["gross_profit_per_sf_completed"] = round(_safe_div(totals["gross_profit"], totals["completed_sqft"]), 2)
-        totals["gross_profit_less_shop_total_cost_psf"] = round(totals["gross_profit_per_sf_completed"] - totals["shop_total_cost_per_sqft"], 2)
-        totals["gross_revenue_per_sqft_fabricated"] = round(_safe_div(totals["gross_revenue"], totals["completed_sqft"]), 2)
+        totals = _fabrication_period_totals(weekly_rows)
 
         return {
             "weekly_breakdown": weekly_rows,
@@ -1455,26 +1556,31 @@ async def get_owner_weekly_fabrication_labor_cost_report(
             "month_number": month_num,
         }
 
-    monthly_report = await _compute_month(month)
+    months = [await _compute_month(month_num) for month_num in range(1, 13)]
+    monthly_report = months[month - 1]
 
-    annual_monthly_summary = []
-    for month_num in range(1, 13):
-        month_data = await _compute_month(month_num)
-        totals = month_data["totals"]
-        annual_monthly_summary.append(
-            {
-                "month": calendar.month_name[month_num],
-                "month_number": month_num,
-                "number_of_weeks": int(_to_float(totals.get("number_of_weeks", 0))),
-                "completed_sqft": round(_to_float(totals.get("completed_sqft", 0)), 2),
-                "gross_revenue": round(_to_float(totals.get("gross_revenue", 0)), 2),
-                "gross_profit": round(_to_float(totals.get("gross_profit", 0)), 2),
-                "total_labor_cost": round(_to_float(totals.get("total_labor_cost", 0)), 2),
-                "total_hours": round(_to_float(totals.get("total_hours", 0)), 2),
-                "labor_cost_pct_per_dollar_sold": round(_to_float(totals.get("labor_cost_pct_per_dollar_sold", 0)), 2),
-                "gross_profit_less_shop_total_cost_psf": round(_to_float(totals.get("gross_profit_less_shop_total_cost_psf", 0)), 2),
-            }
-        )
+    # Annual view: one row per month in the same shape as a weekly row, plus the year's totals.
+    annual_monthly_breakdown = [
+        {"month": month_data["month"], "month_number": month_data["month_number"], **month_data["totals"]}
+        for month_data in months
+    ]
+    annual_totals = _fabrication_period_totals([row for month_data in months for row in month_data["weekly_breakdown"]])
+
+    annual_monthly_summary = [
+        {
+            "month": row["month"],
+            "month_number": row["month_number"],
+            "number_of_weeks": int(_to_float(row.get("number_of_weeks", 0))),
+            "completed_sqft": row["completed_sqft"],
+            "gross_revenue": row["gross_revenue"],
+            "gross_profit": row["gross_profit"],
+            "total_labor_cost": row["total_labor_cost"],
+            "total_hours": row["total_hours"],
+            "labor_cost_pct_per_dollar_sold": row["labor_cost_pct_per_dollar_sold"],
+            "gross_profit_less_shop_total_cost_psf": row["gross_profit_less_shop_total_cost_psf"],
+        }
+        for row in annual_monthly_breakdown
+    ]
 
     month_start = date(year, month, 1)
     _, last_day = calendar.monthrange(year, month)
@@ -1484,7 +1590,9 @@ async def get_owner_weekly_fabrication_labor_cost_report(
 
     return success_response(
         {
-            "title": "Weekly Fabrication Labor Cost Analysis",
+            "title": FABRICATION_TITLE,
+            "report_key": "weekly-fabrication-labor-cost",
+            "metric_rows": fabrication_metric_rows(),
             "period": {
                 "start_date": month_start.isoformat(),
                 "end_date": month_end.isoformat(),
@@ -1492,8 +1600,18 @@ async def get_owner_weekly_fabrication_labor_cost_report(
             "display": {
                 "total_employee": resolved_total_employees,
                 "default_overhead_per_week": round(overhead_per_week, 2),
+                "overhead_source": overhead_source,
                 "week_ending_weekday": week_ending_weekday,
             },
+            "widgets": build_labor_cost_widgets(
+                groups=FABRICATION_WIDGET_GROUPS,
+                totals=monthly_report["totals"],
+                static_data=await get_static_data(db, year),
+                overhead_per_week=overhead_per_week,
+                total_employees=resolved_total_employees,
+                wages_regular_key="wages_basic_shop_yard",
+                wages_overtime_key="overtime_shop_yard",
+            ),
             "payroll_source": {
                 "mode": "hcp_payroll",
                 "hcp_payroll_snapshot_id": hcp_totals["snapshot_id"],
@@ -1524,6 +1642,15 @@ async def get_owner_weekly_fabrication_labor_cost_report(
                 "has_default_override": isinstance(payroll_overrides.get("_default"), dict),
             },
             "monthly_report": monthly_report,
+            "annual_report": {
+                "year": year,
+                "period": {
+                    "start_date": date(year, 1, 1).isoformat(),
+                    "end_date": date(year, 12, 31).isoformat(),
+                },
+                "monthly_breakdown": annual_monthly_breakdown,
+                "totals": annual_totals,
+            },
             "annual_monthly_summary": annual_monthly_summary,
         },
         "Owner weekly fabrication labor cost analysis report generated",
@@ -1635,34 +1762,139 @@ def _installer_period_totals(weekly_rows: list[dict]) -> dict:
     return totals
 
 
-@router.get("/reports/owner/weekly-installer-labor-cost", response_model=SuccessResponse[dict])
-async def get_owner_weekly_installer_labor_cost_report(
-    year: int = Query(..., ge=2000, le=2100),
-    month: int = Query(..., ge=1, le=12),
-    total_employees: Optional[int] = Query(
-        None, ge=0, description="Display header value for total employees; defaults to the latest HCP roster active employee count"
-    ),
-    overhead_per_week: float = Query(18512.69, ge=0, description="Default overhead amount per week"),
-    week_ending_weekday: int = Query(4, ge=0, le=6, description="Week ending day: Monday=0 ... Sunday=6"),
-    payroll_overrides_json: Optional[str] = Query(
-        None,
-        description=(
-            "Optional JSON object keyed by week-ending date (YYYY-MM-DD) for external payroll values. "
-            "Supported fields: sub_contractor_head_count, wages_sub_contractor, head_count, "
-            "wages_basic_installer, overtime_installer, overtime_pct, total_labor_cost, "
-            "regular_hours, overtime_hours, overhead_per_week. Use _default object for defaults. "
-            "Unset fields default to that week's HCP payroll pull for Install-prefixed cost centers."
-        ),
-    ),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+def _installer_week_metrics(
+    *,
+    variant: str,
+    number_of_days: int,
+    install_sqft: float,
+    completed_sqft: float,
+    gross_revenue: float,
+    gross_profit: float,
+    ag_head_count: float,
+    wages_basic_installer: float,
+    overtime_installer: float,
+    regular_hours: float,
+    overtime_hours: float,
+    ag_labor_cost_override: Optional[float],
+    overtime_pct_override: Optional[float],
+    sub_labor_cost: float,
+    sub_head_count: float,
+    overhead: float,
+) -> dict:
+    """One week of installer metrics for a report variant.
+
+    ag:       Alpha Granite installers only (HCP payroll), company overhead.
+    subs:     subcontractor labor/head count entered on the Performance page; no
+              payroll hours or company overhead.
+    combined: AG + subs labor and head count summed; every ratio (per sq.ft,
+              per hour, per day) is recalculated from those sums, not averaged.
+    The installed sq.ft, revenue and gross profit are the same installs in all three.
+    """
+    ag_labor = ag_labor_cost_override if ag_labor_cost_override is not None else wages_basic_installer + overtime_installer
+
+    if variant == INSTALLER_VARIANT_SUBS:
+        total_labor_cost, total_head_count = sub_labor_cost, sub_head_count
+        wages_basic_installer = overtime_installer = regular_hours = overtime_hours = 0.0
+        overhead = 0.0
+    elif variant == INSTALLER_VARIANT_COMBINED:
+        total_labor_cost, total_head_count = ag_labor + sub_labor_cost, ag_head_count + sub_head_count
+    else:
+        total_labor_cost, total_head_count = ag_labor, ag_head_count
+        sub_labor_cost = sub_head_count = 0.0
+
+    overtime_pct = (
+        overtime_pct_override
+        if overtime_pct_override is not None and variant != INSTALLER_VARIANT_SUBS
+        else _safe_div(overtime_installer, wages_basic_installer) * 100
+    )
+    total_hours = regular_hours + overtime_hours
+    hourly_labor = _safe_div(total_labor_cost, total_hours)
+    hourly_overhead = _safe_div(overhead, total_hours)
+    labor_cost_per_sq_ft = _safe_div(total_labor_cost, completed_sqft)
+    overhead_cost_per_sqft_installed = _safe_div(overhead, completed_sqft)
+    cost_to_install_per_sqft = labor_cost_per_sq_ft + overhead_cost_per_sqft_installed
+    gross_profit_per_sf_installed = _safe_div(gross_profit, completed_sqft)
+
+    values = {
+        "number_of_days_per_week": number_of_days,
+        "install_sqft_per_week": install_sqft,
+        "completed_sqft_per_week": completed_sqft,
+        "average_sqft_per_day": _safe_div(completed_sqft, number_of_days),
+        "gross_revenue": gross_revenue,
+        "gross_profit": gross_profit,
+        "average_revenue_per_day": _safe_div(gross_revenue, number_of_days),
+        "sub_contractor_head_count": sub_head_count,
+        "wages_sub_contractor": sub_labor_cost,
+        "total_head_count": total_head_count,
+        "wages_basic_installer": wages_basic_installer,
+        "overtime_installer": overtime_installer,
+        "overtime_pct": overtime_pct,
+        "total_labor_cost": total_labor_cost,
+        "regular_hours": regular_hours,
+        "overtime_hours": overtime_hours,
+        "overtime_total_hours_pct": _safe_div(overtime_hours, total_hours) * 100,
+        "total_hours": total_hours,
+        "hourly_labor_cost_all_installers": hourly_labor,
+        "hourly_overhead_cost_all_installers": hourly_overhead,
+        "hourly_cost_all_installers_inc_overhead": hourly_labor + hourly_overhead,
+        "hourly_cost_per_installer_inc_overhead": _safe_div(hourly_labor + hourly_overhead, total_head_count),
+        "sqft_per_labor_hour": _safe_div(completed_sqft, total_hours),
+        "installer_productivity_sqft_per_hour": _safe_div(install_sqft, total_hours),
+        "labor_cost_per_sq_ft": labor_cost_per_sq_ft,
+        "labor_cost_pct_per_dollar_sold": _safe_div(total_labor_cost, gross_revenue) * 100,
+        "overhead_cost_per_sqft_installed": overhead_cost_per_sqft_installed,
+        "cost_to_install_per_sqft": cost_to_install_per_sqft,
+        "gross_profit_per_sf_installed": gross_profit_per_sf_installed,
+        "gross_profit_less_installer_total_cost_psf": gross_profit_per_sf_installed - cost_to_install_per_sqft,
+        "gross_revenue_per_sq_ft": _safe_div(gross_revenue, completed_sqft),
+        "overhead_per_week": overhead,
+    }
+    return {key: (int(value) if key == "number_of_days_per_week" else round(value, 2)) for key, value in values.items()}
+
+
+async def _resolve_overhead_per_week(db: AsyncSession, year: int, requested: Optional[float], fallback: float) -> tuple[float, str]:
+    """Overhead per week: the query value, else Performance static data for the year, else the legacy default."""
+    if requested is not None:
+        return requested, "query"
+    from_static = await weekly_overhead_for_year(db, year)
+    if from_static is not None:
+        return from_static, "performance_static_data"
+    return fallback, "default"
+
+
+_INSTALLER_OVERHEAD_FALLBACK = 18512.69
+_FABRICATION_OVERHEAD_FALLBACK = 38512.69
+
+_INSTALLER_PAYROLL_OVERRIDES_DESCRIPTION = (
+    "Optional JSON object keyed by week-ending date (YYYY-MM-DD) for external payroll values. "
+    "Supported fields: sub_contractor_head_count, wages_sub_contractor, head_count, "
+    "wages_basic_installer, overtime_installer, overtime_pct, total_labor_cost (Alpha Granite labor), "
+    "regular_hours, overtime_hours, overhead_per_week. Use _default object for defaults. "
+    "Unset AG fields default to that week's HCP payroll pull for Install-prefixed cost centers; "
+    "unset subcontractor fields default to the weekly values entered on the Performance page."
+)
+
+
+async def _installer_labor_cost_report(
+    db: AsyncSession,
+    *,
+    variant: str,
+    year: int,
+    month: int,
+    total_employees: Optional[int],
+    overhead_per_week: Optional[float],
+    week_ending_weekday: int,
+    payroll_overrides_json: Optional[str],
 ):
-    """Weekly installer labor cost analysis with monthly and annual summaries."""
     payroll_overrides, payroll_error = _parse_payroll_overrides(payroll_overrides_json)
     if payroll_error:
         return success_response(None, payroll_error, status_code=400)
 
+    resolved_overhead, overhead_source = await _resolve_overhead_per_week(
+        db, year, overhead_per_week, _INSTALLER_OVERHEAD_FALLBACK
+    )
     hcp_weekly = await _hcp_weekly_labor_totals(db, "install", year, week_ending_weekday)
+    sub_weekly = await subcontractor_labor_by_week(db, year)
     roster_active_employee_count = await _hcp_active_employee_count_for_month(db, year, month)
     resolved_total_employees = (
         total_employees if total_employees is not None else (roster_active_employee_count if roster_active_employee_count is not None else 40)
@@ -1687,6 +1919,7 @@ async def get_owner_weekly_installer_labor_cost_report(
             week_start_dt = to_app_tz(datetime.combine(window["overlap_start"], time.min))
             week_end_dt = to_app_tz(datetime.combine(window["overlap_end"], time.max))
             hcp_totals = hcp_weekly.get(week_key, EMPTY_HCP_LABOR_TOTALS)
+            sub_entry = sub_weekly.get(week_key, {})
 
             week_fab_ids = select(installed_fabs.c.fab_id).where(
                 installed_fabs.c.completed_at >= week_start_dt,
@@ -1718,91 +1951,37 @@ async def get_owner_weekly_installer_labor_cost_report(
                 )
             ).first()
 
-            install_sqft = _to_float(install_sqft_row[0] if install_sqft_row else 0.0)
-            completed_sqft = _to_float(completion_metrics[0] if completion_metrics else 0.0)
-            gross_revenue = _to_float(completion_metrics[1] if completion_metrics else 0.0)
-            gross_profit = _to_float(completion_metrics[2] if completion_metrics else 0.0)
-
-            number_of_days = int(window["number_of_days"])
-            avg_sqft_per_day = _safe_div(completed_sqft, number_of_days)
-            avg_revenue_per_day = _safe_div(gross_revenue, number_of_days)
-
-            sub_contractor_head_count = _payroll_value(payroll_overrides, week_key, "sub_contractor_head_count", 0.0)
-            wages_sub_contractor = _payroll_value(payroll_overrides, week_key, "wages_sub_contractor", 0.0)
-            total_head_count = _payroll_value(payroll_overrides, week_key, "head_count", float(hcp_totals["head_count"]))
-            wages_basic_installer = _payroll_value(payroll_overrides, week_key, "wages_basic_installer", hcp_totals["wages_basic"])
-            overtime_installer = _payroll_value(payroll_overrides, week_key, "overtime_installer", hcp_totals["overtime_wages"])
-            regular_hours = _payroll_value(payroll_overrides, week_key, "regular_hours", hcp_totals["regular_hours"])
-            overtime_hours = _payroll_value(payroll_overrides, week_key, "overtime_hours", hcp_totals["overtime_hours"])
-            week_overhead = _payroll_value(payroll_overrides, week_key, "overhead_per_week", overhead_per_week)
-
-            total_labor_cost_override = _payroll_value(payroll_overrides, week_key, "total_labor_cost", -1.0)
-            total_labor_cost = (
-                total_labor_cost_override
-                if total_labor_cost_override >= 0
-                else (wages_basic_installer + overtime_installer + wages_sub_contractor)
-            )
-
+            labor_override = _payroll_value(payroll_overrides, week_key, "total_labor_cost", -1.0)
             overtime_pct_override = _payroll_value(payroll_overrides, week_key, "overtime_pct", -1.0)
-            overtime_pct = (
-                overtime_pct_override
-                if overtime_pct_override >= 0
-                else (_safe_div(overtime_installer, wages_basic_installer) * 100)
+            metrics = _installer_week_metrics(
+                variant=variant,
+                number_of_days=int(window["number_of_weekdays"]),
+                install_sqft=_to_float(install_sqft_row[0] if install_sqft_row else 0.0),
+                completed_sqft=_to_float(completion_metrics[0] if completion_metrics else 0.0),
+                gross_revenue=_to_float(completion_metrics[1] if completion_metrics else 0.0),
+                gross_profit=_to_float(completion_metrics[2] if completion_metrics else 0.0),
+                ag_head_count=_payroll_value(payroll_overrides, week_key, "head_count", float(hcp_totals["head_count"])),
+                wages_basic_installer=_payroll_value(payroll_overrides, week_key, "wages_basic_installer", hcp_totals["wages_basic"]),
+                overtime_installer=_payroll_value(payroll_overrides, week_key, "overtime_installer", hcp_totals["overtime_wages"]),
+                regular_hours=_payroll_value(payroll_overrides, week_key, "regular_hours", hcp_totals["regular_hours"]),
+                overtime_hours=_payroll_value(payroll_overrides, week_key, "overtime_hours", hcp_totals["overtime_hours"]),
+                ag_labor_cost_override=labor_override if labor_override >= 0 else None,
+                overtime_pct_override=overtime_pct_override if overtime_pct_override >= 0 else None,
+                sub_labor_cost=_payroll_value(
+                    payroll_overrides, week_key, "wages_sub_contractor", _to_float(sub_entry.get("total_labor_cost"))
+                ),
+                sub_head_count=_payroll_value(
+                    payroll_overrides, week_key, "sub_contractor_head_count", _to_float(sub_entry.get("head_count"))
+                ),
+                # Full-week overhead, prorated for short weeks by working days.
+                overhead=_payroll_value(payroll_overrides, week_key, "overhead_per_week", resolved_overhead)
+                * (int(window["number_of_weekdays"]) / WORK_DAYS_PER_WEEK),
             )
-
-            total_hours = regular_hours + overtime_hours
-            overtime_total_hours_pct = _safe_div(overtime_hours, total_hours) * 100
-            hourly_labor_cost_all_installers = _safe_div(total_labor_cost, total_hours)
-            hourly_overhead_cost_all_installers = _safe_div(week_overhead, total_hours)
-            hourly_cost_all_installers_inc_overhead = hourly_labor_cost_all_installers + hourly_overhead_cost_all_installers
-            hourly_cost_per_installer_inc_overhead = _safe_div(hourly_cost_all_installers_inc_overhead, total_head_count)
-
-            sqft_per_labor_hour = _safe_div(completed_sqft, total_hours)
-            installer_productivity_sqft_per_hour = _safe_div(install_sqft, total_hours)
-            labor_cost_per_sq_ft = _safe_div(total_labor_cost, completed_sqft)
-            labor_cost_pct_per_dollar_sold = _safe_div(total_labor_cost, gross_revenue) * 100
-            overhead_cost_per_sqft_installed = _safe_div(week_overhead, completed_sqft)
-            cost_to_install_per_sqft = labor_cost_per_sq_ft + overhead_cost_per_sqft_installed
-            gross_profit_per_sf_installed = _safe_div(gross_profit, completed_sqft)
-            gross_profit_less_installer_total_cost_psf = gross_profit_per_sf_installed - cost_to_install_per_sqft
-            gross_revenue_per_sq_ft = _safe_div(gross_revenue, completed_sqft)
-
             weekly_rows.append(
                 {
                     "week_ending": week_key,
                     "has_data": True,
-                    "number_of_days_per_week": number_of_days,
-                    "install_sqft_per_week": round(install_sqft, 2),
-                    "completed_sqft_per_week": round(completed_sqft, 2),
-                    "average_sqft_per_day": round(avg_sqft_per_day, 2),
-                    "gross_revenue": round(gross_revenue, 2),
-                    "gross_profit": round(gross_profit, 2),
-                    "average_revenue_per_day": round(avg_revenue_per_day, 2),
-                    "sub_contractor_head_count": round(sub_contractor_head_count, 2),
-                    "wages_sub_contractor": round(wages_sub_contractor, 2),
-                    "total_head_count": round(total_head_count, 2),
-                    "wages_basic_installer": round(wages_basic_installer, 2),
-                    "overtime_installer": round(overtime_installer, 2),
-                    "overtime_pct": round(overtime_pct, 2),
-                    "total_labor_cost": round(total_labor_cost, 2),
-                    "regular_hours": round(regular_hours, 2),
-                    "overtime_hours": round(overtime_hours, 2),
-                    "overtime_total_hours_pct": round(overtime_total_hours_pct, 2),
-                    "total_hours": round(total_hours, 2),
-                    "hourly_labor_cost_all_installers": round(hourly_labor_cost_all_installers, 2),
-                    "hourly_overhead_cost_all_installers": round(hourly_overhead_cost_all_installers, 2),
-                    "hourly_cost_all_installers_inc_overhead": round(hourly_cost_all_installers_inc_overhead, 2),
-                    "hourly_cost_per_installer_inc_overhead": round(hourly_cost_per_installer_inc_overhead, 2),
-                    "sqft_per_labor_hour": round(sqft_per_labor_hour, 2),
-                    "installer_productivity_sqft_per_hour": round(installer_productivity_sqft_per_hour, 2),
-                    "labor_cost_per_sq_ft": round(labor_cost_per_sq_ft, 2),
-                    "labor_cost_pct_per_dollar_sold": round(labor_cost_pct_per_dollar_sold, 2),
-                    "overhead_cost_per_sqft_installed": round(overhead_cost_per_sqft_installed, 2),
-                    "cost_to_install_per_sqft": round(cost_to_install_per_sqft, 2),
-                    "gross_profit_per_sf_installed": round(gross_profit_per_sf_installed, 2),
-                    "gross_profit_less_installer_total_cost_psf": round(gross_profit_less_installer_total_cost_psf, 2),
-                    "gross_revenue_per_sq_ft": round(gross_revenue_per_sq_ft, 2),
-                    "overhead_per_week": round(week_overhead, 2),
+                    **metrics,
                     "hcp_payroll_snapshot_id": hcp_totals.get("snapshot_id"),
                 }
             )
@@ -1848,16 +2027,30 @@ async def get_owner_weekly_installer_labor_cost_report(
 
     return success_response(
         {
-            "title": "Weekly Installer Labor Cost Analysis",
+            "title": INSTALLER_TITLES[variant],
+            "report_key": INSTALLER_REPORT_KEYS[variant],
+            "variant": variant,
+            "metric_rows": installer_metric_rows(variant),
             "period": {
                 "start_date": month_start.isoformat(),
                 "end_date": month_end.isoformat(),
             },
             "display": {
                 "total_employee": resolved_total_employees,
-                "default_overhead_per_week": round(overhead_per_week, 2),
+                # Subs carry no company overhead.
+                "default_overhead_per_week": None if variant == INSTALLER_VARIANT_SUBS else round(resolved_overhead, 2),
+                "overhead_source": "not_applicable" if variant == INSTALLER_VARIANT_SUBS else overhead_source,
                 "week_ending_weekday": week_ending_weekday,
             },
+            "widgets": build_labor_cost_widgets(
+                groups=INSTALLER_WIDGET_GROUPS[variant],
+                totals=monthly_report["totals"],
+                static_data=await get_static_data(db, year),
+                overhead_per_week=resolved_overhead,
+                total_employees=resolved_total_employees,
+                wages_regular_key="wages_basic_installer",
+                wages_overtime_key="overtime_installer",
+            ),
             "payroll_source": {
                 "mode": "hcp_payroll",
                 "hcp_payroll_snapshot_id": hcp_totals["snapshot_id"],
@@ -1873,6 +2066,7 @@ async def get_owner_weekly_installer_labor_cost_report(
                 },
                 "hcp_payroll_weeks": hcp_month["weeks"],
                 "roster_active_employee_count": roster_active_employee_count,
+                "subcontractor_weeks_entered": sorted(sub_weekly.keys()),
                 "override_fields": [
                     "sub_contractor_head_count",
                     "wages_sub_contractor",
@@ -1900,8 +2094,168 @@ async def get_owner_weekly_installer_labor_cost_report(
             },
             "annual_monthly_summary": annual_monthly_summary,
         },
-        "Owner weekly installer labor cost analysis report generated",
+        f"Owner weekly installer labor cost analysis report generated ({variant})",
     )
+
+
+INSTALLER_REPORT_KEYS = {
+    INSTALLER_VARIANT_AG: "weekly-installer-labor-cost",
+    INSTALLER_VARIANT_SUBS: "weekly-installer-labor-cost-subs",
+    INSTALLER_VARIANT_COMBINED: "weekly-installer-labor-cost-combined",
+}
+_INSTALLER_VARIANT_BY_KEY = {key: variant for variant, key in INSTALLER_REPORT_KEYS.items()}
+
+
+@router.get("/reports/owner/weekly-installer-labor-cost", response_model=SuccessResponse[dict])
+async def get_owner_weekly_installer_labor_cost_report(
+    year: int = Query(..., ge=2000, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    total_employees: Optional[int] = Query(
+        None, ge=0, description="Display header value for total employees; defaults to the latest HCP roster active employee count"
+    ),
+    overhead_per_week: Optional[float] = Query(
+        None, ge=0, description="Overhead per week; defaults to Performance static data (overhead weekly) for the year"
+    ),
+    week_ending_weekday: int = Query(4, ge=0, le=6, description="Week ending day: Monday=0 ... Sunday=6"),
+    payroll_overrides_json: Optional[str] = Query(None, description=_INSTALLER_PAYROLL_OVERRIDES_DESCRIPTION),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Installer Labor Costs - Weekly - Alpha Granite (HCP payroll installers only)."""
+    return await _installer_labor_cost_report(
+        db, variant=INSTALLER_VARIANT_AG, year=year, month=month, total_employees=total_employees,
+        overhead_per_week=overhead_per_week, week_ending_weekday=week_ending_weekday,
+        payroll_overrides_json=payroll_overrides_json,
+    )
+
+
+@router.get("/reports/owner/weekly-installer-labor-cost-subs", response_model=SuccessResponse[dict])
+async def get_owner_weekly_installer_labor_cost_subs_report(
+    year: int = Query(..., ge=2000, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    total_employees: Optional[int] = Query(None, ge=0, description="Display header value for total employees"),
+    week_ending_weekday: int = Query(4, ge=0, le=6, description="Week ending day: Monday=0 ... Sunday=6"),
+    payroll_overrides_json: Optional[str] = Query(None, description=_INSTALLER_PAYROLL_OVERRIDES_DESCRIPTION),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Installer Labor Costs - Weekly - Subs (subcontractor labor entered on the Performance page)."""
+    return await _installer_labor_cost_report(
+        db, variant=INSTALLER_VARIANT_SUBS, year=year, month=month, total_employees=total_employees,
+        overhead_per_week=None, week_ending_weekday=week_ending_weekday,
+        payroll_overrides_json=payroll_overrides_json,
+    )
+
+
+@router.get("/reports/owner/weekly-installer-labor-cost-combined", response_model=SuccessResponse[dict])
+async def get_owner_weekly_installer_labor_cost_combined_report(
+    year: int = Query(..., ge=2000, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    total_employees: Optional[int] = Query(None, ge=0, description="Display header value for total employees"),
+    overhead_per_week: Optional[float] = Query(
+        None, ge=0, description="Overhead per week; defaults to Performance static data (overhead weekly) for the year"
+    ),
+    week_ending_weekday: int = Query(4, ge=0, le=6, description="Week ending day: Monday=0 ... Sunday=6"),
+    payroll_overrides_json: Optional[str] = Query(None, description=_INSTALLER_PAYROLL_OVERRIDES_DESCRIPTION),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Installer Labor Costs - Weekly - Combined (Alpha Granite + Subs; ratios recalculated from the summed totals)."""
+    return await _installer_labor_cost_report(
+        db, variant=INSTALLER_VARIANT_COMBINED, year=year, month=month, total_employees=total_employees,
+        overhead_per_week=overhead_per_week, week_ending_weekday=week_ending_weekday,
+        payroll_overrides_json=payroll_overrides_json,
+    )
+
+
+def _labor_cost_pdf_response(report_response, report_key: str, year: int, month: int):
+    """PDF download for a labor cost report response; report errors are passed through as JSON."""
+    if getattr(report_response, "status_code", 200) != 200:
+        return report_response
+    data = _unwrap_success_data(report_response)
+    pdf_bytes = build_labor_cost_pdf(data)
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{pdf_filename(report_key, year, month)}"'},
+    )
+
+
+@router.get("/reports/owner/weekly-fabrication-labor-cost/pdf")
+async def get_owner_weekly_fabrication_labor_cost_pdf(
+    year: int = Query(..., ge=2000, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    total_employees: Optional[int] = Query(None, ge=0),
+    overhead_per_week: Optional[float] = Query(None, ge=0),
+    week_ending_weekday: int = Query(4, ge=0, le=6),
+    payroll_overrides_json: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """PDF of Shop Labor Costs - Weekly (same rows, styles and totals as the web report)."""
+    response = await get_owner_weekly_fabrication_labor_cost_report(
+        year=year, month=month, total_employees=total_employees, overhead_per_week=overhead_per_week,
+        week_ending_weekday=week_ending_weekday, payroll_overrides_json=payroll_overrides_json,
+        db=db, current_user=current_user,
+    )
+    return _labor_cost_pdf_response(response, "weekly-fabrication-labor-cost", year, month)
+
+
+async def _installer_labor_cost_pdf(db, variant: str, year: int, month: int, total_employees, overhead_per_week,
+                                    week_ending_weekday: int, payroll_overrides_json):
+    response = await _installer_labor_cost_report(
+        db, variant=variant, year=year, month=month, total_employees=total_employees,
+        overhead_per_week=overhead_per_week, week_ending_weekday=week_ending_weekday,
+        payroll_overrides_json=payroll_overrides_json,
+    )
+    return _labor_cost_pdf_response(response, INSTALLER_REPORT_KEYS[variant], year, month)
+
+
+@router.get("/reports/owner/weekly-installer-labor-cost/pdf")
+async def get_owner_weekly_installer_labor_cost_pdf(
+    year: int = Query(..., ge=2000, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    total_employees: Optional[int] = Query(None, ge=0),
+    overhead_per_week: Optional[float] = Query(None, ge=0),
+    week_ending_weekday: int = Query(4, ge=0, le=6),
+    payroll_overrides_json: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """PDF of Installer Labor Costs - Weekly - Alpha Granite."""
+    return await _installer_labor_cost_pdf(db, INSTALLER_VARIANT_AG, year, month, total_employees,
+                                           overhead_per_week, week_ending_weekday, payroll_overrides_json)
+
+
+@router.get("/reports/owner/weekly-installer-labor-cost-subs/pdf")
+async def get_owner_weekly_installer_labor_cost_subs_pdf(
+    year: int = Query(..., ge=2000, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    total_employees: Optional[int] = Query(None, ge=0),
+    week_ending_weekday: int = Query(4, ge=0, le=6),
+    payroll_overrides_json: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """PDF of Installer Labor Costs - Weekly - Subs."""
+    return await _installer_labor_cost_pdf(db, INSTALLER_VARIANT_SUBS, year, month, total_employees,
+                                           None, week_ending_weekday, payroll_overrides_json)
+
+
+@router.get("/reports/owner/weekly-installer-labor-cost-combined/pdf")
+async def get_owner_weekly_installer_labor_cost_combined_pdf(
+    year: int = Query(..., ge=2000, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    total_employees: Optional[int] = Query(None, ge=0),
+    overhead_per_week: Optional[float] = Query(None, ge=0),
+    week_ending_weekday: int = Query(4, ge=0, le=6),
+    payroll_overrides_json: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """PDF of Installer Labor Costs - Weekly - Combined."""
+    return await _installer_labor_cost_pdf(db, INSTALLER_VARIANT_COMBINED, year, month, total_employees,
+                                           overhead_per_week, week_ending_weekday, payroll_overrides_json)
 
 
 def _csv_bytes(report_key: str, data: dict, layout: str = "default") -> bytes:
@@ -8012,7 +8366,7 @@ async def export_owner_report(
     year: Optional[int] = Query(None, ge=2000, le=2100),
     month: Optional[int] = Query(None, ge=1, le=12),
     total_employees: Optional[int] = Query(None, ge=0),
-    overhead_per_week: float = Query(38512.69, ge=0),
+    overhead_per_week: Optional[float] = Query(None, ge=0),
     week_ending_weekday: int = Query(4, ge=0, le=6),
     payroll_overrides_json: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
@@ -8115,19 +8469,19 @@ async def export_owner_report(
                 current_user=current_user,
             )
         )
-    elif key == "weekly-installer-labor-cost":
+    elif key in _INSTALLER_VARIANT_BY_KEY:
         if year is None or month is None:
-            return success_response(None, "year and month are required for weekly-installer-labor-cost", status_code=400)
+            return success_response(None, f"year and month are required for {key}", status_code=400)
         data = _unwrap_success_data(
-            await get_owner_weekly_installer_labor_cost_report(
+            await _installer_labor_cost_report(
+                db,
+                variant=_INSTALLER_VARIANT_BY_KEY[key],
                 year=year,
                 month=month,
                 total_employees=total_employees,
                 overhead_per_week=overhead_per_week,
                 week_ending_weekday=week_ending_weekday,
                 payroll_overrides_json=payroll_overrides_json,
-                db=db,
-                current_user=current_user,
             )
         )
     else:

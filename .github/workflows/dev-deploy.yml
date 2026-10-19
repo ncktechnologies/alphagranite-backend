@@ -32,9 +32,25 @@ jobs:
             echo "Navigating to project directory..."
             cd /root/alphagranite/alpha-granit
             
+            # docker-compose.yml is per-server and untracked: keep this server's copy
+            # across the pull (the pull that untracks it would otherwise delete it).
+            COMPOSE_KEEP=/tmp/ag_dev_docker-compose.yml
+            COMPOSE_KEPT=
+            if [ -f docker-compose.yml ]; then
+              cp docker-compose.yml "$COMPOSE_KEEP" && COMPOSE_KEPT=1
+              git checkout -- docker-compose.yml 2>/dev/null || true
+            fi
+
             # Pull latest changes
             echo "Pulling latest changes from Git..."
             git pull
+
+            if [ -n "$COMPOSE_KEPT" ]; then
+              cp "$COMPOSE_KEEP" docker-compose.yml
+            elif [ ! -f docker-compose.yml ]; then
+              echo "docker-compose.yml missing: copy docker-compose.example.yml and set this server's values"
+              exit 1
+            fi
             
             # Start services
             echo "Starting services..."

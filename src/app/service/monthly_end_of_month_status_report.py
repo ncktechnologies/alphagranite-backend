@@ -432,7 +432,7 @@ async def _scheduler_loop() -> None:
 def start_monthly_status_report_scheduler() -> None:
     global _scheduler_task
 
-    is_enabled = os.getenv("EOM_STATUS_REPORT_ENABLED", "false").strip().lower() == "false"
+    is_enabled = os.getenv("EOM_STATUS_REPORT_ENABLED", "false").strip().lower() == "true"
     if not is_enabled:
         logger.info("End-of-month status report scheduler is disabled")
         return
@@ -458,3 +458,14 @@ async def stop_monthly_status_report_scheduler() -> None:
     finally:
         _scheduler_task = None
         logger.info("End-of-month status report scheduler stopped")
+
+
+async def _run_monthly_status_report_scheduler() -> None:
+    start_monthly_status_report_scheduler()
+    if _scheduler_task is not None:
+        await _scheduler_task
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+    asyncio.run(_run_monthly_status_report_scheduler())

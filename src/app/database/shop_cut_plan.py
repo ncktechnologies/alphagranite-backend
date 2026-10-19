@@ -1,14 +1,23 @@
 from datetime import datetime
 from typing import Optional
+from sqlalchemy import Index, text
 from sqlmodel import SQLModel, Field
 from src.app.utils.helpers import app_now
 
 
 class ShopCutPlan(SQLModel, table=True):
     __tablename__ = "shop_cut_plans"
+    __table_args__ = (
+        Index(
+            "ix_shop_cut_plans_incomplete_fab_id",
+            "fab_id",
+            postgresql_where=text("coalesce(work_percentage, 0) < 100"),
+            sqlite_where=text("coalesce(work_percentage, 0) < 100"),
+        ),
+    )
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    fab_id: int = Field(foreign_key="fabs.id")
+    fab_id: int = Field(foreign_key="fabs.id", index=True)
     workstation_id: int = Field(foreign_key="work_stations.id")
     planning_section_id: int = Field(foreign_key="planning_sections.id")
     user_id: int = Field(foreign_key="users.id")

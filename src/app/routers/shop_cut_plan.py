@@ -3,7 +3,7 @@ from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, and_, or_, cast, String
 from datetime import datetime, timedelta, date
-from typing import List, Optional, Dict, Tuple
+from typing import Any, List, Optional, Dict, Tuple
 from pydantic import BaseModel
 from collections import Counter
 
@@ -36,6 +36,11 @@ router = APIRouter(
     prefix="/shop",
     tags=["Shop Cut Planning"]
 )
+
+# How far before a calendar window to look for plans whose end is derived from
+# estimated_hours (no stored scheduled_end_date). Plans with a stored end are
+# matched on that end directly, so this only bounds derived-end plans.
+SHOP_PLAN_OVERLAP_LOOKBACK = timedelta(days=30)
 
 
 @router.post("/plans", response_model=dict)
@@ -328,6 +333,11 @@ async def get_all_shop_plans(
     query = query.where(
         ShopCutPlan.scheduled_start_date.is_not(None),
         ShopCutPlan.scheduled_start_date < range_end,
+        # Coarse lower bound so we don't load all plan history; exact overlap is checked below.
+        or_(
+            ShopCutPlan.scheduled_end_date >= range_start,
+            ShopCutPlan.scheduled_start_date >= range_start - SHOP_PLAN_OVERLAP_LOOKBACK,
+        ),
     )
 
     plans = await _fetch_all_ordered_plans(db, query)
@@ -832,9 +842,67 @@ async def _recalculate_shop_plan_work_percentage(
     )
     running_sessions = running_result.scalars().all()
 
+    return _compute_work_progress(
+        plan,
+        stored_seconds,
+        [session.current_run_start_at for session in running_sessions],
+        as_of,
+    )
+
+
+async def _get_work_progress_by_plan(
+    db: AsyncSession,
+    plans: List[ShopCutPlan],
+    as_of: datetime,
+) -> Dict[int, Tuple[int, float, int]]:
+    """Batched _recalculate_shop_plan_work_percentage: two queries for any number of plans."""
+    plan_ids = list({plan.id for plan in plans if plan.id is not None})
+    if not plan_ids:
+        return {}
+
+    totals_result = await db.execute(
+        select(
+            ShopCutPlanTimerSession.shop_cut_plan_id,
+            func.coalesce(func.sum(ShopCutPlanTimerSession.total_work_seconds), 0),
+        )
+        .where(ShopCutPlanTimerSession.shop_cut_plan_id.in_(plan_ids))
+        .group_by(ShopCutPlanTimerSession.shop_cut_plan_id)
+    )
+    stored_seconds_by_plan = {plan_id: int(total or 0) for plan_id, total in totals_result.all()}
+
+    running_result = await db.execute(
+        select(ShopCutPlanTimerSession.shop_cut_plan_id, ShopCutPlanTimerSession.current_run_start_at)
+        .where(
+            ShopCutPlanTimerSession.shop_cut_plan_id.in_(plan_ids),
+            ShopCutPlanTimerSession.status == "running",
+            ShopCutPlanTimerSession.current_run_start_at.is_not(None),
+        )
+    )
+    run_starts_by_plan: Dict[int, List[datetime]] = {}
+    for plan_id, run_start in running_result.all():
+        run_starts_by_plan.setdefault(plan_id, []).append(run_start)
+
+    return {
+        plan.id: _compute_work_progress(
+            plan,
+            stored_seconds_by_plan.get(plan.id, 0),
+            run_starts_by_plan.get(plan.id, []),
+            as_of,
+        )
+        for plan in plans
+        if plan.id is not None
+    }
+
+
+def _compute_work_progress(
+    plan: ShopCutPlan,
+    stored_seconds: int,
+    run_starts: List[datetime],
+    as_of: datetime,
+) -> Tuple[int, float, int]:
     in_progress_seconds = 0
-    for session in running_sessions:
-        run_start = _normalize_naive_dt(session.current_run_start_at)
+    for current_run_start_at in run_starts:
+        run_start = _normalize_naive_dt(current_run_start_at)
         if run_start and as_of > run_start:
             in_progress_seconds += int((as_of - run_start).total_seconds())
 
@@ -1221,24 +1289,24 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
     serialized_plans = []
     grouped = {}
 
-    fab_cache: Dict[int, Optional[Fab]] = {}
-    job_cache: Dict[int, Optional[BusinessJob]] = {}
-    account_cache: Dict[int, Optional[Account]] = {}
+    as_of = app_now().replace(second=0, microsecond=0)
+    fab_ids = [plan.fab_id for plan in plans if plan.fab_id is not None]
 
-    current_plan_stage_by_fab = await _get_current_plan_stage_by_fab(
-        db,
-        [plan.fab_id for plan in plans if plan.fab_id is not None],
-    )
-    pending_shop_revision_by_fab = await _get_pending_shop_revision_flags(
-        db,
-        [plan.fab_id for plan in plans if plan.fab_id is not None],
-    )
+    current_plan_stage_by_fab = await _get_current_plan_stage_by_fab(db, fab_ids)
+    pending_shop_revision_by_fab = await _get_pending_shop_revision_flags(db, fab_ids)
+    work_progress_by_plan = await _get_work_progress_by_plan(db, plans, as_of)
+
+    workstations_by_id = await _fetch_by_ids(db, WorkStation, (plan.workstation_id for plan in plans))
+    users_by_id = await _fetch_by_ids(db, User, (plan.user_id for plan in plans))
+    planning_sections_by_id = await _fetch_by_ids(db, PlanningSection, (plan.planning_section_id for plan in plans))
+    fabs_by_id = await _fetch_by_ids(db, Fab, fab_ids)
+    jobs_by_id = await _fetch_by_ids(db, BusinessJob, (getattr(fab, "job_id", None) for fab in fabs_by_id.values()))
+    accounts_by_id = await _fetch_by_ids(db, Account, (job.account_id for job in jobs_by_id.values()))
 
     for plan in plans:
-        work_percentage, total_actual_hours, total_actual_seconds = await _recalculate_shop_plan_work_percentage(
-            db=db,
-            plan=plan,
-            as_of=app_now().replace(second=0, microsecond=0),
+        work_percentage, total_actual_hours, total_actual_seconds = work_progress_by_plan.get(
+            plan.id,
+            _compute_work_progress(plan, 0, [], as_of),
         )
         # Calendar view should reflect the persisted plan progress updated by
         # operator task PATCH immediately, while still exposing timer totals.
@@ -1248,27 +1316,19 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
             else int(work_percentage)
         )
 
-        # Fetch related data
-        ws_result = await db.execute(select(WorkStation).where(WorkStation.id == plan.workstation_id))
-        workstation = ws_result.scalar_one_or_none()
+        workstation = workstations_by_id.get(plan.workstation_id)
         workstation_name = workstation.name if workstation else None
 
-        user_result = await db.execute(select(User).where(User.id == plan.user_id))
-        user = user_result.scalar_one_or_none()
+        user = users_by_id.get(plan.user_id)
 
         operator_name = None
         if user:
             operator_name = f"{user.first_name} {user.last_name}".strip() or user.username
 
-        ps_result = await db.execute(select(PlanningSection).where(PlanningSection.id == plan.planning_section_id))
-        planning_section = ps_result.scalar_one_or_none()
+        planning_section = planning_sections_by_id.get(plan.planning_section_id)
         plan_name = planning_section.plan_name if planning_section else None
 
-        if plan.fab_id not in fab_cache:
-            fab_result = await db.execute(select(Fab).where(Fab.id == plan.fab_id))
-            fab_cache[plan.fab_id] = fab_result.scalar_one_or_none()
-
-        fab = fab_cache.get(plan.fab_id)
+        fab = fabs_by_id.get(plan.fab_id)
         fab_type = fab.fab_type if fab else None
 
         account_name = None
@@ -1277,23 +1337,13 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
         job_number = None
 
         if fab and getattr(fab, "job_id", None):
-            job_id = fab.job_id
-
-            if job_id not in job_cache:
-                job_result = await db.execute(select(BusinessJob).where(BusinessJob.id == job_id))
-                job_cache[job_id] = job_result.scalar_one_or_none()
-
-            job = job_cache.get(job_id)
+            job = jobs_by_id.get(fab.job_id)
             if job:
                 job_name = job.name
                 job_number = job.job_number
 
                 if job.account_id:
-                    if job.account_id not in account_cache:
-                        account_result = await db.execute(select(Account).where(Account.id == job.account_id))
-                        account_cache[job.account_id] = account_result.scalar_one_or_none()
-
-                    account = account_cache.get(job.account_id)
+                    account = accounts_by_id.get(job.account_id)
                     account_name = account.name if account else None
 
                 business_job_payload = _serialize_business_job(job, account_name=account_name)
@@ -1347,6 +1397,14 @@ async def _serialize_and_group_plans(db: AsyncSession, plans: list[ShopCutPlan])
     return serialized_plans, grouped_plans
 
 
+async def _fetch_by_ids(db: AsyncSession, model, ids) -> Dict[int, Any]:
+    unique_ids = {id_ for id_ in ids if id_ is not None}
+    if not unique_ids:
+        return {}
+    result = await db.execute(select(model).where(model.id.in_(unique_ids)))
+    return {row.id: row for row in result.scalars().all()}
+
+
 async def _get_pending_shop_revision_flags(db: AsyncSession, fab_ids: List[int]) -> Dict[int, bool]:
     if not fab_ids:
         return {}
@@ -1390,14 +1448,14 @@ async def _get_current_plan_stage_by_fab(db: AsyncSession, fab_ids: List[int]) -
 
     result: Dict[int, Optional[str]] = {}
     now_floor = app_now().replace(second=0, microsecond=0)
+    work_progress_by_plan = await _get_work_progress_by_plan(db, all_plans, now_floor)
 
     for fab_id, fab_plans in plans_by_fab.items():
         current_stage_name: Optional[str] = None
         for plan in fab_plans:
-            work_percentage, _, _ = await _recalculate_shop_plan_work_percentage(
-                db=db,
-                plan=plan,
-                as_of=now_floor,
+            work_percentage, _, _ = work_progress_by_plan.get(
+                plan.id,
+                _compute_work_progress(plan, 0, [], now_floor),
             )
             if int(work_percentage or 0) < 100:
                 current_stage_name = planning_section_map.get(plan.planning_section_id)

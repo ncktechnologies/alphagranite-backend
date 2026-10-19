@@ -16,6 +16,7 @@ class Account(SQLModel, table=True):
     phone: Optional[str] = Field(max_length=50)
     address: Optional[str] = None
     status_id: int = Field(foreign_key="status.value_id")
+    is_active: bool = Field(default=True, index=True, description="Inactive accounts are hidden from account selection")
     created_at: datetime = Field(default_factory=app_now)
     created_by: int = Field(foreign_key="users.id")
     updated_at: Optional[datetime] = None

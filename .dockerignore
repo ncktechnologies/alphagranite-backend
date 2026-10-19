@@ -1,5 +1,7 @@
 # Add to .gitignore
 .env
+.env.*
+certbot/conf/
 *.pyc
 __pycache__/
 *.log

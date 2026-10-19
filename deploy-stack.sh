@@ -4,13 +4,13 @@ set -euo pipefail
 
 STACK="${1:-}"
 if [[ -z "$STACK" ]]; then
-  echo "Usage: $0 <dev|staging>"
+  echo "Usage: $0 <dev|staging|production>"
   exit 1
 fi
 
-if [[ "$STACK" != "dev" && "$STACK" != "staging" ]]; then
+if [[ "$STACK" != "dev" && "$STACK" != "staging" && "$STACK" != "production" ]]; then
   echo "Invalid stack: $STACK"
-  echo "Usage: $0 <dev|staging>"
+  echo "Usage: $0 <dev|staging|production>"
   exit 1
 fi
 
@@ -31,10 +31,16 @@ echo "Deploying stack: $STACK"
 echo "Project name: $PROJECT_NAME"
 echo "Env file: $ENV_FILE"
 
+COMPOSE_ARGS=(--env-file "$ENV_FILE" -p "$PROJECT_NAME")
+if [[ "$STACK" == "production" ]]; then
+  COMPOSE_ARGS+=(-f compose.production.yml)
+fi
+
+docker compose "${COMPOSE_ARGS[@]}" config --quiet
 mkdir -p static/uploads static/defaults logs
 
 # Use project + env file so stacks stay isolated and can run together.
-docker compose --env-file "$ENV_FILE" -p "$PROJECT_NAME" up -d --build
+docker compose "${COMPOSE_ARGS[@]}" up -d --build
 
 echo "Deployment complete for $STACK"
-docker compose --env-file "$ENV_FILE" -p "$PROJECT_NAME" ps
+docker compose "${COMPOSE_ARGS[@]}" ps

@@ -19,7 +19,7 @@ Fab_Status,creation_date,fabs,created_at,Transform,CST->UTC naive; fallback now(
 Fab_Status,creation_date,business_jobs,created_at,Transform,MIN(creation_date) per job_number.
 Fab_Status,creation_date,business_jobs,start_date,Transform,Date part of MIN(creation_date) per job.
 Fab_Status,template_not_needed,fabs,template_needed,Transform,Invert boolean: needed = NOT not_needed. Null->True.
-Fab_Status,template_date_scheduled,templatings,schedule_start_date,Transform,One templatings row per fab; schedule_due_date=same or +1d if missing.
+Fab_Status,template_date_scheduled,templatings,schedule_start_date,Transform,One templatings row per fab; schedule_due_date=same. Blank in Caspio -> both dates NULL and is_templating_schedule=false (unscheduled) unless template_completed.
 Fab_Status,template_completed,templatings,is_completed,Transform,Bool; also fabs.template_received/template_review_complete derivation.
 Fab_Status,template_completed,fabs,template_received,Transform,template_received = template_completed OR template_date_completed present.
 Fab_Status,template_date_completed,fabs,template_completed_date,Direct,
@@ -155,12 +155,11 @@ Fab_Status,redo_person,revisions,person_name,Direct,Also fabs.redo_requested_by 
 Fab_Status,redo_person,fabs,redo_requested_by,Transform-Deferred,Name->users; null + backlog.
 Fab_Status,redo_cost,fabs,redo_total_sqft,Transform,"CAUTION: source is cost but target col is sqft; store cost text in revisions.revision_notes, set redo_total_sqft=null + flag. See note."
 Fab_Status,redo_cost,revisions,revision_notes,Transform,Archive redo_cost text here: REDO COST=<val>.
-Fab_Status,revenue,fabs,revenue,Transform,To float.
-Fab_Status,revenue,business_jobs,project_value,Transform,SUM(revenue) per job_number.
-Fab_Status,cost_of_stone,fabs,cost_of_stone,Transform,To float. Also cost_of_stones.total_cost text mirror.
-Fab_Status,cost_of_stone,cost_of_stones,total_cost,Transform,varchar; one cost_of_stones row per fab if cost fields present.
-Fab_Status,cost_entered,cost_of_stones,is_completed,Transform,Bool: cost_entered=true -> is_completed true.
-Fab_Status,gp,fabs,gp,Transform,To float.
+Fab_Status,revenue,fabs,revenue,Transform,Decimal rounded to 2 places.
+Fab_Status,revenue,business_jobs,project_value,Transform,Sum FAB revenue per job_number and round to 2 places.
+Fab_Status,cost_of_stone,fabs,cost_of_stone,Transform,Decimal rounded to 2 places; do not write to cost_of_stones or fabs.cost_of_stone_id.
+Fab_Status,cost_entered,,,Skip,Not used; no cost_of_stones mirror row is created.
+Fab_Status,gp,fabs,gp,Transform,Decimal rounded to 2 places.
 Fab_Status,saw_cut_lnft,fabs,saw_cut_lnft,Transform,No Caspio source; null (shop detail only).
 Fab_Status,saw_miter_lnft,fabs,saw_miter_lnft,Transform,No source; null.
 Fab_Status,wj_miter_lnft,fabs,wj_miter_lnft,Transform,No source; null.

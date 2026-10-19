@@ -303,12 +303,33 @@ def _pending_cnc_widget_filter():
     )
 
     return and_(
+        Fab.current_stage.is_distinct_from("install_completion"),
         Fab.cnc_linft.isnot(None),
         Fab.cnc_linft > 0,
         or_(
             latest_cnc_completed.is_(None),
             latest_cnc_completed.is_(False),
         ),
+    )
+
+
+def _pending_install_scheduling_widget_filter():
+    already_scheduled_for_install_exists = (
+        select(InstallScheduling.id)
+        .where(
+            InstallScheduling.fab_id == Fab.id,
+            InstallScheduling.installer_id.isnot(None),
+            InstallScheduling.scheduled_install_date.isnot(None),
+        )
+        .exists()
+    )
+    return and_(
+        Fab.current_stage.is_distinct_from("install_completion"),
+        or_(
+            Fab.shop_est_completion_date.isnot(None),
+            Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
+        ),
+        ~already_scheduled_for_install_exists,
     )
 
 
@@ -1163,7 +1184,6 @@ async def get_fabs(
     else:
         search_filter = None
 
-    _is_all_plan_view = isinstance(plan_view, str) and plan_view.strip().lower() == "all"
     query = _build_fab_list_query(
         job_id, fab_type, sales_person_id, status_id, current_stage, next_stage,
         None,  # search is handled below
@@ -1174,9 +1194,6 @@ async def get_fabs(
         drafter_id,
         plan_view,
     )
-
-    if current_stage == "shop" and not _is_all_plan_view:
-        query = query.where(_active_shop_cut_plan_visibility_filter())
 
     if installer_assignment_filter is not None:
         query = query.where(installer_assignment_filter)
@@ -1215,7 +1232,11 @@ async def get_fabs(
         )
 
     # Step 4: Apply pagination and ordering
-    query = _apply_pagination_and_ordering(query, skip, limit, current_stage, latest_templating)
+    needs_job_search = bool(search and (search_filter is None or type != "fab_id"))
+    query = _paginate_fab_list_query(
+        query, skip, limit, current_stage, latest_templating,
+        needs_job_search, bool(search and type == "account_name"),
+    )
 
     result = await db.execute(query)
     rows = result.all()
@@ -1251,11 +1272,10 @@ async def get_fabs(
 
     # Step 7: Get total count with stage-specific date filtering
     count_query = select(func.count(Fab.id)).select_from(Fab)
-    count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
-    count_query = count_query.join(Account, BusinessJob.account_id == Account.id, isouter=True)
-    count_query = count_query.outerjoin(latest_templating, sa.literal(True))
-    if current_stage == "shop" and not _is_all_plan_view:
-        count_query = count_query.where(_active_shop_cut_plan_visibility_filter())
+    if needs_job_search:
+        count_query = count_query.join(BusinessJob, Fab.job_id == BusinessJob.id, isouter=True)
+    if search and type == "account_name":
+        count_query = count_query.join(Account, BusinessJob.account_id == Account.id, isouter=True)
 
     # Apply all basic filters to count query
     if job_id is not None:
@@ -1361,8 +1381,6 @@ async def get_fabs(
             func.sum(Fab.no_of_pieces).label("no_of_pieces")
         ).select_from(Fab).where(_stage_filter_condition(current_stage, plan_view))
 
-        if current_stage == "shop" and not _is_all_plan_view:
-            stage_totals_query = stage_totals_query.where(_active_shop_cut_plan_visibility_filter())
         if current_stage == "install_completion" and _installer_scheduling_filter is not None:
             stage_totals_query = stage_totals_query.where(_installer_scheduling_filter)
 
@@ -1916,32 +1934,14 @@ async def get_fabs_with_shop_est_completion(
 
     install_shop_est_stage_filter = Fab.current_stage == "install_scheduling"
 
-    # Filter for FABs with shop_est_completion_date set OR PUNCHOUT fab types
-    shop_est_completion_filter = or_(
-        Fab.shop_est_completion_date.isnot(None),
-        Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
-    )
-
-    # Exclude FABs that are already scheduled for install (assigned installer + scheduled date).
-    already_scheduled_for_install_exists = (
-        select(InstallScheduling.id)
-        .where(
-            InstallScheduling.fab_id == Fab.id,
-            InstallScheduling.installer_id.isnot(None),
-            InstallScheduling.scheduled_install_date.isnot(None),
-        )
-        .exists()
-    )
+    shop_est_completion_filter = _pending_install_scheduling_widget_filter()
 
     if effective_current_stage == "install_scheduling":
         query = query.where(install_shop_est_stage_filter)
     elif current_stage:
         query = query.where(_stage_filter_condition(current_stage))
 
-    query = query.where(
-        shop_est_completion_filter,
-        ~already_scheduled_for_install_exists,
-    )
+    query = query.where(shop_est_completion_filter)
 
     # Apply search filter if present
     if search_filter is not None:
@@ -2109,10 +2109,7 @@ async def get_fabs_with_shop_est_completion(
     count_query = count_query.join(Account, BusinessJob.account_id == Account.id, isouter=True)
     count_query = count_query.outerjoin(latest_templating, sa.literal(True))
 
-    count_query = count_query.where(
-        shop_est_completion_filter,
-        ~already_scheduled_for_install_exists,
-    )
+    count_query = count_query.where(shop_est_completion_filter)
 
     # Apply all basic filters to count query
     if job_id is not None:
@@ -2217,10 +2214,7 @@ async def get_fabs_with_shop_est_completion(
         elif current_stage:
             stage_totals_query = stage_totals_query.where(_stage_filter_condition(current_stage))
 
-        stage_totals_query = stage_totals_query.where(
-            shop_est_completion_filter,
-            ~already_scheduled_for_install_exists,
-        )
+        stage_totals_query = stage_totals_query.where(shop_est_completion_filter)
 
         if job_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.job_id == job_id)
@@ -3432,26 +3426,12 @@ async def get_all_stages(
 
     # Keep install_scheduling count aligned with the install-to-schedule widget
     # list behavior from /fabs/shop-est-completion when scoped to this stage.
-    shop_est_or_install_filter = or_(
-        Fab.shop_est_completion_date.isnot(None),
-        Fab.fab_type.in_(PUNCHOUT_REDIRECT_FAB_TYPES),
-    )
-
-    already_scheduled_for_install_exists = (
-        select(InstallScheduling.id)
-        .where(
-            InstallScheduling.fab_id == Fab.id,
-            InstallScheduling.installer_id.isnot(None),
-            InstallScheduling.scheduled_install_date.isnot(None),
-        )
-        .exists()
-    )
+    shop_est_or_install_filter = _pending_install_scheduling_widget_filter()
 
     install_scheduling_count_result = await db.execute(
         select(func.count(Fab.id)).where(
-            Fab.status_id == 1,
+            Fab.status_id.in_([0, 1]),
             shop_est_or_install_filter,
-            ~already_scheduled_for_install_exists,
         )
     )
     install_scheduling_count = install_scheduling_count_result.scalar() or 0
@@ -3459,9 +3439,8 @@ async def get_all_stages(
     install_scheduling_ids_result = await db.execute(
         select(Fab.id)
         .where(
-            Fab.status_id == 1,
+            Fab.status_id.in_([0, 1]),
             shop_est_or_install_filter,
-            ~already_scheduled_for_install_exists,
         )
         .order_by(Fab.id.desc())
         .limit(10)
@@ -3772,9 +3751,9 @@ async def _apply_templating_filters(
     
     # Apply date range filters
     if schedule_start_date is not None:
-        templating_query = templating_query.where(Templating.schedule_start_date >= schedule_start_date)
+        templating_query = templating_query.where(sa.cast(Templating.schedule_start_date, sa.Date) >= schedule_start_date)
     if schedule_due_date is not None:
-        templating_query = templating_query.where(Templating.schedule_due_date <= schedule_due_date)
+        templating_query = templating_query.where(sa.cast(Templating.schedule_due_date, sa.Date) <= schedule_due_date)
     
     # Apply schedule status filter
     if schedule_status == "scheduled":
@@ -3803,67 +3782,45 @@ async def _apply_templating_filters(
 
 
 def _apply_date_filter(query, date_filter: str):
-    """Apply predefined date filters to a query."""
+    """Apply predefined date filters to a query (by the calendar day the templating is scheduled)."""
     today = app_today()
+    scheduled_day = sa.cast(Templating.schedule_start_date, sa.Date)
     
     if date_filter == "today":
-        return query.where(Templating.schedule_start_date == today)
+        return query.where(scheduled_day == today)
     elif date_filter == "this_week":
         start = today - timedelta(days=today.weekday())
         end = start + timedelta(days=6)
-        return query.where(Templating.schedule_start_date.between(start, end))
+        return query.where(scheduled_day.between(start, end))
     elif date_filter == "last_week":
         # Start from last Monday
         start = today - timedelta(days=today.weekday() + 7)
         end = start + timedelta(days=6)
-        return query.where(Templating.schedule_start_date.between(start, end))
+        return query.where(scheduled_day.between(start, end))
     elif date_filter == "this_month":
         start = today.replace(day=1)
         end = (start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
-        return query.where(Templating.schedule_start_date.between(start, end))
+        return query.where(scheduled_day.between(start, end))
     elif date_filter == "last_month":
         first = today.replace(day=1)
         last_month_end = first - timedelta(days=1)
         last_month_start = last_month_end.replace(day=1)
-        return query.where(Templating.schedule_start_date.between(last_month_start, last_month_end))
+        return query.where(scheduled_day.between(last_month_start, last_month_end))
     elif date_filter == "next_week":
         # Next Monday
         start = today + timedelta(days=(7 - today.weekday()))
         end = start + timedelta(days=6)
-        return query.where(Templating.schedule_start_date.between(start, end))
+        return query.where(scheduled_day.between(start, end))
     elif date_filter == "next_month":
         first_next = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
         last_next = (first_next + timedelta(days=32)).replace(day=1) - timedelta(days=1)
-        return query.where(Templating.schedule_start_date.between(first_next, last_next))
+        return query.where(scheduled_day.between(first_next, last_next))
     
     return query
 
 
-def _build_fab_list_query(
-    job_id: Optional[int],
-    fab_type: Optional[str],
-    sales_person_id: Optional[int],
-    status_id: Optional[int],
-    current_stage: Optional[str],
-    next_stage: Optional[str],
-    search: Optional[str],
-    templating_fab_ids: Optional[List[int]],
-    latest_templating,
-    shop_date_start: Optional[date] = None,
-    shop_date_end: Optional[date] = None,
-    template_completed_start: Optional[date] = None,
-    template_completed_end: Optional[date] = None,
-    predraft_completed_start: Optional[date] = None,
-    predraft_completed_end: Optional[date] = None,
-    draft_completed_start: Optional[date] = None,
-    draft_completed_end: Optional[date] = None,
-    sct_completed_start: Optional[date] = None,
-    sct_completed_end: Optional[date] = None,
-    date_filter: Optional[str] = None,
-    drafter_id: Optional[int] = None,
-    plan_view: Optional[str] = None,
-) -> select:
-    """Build the main FAB list query with all joins."""
+def _fab_list_detail_select(latest_templating) -> select:
+    """FAB list columns and detail joins, without any filters."""
     from sqlalchemy.orm import aliased
     
     TechnicianUser = aliased(User)
@@ -3908,6 +3865,36 @@ def _build_fab_list_query(
     query = query.join(TechnicianUser, latest_templating.c.technician_id == TechnicianUser.id, isouter=True)
     query = query.join(DrafterUser, Fab.drafter_id == DrafterUser.id, isouter=True)
     query = query.join(DrafterAssignedByUser, Fab.drafter_assigned_by == DrafterAssignedByUser.id, isouter=True)
+
+    return query
+
+
+def _build_fab_list_query(
+    job_id: Optional[int],
+    fab_type: Optional[str],
+    sales_person_id: Optional[int],
+    status_id: Optional[int],
+    current_stage: Optional[str],
+    next_stage: Optional[str],
+    search: Optional[str],
+    templating_fab_ids: Optional[List[int]],
+    latest_templating,
+    shop_date_start: Optional[date] = None,
+    shop_date_end: Optional[date] = None,
+    template_completed_start: Optional[date] = None,
+    template_completed_end: Optional[date] = None,
+    predraft_completed_start: Optional[date] = None,
+    predraft_completed_end: Optional[date] = None,
+    draft_completed_start: Optional[date] = None,
+    draft_completed_end: Optional[date] = None,
+    sct_completed_start: Optional[date] = None,
+    sct_completed_end: Optional[date] = None,
+    date_filter: Optional[str] = None,
+    drafter_id: Optional[int] = None,
+    plan_view: Optional[str] = None,
+) -> select:
+    """Build the main FAB list query with all joins."""
+    query = _fab_list_detail_select(latest_templating)
     
     # Apply basic filters
     if job_id is not None:
@@ -4213,6 +4200,31 @@ def _latest_install_scheduled_date_expr():
         .limit(1)
         .scalar_subquery()
     )
+
+def _paginate_fab_list_query(
+    query, skip: int, limit: int, current_stage: Optional[str], latest_templating,
+    needs_job_search: bool = False, needs_account_search: bool = False,
+):
+    """Select the requested FAB IDs before joining their detail records."""
+    page_query = select(Fab.id).select_from(Fab)
+    if needs_job_search or needs_account_search:
+        page_query = page_query.outerjoin(BusinessJob, Fab.job_id == BusinessJob.id)
+    if needs_account_search:
+        page_query = page_query.outerjoin(Account, BusinessJob.account_id == Account.id)
+    if current_stage == "templating":
+        page_query = page_query.outerjoin(latest_templating, sa.literal(True))
+    if query.whereclause is not None:
+        page_query = page_query.where(query.whereclause)
+    page_query = _apply_pagination_and_ordering(
+        page_query, skip, limit, current_stage, latest_templating,
+    ).order_by(Fab.id.asc())
+    page = page_query.subquery("fab_page")
+    # Re-applying the list filters here made Postgres join every matching FAB before narrowing to the page.
+    query = _fab_list_detail_select(latest_templating).where(Fab.id.in_(select(page.c.id)))
+    return _apply_pagination_and_ordering(
+        query, 0, limit, current_stage, latest_templating,
+    ).order_by(Fab.id.asc())
+
 
 def _apply_pagination_and_ordering(query, skip: int, limit: int, current_stage: Optional[str], latest_templating):
     """Apply pagination and stage-specific ordering."""
@@ -5916,6 +5928,7 @@ async def get_fabs_cost_of_stone_queue(
     limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
     search: Optional[str] = Query(None, description="Search value"),
     type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, fab_info, account_name"),
+    fab_type: Optional[str] = Query(None, description="Filter by fab type"),
     date_filter: Optional[str] = Query(None, description="Predefined date filter: today, this_week, last_week, this_month, last_month, next_week, next_month"),
     sct_completed_start: Optional[date] = Query(None, description="Filter by sct_completed_date on or after this date (YYYY-MM-DD)"),
     sct_completed_end: Optional[date] = Query(None, description="Filter by sct_completed_date on or before this date (YYYY-MM-DD)"),
@@ -5980,6 +5993,9 @@ async def get_fabs_cost_of_stone_queue(
         sct_completed_start,
         sct_completed_end,
     )
+
+    if fab_type:
+        base_query = base_query.where(Fab.fab_type.ilike(f"%{fab_type}%"))
 
     search_filter = None
     if search and type:

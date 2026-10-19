@@ -11,6 +11,8 @@ Imported FABs are flagged `fabs.is_migrated = true` with `fabs.migration_source 
 Mapping rules worth knowing:
 
 - Caspio checkboxes export as `-1` (checked) / `0` (unchecked).
+- Imported decimal measurements and money values are rounded to 2 decimal places; integer and duration conversions retain their existing behavior.
+- Cost of stone is stored in `fabs.cost_of_stone`; the importer does not create `cost_of_stones` rows or set `fabs.cost_of_stone_id`.
 - The Fab_Status **Complete** checkbox means install complete. Those FABs get `current_stage = 'install_completion'`, `next_stage = NULL` and stay Active (status 1), the same as FABs completed in the app. They also get a completed `install_schedulings` row and a completed `install_completions` row, and their shop plans are set to 100%, so they match the app's `install_status=complete` filter.
 - Incomplete FABs are placed on the Odyssey stage matching their Caspio flags (templating, pre_draft_review, … cut_list, install_scheduling, install_completion). No `install_completions` row is created for them, so installers can complete them in the app.
 - Caspio `install_date` is the install date. Caspio `completion_date` is the shop completion date: it is used only when `install_date` is blank, and the raw value is kept in `fabs.notes`.
@@ -59,6 +61,70 @@ docker compose --env-file .env exec -T web \
 ```
 
 The importer uses `DATABASE_URL`, converts SQLAlchemy URLs for psycopg2, and resolves `localhost` to `host.docker.internal` inside Docker. It is safe to rerun; natural keys and legacy FAB IDs prevent duplicate growth.
+
+## Production Docker Run
+
+Use the dedicated production Compose file and project, not just
+`--env-file .env.production`. The env file alone does not select a Compose file.
+Complete the schema/bootstrap steps in
+[PRODUCTION_DEPLOYMENT.md](../PRODUCTION_DEPLOYMENT.md) and take a verified
+production database backup before importing. Keep application/background writes
+paused for the import, and review the reconciliation before reopening access.
+
+Transfer the complete `actual_caspio_data_csv` export folder to
+`data_migration/actual_caspio_data_csv` in the production checkout if it is not
+already there. Use the approved current export, not just one CSV file. The
+commands below mount it read-only, so it does not need to be baked into the
+image and updates to the CSVs do not require another image build.
+
+From `/var/www/production/backend/alphagranite-backend`, after transferring the
+updated importer code:
+
+```sh
+dc() {
+  docker compose --env-file .env.production -f compose.production.yml -p ag_production "$@"
+}
+dc build web
+dc stop web celery_worker celery_beat
+test -d "$PWD/data_migration/actual_caspio_data_csv" || { echo "CSV folder missing"; exit 1; }
+dc run --rm --no-deps -T \
+  -v "$PWD/data_migration/actual_caspio_data_csv:/migration-csv:ro" \
+  web python -c 'from pathlib import Path; files = list(Path("/migration-csv").glob("*.csv")); assert files, "No CSV files found"; assert any(path.name.startswith("Fab_Status") for path in files), "Fab_Status export missing"; print("CSV export mounted:", len(files), "files")'
+dc run --rm --no-deps -T \
+  -v "$PWD/data_migration/actual_caspio_data_csv:/migration-csv:ro" \
+  web python data_migration/migrate.py --input /migration-csv --dry-run
+```
+
+`--dry-run` rolls back table writes, but PostgreSQL sequence changes are not
+transactional: ID counters can advance during the preview. It is not a
+read-only database operation. Use a cloned database if a completely untouched
+production database is required for the preview.
+
+After reviewing the preview and confirming the backup, apply the import:
+
+```sh
+dc run --rm --no-deps -T \
+  -v "$PWD/data_migration/actual_caspio_data_csv:/migration-csv:ro" \
+  web python data_migration/migrate.py --input /migration-csv
+```
+
+Review rejects, unresolved employee links, and actual imported totals. Restart
+production only after successful verification:
+
+```sh
+dc up -d web celery_worker celery_beat
+```
+
+### Duplicate User ID During Import
+
+`users_pkey: Key (id)=(1) already exists` while creating `migration_bot` is
+consistent with a users ID sequence behind existing rows, not duplicate CSV
+rows. The importer repairs serial sequences before creating that user. Older
+code only repaired a sequence when `max(id) > last_value`, missing the case
+where both are `1` but the sequence has not been called yet. Update the
+importer and rebuild the production image before retrying; the repair now
+handles equality without lowering a sequence that is already ahead.
+Do not delete the existing user or reset its ID to work around the error.
 
 ## Reconciliation
 
