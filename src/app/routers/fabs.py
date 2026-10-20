@@ -788,6 +788,9 @@ async def get_plans_map_for_fabs(db: AsyncSession, fab_ids: List[int]) -> dict[i
     )
     rows = (await db.execute(q)).all()
 
+    from src.app.routers.shop_cut_plan import get_plan_timer_states
+    timer_states = await get_plan_timer_states(db, [row[0] for row in rows])
+
     def _effective_scheduled_end_iso(plan_obj: ShopCutPlan) -> Optional[str]:
             if getattr(plan_obj, "scheduled_end_date", None):
                 return plan_obj.scheduled_end_date.isoformat()
@@ -824,6 +827,7 @@ async def get_plans_map_for_fabs(db: AsyncSession, fab_ids: List[int]) -> dict[i
             "notes": p.notes,
             "created_at": p.created_at.isoformat() if p.created_at else None,
             "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+            "timer": timer_states.get(p.id),
         })
 
     return plans_map
