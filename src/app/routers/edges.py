@@ -60,7 +60,7 @@ async def get_edges(
 ):
     """Get list of edges with optional filtering"""
     
-    query = select(Edge)
+    query = select(Edge).where(Edge.status_id != 0)
     
     # Apply filters
     # Use explicit None check so a provided 0 (invalid) won't be treated as "no filter".
