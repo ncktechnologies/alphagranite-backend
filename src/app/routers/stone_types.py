@@ -165,7 +165,7 @@ async def update_stone_type(
 
         from src.app.database.status import Status
 
-        status_result = await db.execute(select(Status).where(Status.id == status_val))
+        status_result = await db.execute(select(Status).where(Status.value_id == status_val))
         if not status_result.scalar_one_or_none():
             raise error_response("Provided 'status_id' does not exist", 400)
 

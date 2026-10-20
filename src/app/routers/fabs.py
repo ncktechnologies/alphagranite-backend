@@ -4266,6 +4266,13 @@ def _apply_pagination_and_ordering(query, skip: int, limit: int, current_stage: 
             Fab.updated_at.asc().nullsfirst(),
             Fab.created_at.asc()
         )
+    elif current_stage == "shop":
+        # Shop planning: office cut date scheduled, earliest first; unscheduled FABs last.
+        return query.offset(skip).limit(limit).order_by(
+            Fab.shop_date_schedule.asc().nullslast(),
+            Fab.updated_at.asc().nullsfirst(),
+            Fab.created_at.asc()
+        )
     elif current_stage == "install_completion":
         install_scheduled_date = _latest_install_scheduled_date_expr()
         return query.offset(skip).limit(limit).order_by(

@@ -194,6 +194,13 @@ class StoneColorResponse(BaseModel):
     updated_by: Optional[int]
 
 
+class StoneColorPageResponse(BaseModel):
+    total: int
+    page: int
+    per_page: int
+    data: List[StoneColorResponse]
+
+
 # Edge Schemas
 class EdgeCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)

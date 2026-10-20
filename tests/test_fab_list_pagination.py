@@ -165,6 +165,19 @@ def test_list_filters_are_not_repeated_outside_page(stage):
     assert "shop_cut_plans" not in outer_sql
 
 
+def test_shop_list_orders_by_office_cut_date_scheduled():
+    latest = latest_templating()
+    query = fabs._build_fab_list_query(
+        None, None, None, None, "shop", None, None, None, latest,
+    )
+    sql = compile_sql(fabs._paginate_fab_list_query(query, 0, 25, "shop", latest))
+    order_by = "ORDER BY fabs.shop_date_schedule ASC NULLS LAST, fabs.updated_at ASC NULLS FIRST"
+
+    page_sql = sql.split("(SELECT fabs.id AS id", 1)[1].split(") AS fab_page", 1)[0]
+    assert order_by in page_sql
+    assert order_by in sql.split(") AS fab_page", 1)[1]
+
+
 def test_search_and_filters_apply_before_pagination():
     latest = latest_templating()
     query = fabs._build_fab_list_query(
