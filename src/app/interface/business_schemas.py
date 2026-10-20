@@ -514,6 +514,18 @@ class TemplatingScheduleUpdate(BaseModel):
     status_id: Optional[int] = None
     is_completed: Optional[bool] = None
 
+    @field_validator("schedule_start_date", "schedule_due_date", mode="before")
+    @classmethod
+    def normalize_schedule_date(cls, value):
+        if isinstance(value, str):
+            try:
+                value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return value
+        if isinstance(value, datetime):
+            return value.date()
+        return value
+
     class Config:
         from_attributes = True
 
