@@ -25,6 +25,32 @@ from src.app.utils.helpers import error_response, success_response, app_now
 router = APIRouter()
 
 
+async def _validate_shop_completion_for_install(db: AsyncSession, fab: Optional[Fab]) -> None:
+    if fab and fab.fab_type in {"PUNCHOUT-AG", "PUNCHOUT-BILLABLE"}:
+        return
+
+    progress_result = await db.execute(
+        select(
+            func.count(ShopCutPlan.id).label("plan_count"),
+            func.avg(func.coalesce(ShopCutPlan.work_percentage, 0)).label("percentage_completion"),
+        ).where(ShopCutPlan.fab_id == (fab.id if fab else None))
+    )
+    plan_count, percentage_completion = progress_result.one()
+    percentage_completion = float(percentage_completion or 0.0)
+
+    if (plan_count or 0) == 0:
+        raise error_response(
+            "Install scheduling cannot be marked complete until shop percentage_completion reaches 100%",
+            400,
+        )
+
+    if percentage_completion < 100.0:
+        raise error_response(
+            f"Install scheduling cannot be marked complete until shop percentage_completion reaches 100% (current: {round(percentage_completion, 2)}%)",
+            400,
+        )
+
+
 async def _resolve_install_crew_names(
     db: AsyncSession,
     installer_id: Optional[int],
@@ -145,27 +171,11 @@ async def update_install_scheduling(
         raise error_response("Install Scheduling not found", 404)
 
     update_dict = update_data.model_dump(exclude_unset=True)
+    fab_result = await db.execute(select(Fab).where(Fab.id == install_scheduling.fab_id))
+    fab = fab_result.scalar_one_or_none()
+
     if update_dict.get("is_completed") is True:
-        progress_result = await db.execute(
-            select(
-                func.count(ShopCutPlan.id).label("plan_count"),
-                func.avg(func.coalesce(ShopCutPlan.work_percentage, 0)).label("percentage_completion"),
-            ).where(ShopCutPlan.fab_id == install_scheduling.fab_id)
-        )
-        plan_count, percentage_completion = progress_result.one()
-        percentage_completion = float(percentage_completion or 0.0)
-
-        if (plan_count or 0) == 0:
-            raise error_response(
-                "Install scheduling cannot be marked complete until shop percentage_completion reaches 100%",
-                400,
-            )
-
-        if percentage_completion < 100.0:
-            raise error_response(
-                f"Install scheduling cannot be marked complete until shop percentage_completion reaches 100% (current: {round(percentage_completion, 2)}%)",
-                400,
-            )
+        await _validate_shop_completion_for_install(db, fab)
     
     # Update fields
     for key, value in update_dict.items():
@@ -175,9 +185,6 @@ async def update_install_scheduling(
     install_scheduling.updated_by = current_user.id
     
     # Update FAB's current_stage to install_completion when install scheduling is updated
-    fab_result = await db.execute(select(Fab).where(Fab.id == install_scheduling.fab_id))
-    fab = fab_result.scalar_one_or_none()
-    
     if fab:
         fab.current_stage = "install_completion"
         fab.next_stage = None  # install_completion is typically the final stage
