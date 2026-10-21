@@ -41,6 +41,42 @@ def _to_app_tz(dt: Optional[datetime]) -> Optional[datetime]:
     return to_app_tz(dt)
 
 
+def _mark_templating_complete(templating, fab: Optional[Fab], user_id: int) -> None:
+    timestamp = app_now()
+    templating.is_completed = True
+    templating.status_id = 2
+    templating.actual_end_date = templating.actual_end_date or timestamp
+    templating.updated_at = timestamp
+    templating.updated_by = user_id
+
+    if not fab:
+        return
+
+    fab.template_review_complete = True
+    fab.template_completed_date = fab.template_completed_date or timestamp
+
+    if fab.current_stage == "templating":
+        from src.app.routers.fabs import get_next_stage
+
+        next_stage = get_next_stage(
+            fab.current_stage,
+            drafting_needed=fab.drafting_needed,
+            slab_smith_ag_needed=fab.slab_smith_ag_needed,
+            slab_smith_cust_needed=fab.slab_smith_cust_needed,
+        )
+        if next_stage:
+            fab.current_stage = next_stage
+            fab.next_stage = get_next_stage(
+                next_stage,
+                drafting_needed=fab.drafting_needed,
+                slab_smith_ag_needed=fab.slab_smith_ag_needed,
+                slab_smith_cust_needed=fab.slab_smith_cust_needed,
+            )
+
+    fab.updated_at = timestamp
+    fab.updated_by = user_id
+
+
 # helper to keep Fab.total_sqft in sync with Templating
 async def _sync_fab_total_sqft(db: AsyncSession, fab_id: int, total_sqft, user_id: int):
     if total_sqft is None:
@@ -218,7 +254,8 @@ async def update_templating(
         raise error_response("Templating not found", 404)
 
     # IMPORTANT: ignore keys explicitly sent as null
-    for field, value in update_data.model_dump(exclude_unset=True, exclude_none=True).items():
+    update_dict = update_data.model_dump(exclude_unset=True, exclude_none=True)
+    for field, value in update_dict.items():
         if hasattr(templating, field):
             if isinstance(value, datetime):
                 value = _to_app_tz(value)
@@ -234,11 +271,13 @@ async def update_templating(
 
             setattr(templating, field, value)
 
-    if getattr(templating, "is_completed", False) and not templating.actual_end_date:
-        templating.actual_end_date = app_now()
-
-    templating.updated_at = app_now()
-    templating.updated_by = current_user.id
+    fab_result = await db.execute(select(Fab).where(Fab.id == templating.fab_id))
+    fab = fab_result.scalar_one_or_none()
+    if update_dict.get("is_completed") is True:
+        _mark_templating_complete(templating, fab, current_user.id)
+    else:
+        templating.updated_at = app_now()
+        templating.updated_by = current_user.id
 
     await _sync_fab_total_sqft(db, templating.fab_id, update_data.total_sqft, current_user.id)
 
@@ -247,10 +286,6 @@ async def update_templating(
 
     technician = await db.get(User, templating.technician_id) if templating.technician_id else None
     status = await db.get(Status, templating.status_id)
-
-    # FIX: fetch fab before using current_stage/next_stage
-    fab_result = await db.execute(select(Fab).where(Fab.id == templating.fab_id))
-    fab = fab_result.scalar_one_or_none()
 
     response_data = TemplatingResponse(
         id=templating.id,
@@ -373,36 +408,7 @@ async def complete_templating(
         existing_notes = templating.notes or []
         templating.notes = existing_notes + request_data.notes
     
-    # Mark templating as completed (status_id = 2 for completed)
-    templating.status_id = 2
-    templating.updated_at = app_now()
-    templating.updated_by = current_user.id
-
-    # Update FAB stage: Move to next stage based on current stage.
-    # Pass drafting_needed so that when the FAB lands on pre_draft_review the
-    # correct downstream stage (sales_ct vs drafting) is reflected in next_stage.
-    from src.app.routers.fabs import get_next_stage
-    if fab.current_stage:
-        fab.next_stage = get_next_stage(
-            fab.current_stage,
-            drafting_needed=fab.drafting_needed,
-            slab_smith_ag_needed=fab.slab_smith_ag_needed,
-            slab_smith_cust_needed=fab.slab_smith_cust_needed,
-        )
-        if fab.next_stage:
-            fab.current_stage = fab.next_stage
-            fab.next_stage = get_next_stage(
-                fab.current_stage,
-                drafting_needed=fab.drafting_needed,
-                slab_smith_ag_needed=fab.slab_smith_ag_needed,
-                slab_smith_cust_needed=fab.slab_smith_cust_needed,
-            )
-        fab.updated_at = app_now()
-        fab.updated_by = current_user.id
-
-    # Set flags/dates on FAB
-    fab.template_review_complete = True
-    fab.template_completed_date = app_now()
+    _mark_templating_complete(templating, fab, current_user.id)
 
     await db.commit()
     await db.refresh(templating)
@@ -503,6 +509,9 @@ async def get_templating(
     if not templating:
         raise error_response("Templating not found", 404)
     
+    fab_result = await db.execute(select(Fab).where(Fab.id == templating.fab_id))
+    fab = fab_result.scalar_one_or_none()
+
     # Fetch technician and status details
     technician = await db.get(User, templating.technician_id) if templating.technician_id else None
     status = await db.get(Status, templating.status_id)
