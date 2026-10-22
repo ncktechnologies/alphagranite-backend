@@ -39,6 +39,7 @@ from src.app.interface.business_schemas import (
 from src.app.interface.response_wrappers import SuccessResponse, error_response, success_response
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.utils.helpers import app_now, to_app_tz, app_today
+from src.app.utils.redo import apply_ag_redo_revenue, is_ag_redo
 
 
 
@@ -1105,6 +1106,8 @@ async def create_fab(
         created_at=app_now()
     )
     
+    if is_ag_redo(fab.fab_type):
+        apply_ag_redo_revenue(fab)
     db.add(fab)
     await db.commit()
     await db.refresh(fab)
@@ -2626,6 +2629,10 @@ async def update_fab(
             stage_changed = True
             new_current_stage = value
         setattr(fab, field, value)
+
+    # AG redo revenue follows its cost per sq ft and redo sq ft (stored negative).
+    if is_ag_redo(fab.fab_type) and {"cost_per_sqft", "redo_total_sqft", "total_sqft", "fab_type"} & update_data.keys():
+        apply_ag_redo_revenue(fab)
     
     # If current_stage was updated, automatically update next_stage
     if stage_changed and new_current_stage:

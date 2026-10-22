@@ -66,6 +66,7 @@ from src.app.service.performance_data import (
 )
 from src.app.service.monthly_end_of_month_status_report import send_monthly_end_of_month_status_report
 from src.app.utils.helpers import error_response, app_now, to_app_tz, app_today
+from src.app.utils.redo import apply_ag_redo_revenue
 
 router = APIRouter()
 
@@ -411,6 +412,10 @@ async def patch_redo_record(
         db.add(cost_record)
         if fab.cost_of_stone_id is None:
             fab.cost_of_stone_id = cost_record.id
+
+    # Revenue for an AG redo is -(cost per sq ft * redo sq ft); refresh it whenever either changes.
+    if patch.cost_per_sqft is not None or patch.sqft is not None:
+        apply_ag_redo_revenue(fab)
 
     fab.updated_at = now
     fab.updated_by = current_user.id
