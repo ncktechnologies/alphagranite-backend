@@ -28,7 +28,9 @@ from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness
 from src.app.database.templating import Templating
 from src.app.database.sales_ct import SalesCT
-from src.app.database.cnc import CNCDrafting
+from src.app.database.cnc import CNCDrafting, CNCDraftingSession
+from src.app.database.final_programming import FinalProgrammingSession
+from src.app.database.slab_smith import SlabSmithSession
 from src.app.database.status import Status
 from src.app.interface.generated_schemas import InstallCompletion, ResurfaceScheduling, InstallScheduling, Revision
 from src.app.interface.generated_schemas import ShopRevision
@@ -3346,6 +3348,8 @@ async def get_pending_final_programming_fabs(
         stage_info = await get_stage_completion_data(db, fab_dict["id"], "final_programming")
         fab_dict["is_complete"] = stage_info["is_complete"]
         fab_dict["stage_data"] = stage_info["stage_data"]
+
+    _attach_stage_timer_sessions(fabs, await _batch_load_stage_timer_sessions(db, [f["id"] for f in fabs]))
     
     # Calculate pagination metadata
     page = (skip // limit) + 1 if limit > 0 else 1
@@ -4426,6 +4430,48 @@ async def _get_operator_files_for_fab(db: AsyncSession, fab_id: int) -> List[dic
     return operator_files
 
 
+# Desk-stage timers shown as a status column on their stage pages:
+# response key -> (session model, column holding the person running it)
+_STAGE_TIMER_SESSION_SOURCES = {
+    "cnc_session": (CNCDraftingSession, CNCDraftingSession.drafter_id),
+    "slabsmith_session": (SlabSmithSession, SlabSmithSession.user_id),
+    "final_programming_session": (FinalProgrammingSession, FinalProgrammingSession.user_id),
+}
+
+
+async def _batch_load_stage_timer_sessions(db: AsyncSession, fab_ids: List[int]) -> dict[str, dict[int, dict]]:
+    """Latest CNC / SlabSmith / Final Programming timer session per FAB (one query per stage)."""
+    loaded: dict[str, dict[int, dict]] = {key: {} for key in _STAGE_TIMER_SESSION_SOURCES}
+    if not fab_ids:
+        return loaded
+
+    for key, (model, user_column) in _STAGE_TIMER_SESSION_SOURCES.items():
+        rows = (
+            await db.execute(
+                select(model.fab_id, model.id, model.status, user_column, User.first_name, User.last_name, User.username)
+                .outerjoin(User, User.id == user_column)
+                .where(model.fab_id.in_(fab_ids))
+                .order_by(model.fab_id, model.id.desc())
+            )
+        ).all()
+        for fab_id, session_id, session_status, user_id, first_name, last_name, username in rows:
+            if fab_id in loaded[key]:
+                continue  # rows are newest first per FAB
+            loaded[key][fab_id] = {
+                "id": session_id,
+                "status": session_status,
+                "user_id": user_id,
+                "user_name": f"{first_name or ''} {last_name or ''}".strip() or username,
+            }
+    return loaded
+
+
+def _attach_stage_timer_sessions(fab_dicts: List[dict], sessions: dict[str, dict[int, dict]]) -> None:
+    for fab_dict in fab_dicts:
+        for key in _STAGE_TIMER_SESSION_SOURCES:
+            fab_dict[key] = sessions.get(key, {}).get(fab_dict["id"])
+
+
 async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) -> None:
     """Batch load and attach notes, draft, sales CT, and slabsmith data to fab dictionaries."""
     fab_ids = [fab["id"] for fab in fab_dicts]
@@ -4444,6 +4490,7 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
             fab_dict["drafting_session"] = None
             fab_dict["is_complete"] = False
             fab_dict["stage_data"] = None
+        _attach_stage_timer_sessions(fab_dicts, {})
         return
     
     # Load notes
@@ -4472,6 +4519,7 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
     drafting_sessions_by_fab = await _batch_load_drafting_sessions(db, fab_ids)
     latest_revisions_by_fab = await _batch_load_latest_revisions(db, fab_ids)
     pending_shop_revision_by_fab = await _batch_load_pending_shop_revision_flags(db, fab_ids)
+    _attach_stage_timer_sessions(fab_dicts, await _batch_load_stage_timer_sessions(db, fab_ids))
     
     # Attach to fab dicts
     for fab_dict in fab_dicts:

@@ -17,6 +17,7 @@ from src.app.interface.business_schemas import (
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import error_response, success_response, app_now
+from src.app.utils.timer_guards import assert_no_running_timer_for_reassignment
 
 router = APIRouter()
 
@@ -107,6 +108,14 @@ async def update_revision(
     
     # Update fields
     update_dict = update_data.model_dump(exclude_unset=True)
+
+    # Revision work is timed with drafting sessions.
+    if update_dict.get("assigned_to") is not None and update_dict["assigned_to"] != revision.assigned_to:
+        await assert_no_running_timer_for_reassignment(
+            db, [revision.fab_id], ["drafting"], new_assignee_id=update_dict["assigned_to"],
+            labels={"drafting": "Revision"},
+        )
+
     for key, value in update_dict.items():
         setattr(revision, key, value)
     

@@ -19,7 +19,7 @@ from src.app.interface.business_schemas import (
     FabResponse
 )
 from src.app.middleware.jwt_auth import get_current_user
-from src.app.utils.timer_guards import assert_no_active_timer_session
+from src.app.utils.timer_guards import assert_no_active_timer_session, assert_no_running_timer_for_reassignment
 from src.app.utils.helpers import app_now, to_app_tz
 
 router = APIRouter(
@@ -135,6 +135,10 @@ async def update_final_programming_record(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Drafter with ID {payload.drafter_id} not found",
             )
+        if payload.drafter_id != final_programming.drafter_id:
+            await assert_no_running_timer_for_reassignment(
+                db, [final_programming.fab_id], ["final_programming"], new_assignee_id=payload.drafter_id
+            )
 
     update_data = payload.model_dump(exclude_unset=True)
     for field, value in update_data.items():
@@ -195,6 +199,10 @@ async def update_final_programming_by_fab_id(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Drafter with ID {payload.drafter_id} not found",
+            )
+        if payload.drafter_id != final_programming.drafter_id:
+            await assert_no_running_timer_for_reassignment(
+                db, [final_programming.fab_id], ["final_programming"], new_assignee_id=payload.drafter_id
             )
 
     update_data = payload.model_dump(exclude_unset=True)

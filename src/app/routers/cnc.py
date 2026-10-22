@@ -26,7 +26,7 @@ from src.app.middleware.jwt_auth import get_current_user
 from src.app.service.file import FileService
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import error_response, success_response, strip_timezone, app_now, APP_TZ
-from src.app.utils.timer_guards import assert_no_active_timer_session
+from src.app.utils.timer_guards import assert_no_active_timer_session, assert_no_running_timer_for_reassignment
 
 logger = logging.getLogger(__name__)
 
@@ -465,6 +465,10 @@ async def create_cnc_drafting(
     )
     existing_by_fab = {row.fab_id: row for row in existing_result.scalars().all()}
 
+    await assert_no_running_timer_for_reassignment(
+        db, fab_ids, ["cnc"], new_assignee_id=drafting_data.drafter_id
+    )
+
     entries = []
     created_count = 0
     updated_count = 0
@@ -530,6 +534,11 @@ async def update_cnc_drafting(
 
     update_data = drafting_data.model_dump(exclude_unset=True)
     is_complete = update_data.get("is_completed", False)
+
+    if update_data.get("drafter_id") is not None and update_data["drafter_id"] != cnc.drafter_id:
+        await assert_no_running_timer_for_reassignment(
+            db, [cnc.fab_id], ["cnc"], new_assignee_id=update_data["drafter_id"]
+        )
 
     if "drafter_id" in update_data:
         drafter_result = await db.execute(select(User).where(User.id == update_data["drafter_id"]))

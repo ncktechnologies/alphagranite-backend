@@ -30,6 +30,7 @@ from src.app.interface.business_schemas import (
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import error_response, success_response, app_now, to_app_tz
+from src.app.utils.timer_guards import assert_no_running_timer_for_reassignment
 from src.app.database.templating import Templating
 from src.app.routers.fabs import (
     _build_fab_list_query,
@@ -71,6 +72,10 @@ async def create_slabsmith(
     drafter_result = await db.execute(select(User).where(User.id == slabsmith_data.drafter_id))
     if not drafter_result.scalar_one_or_none():
         raise error_response("Drafter not found", 404)
+
+    await assert_no_running_timer_for_reassignment(
+        db, [slabsmith_data.fab_id], ["slabsmith"], new_assignee_id=slabsmith_data.drafter_id
+    )
     
     # Create slab smith
     slabsmith = SlabSmith(
@@ -128,6 +133,10 @@ async def update_slabsmith(
         drafter_result = await db.execute(select(User).where(User.id == update_data["drafter_id"]))
         if not drafter_result.scalar_one_or_none():
             raise error_response("Drafter not found", 404)
+        if update_data["drafter_id"] != slabsmith.drafter_id:
+            await assert_no_running_timer_for_reassignment(
+                db, [slabsmith.fab_id], ["slabsmith"], new_assignee_id=update_data["drafter_id"]
+            )
 
     for field, value in update_data.items():
         setattr(slabsmith, field, value)

@@ -26,6 +26,7 @@ from src.app.database.operator_job_timer_session import OperatorJobTimerSession
 from src.app.database.shop_cut_plan_timer_session import ShopCutPlanTimerSession
 from src.app.database.slab_smith import SlabSmithSession
 from src.app.database.templater_job_timer_session import TemplaterJobTimerSession
+from src.app.database.user import User
 from src.app.interface.generated_schemas import ShopRevision
 
 
@@ -236,4 +237,62 @@ async def assert_no_pending_shop_revision(db: AsyncSession, fab_id: int) -> None
                 f"FAB #{fab_id} has a pending shop revision. "
                 "Complete the revision before starting or stopping an operator timer."
             ),
+        )
+
+
+# Desk-stage timers that lock a FAB's assignment while running:
+# key -> (label, session model, column holding the person running it, running status)
+_RUNNING_FAB_TIMER_SOURCES = {
+    "drafting": ("Drafting", DraftingSession, DraftingSession.drafter_id, "drafting"),
+    "cnc": ("CNC Programming", CNCDraftingSession, CNCDraftingSession.drafter_id, "drafting"),
+    "final_programming": ("Final Programming", FinalProgrammingSession, FinalProgrammingSession.user_id, "active"),
+    "slabsmith": ("SlabSmith", SlabSmithSession, SlabSmithSession.user_id, "active"),
+}
+
+
+def _person_name(first_name, last_name, username, user_id) -> str:
+    full_name = f"{first_name or ''} {last_name or ''}".strip()
+    return full_name or username or f"User #{user_id}"
+
+
+async def assert_no_running_timer_for_reassignment(
+    db: AsyncSession,
+    fab_ids,
+    sections,
+    new_assignee_id=None,
+    labels=None,
+) -> None:
+    """Raise HTTP 409 if any of *fab_ids* has a running timer in *sections*.
+
+    A FAB can't be reassigned while someone is timing it; the message names who is running
+    the timer so it can be stopped first. Paused/on-hold timers don't block, and neither does
+    a timer run by *new_assignee_id* (reassigning to the same person is a no-op).
+    *labels* overrides a section's display name, e.g. {"drafting": "Revision"}.
+    """
+    fab_ids = sorted({int(fab_id) for fab_id in fab_ids if fab_id is not None})
+    if not fab_ids:
+        return
+
+    running: list[str] = []
+    for key in sections:
+        label, model, user_column, running_status = _RUNNING_FAB_TIMER_SOURCES[key]
+        label = (labels or {}).get(key, label)
+        query = (
+            select(model.fab_id, user_column, User.first_name, User.last_name, User.username)
+            .outerjoin(User, User.id == user_column)
+            .where(model.fab_id.in_(fab_ids), model.status == running_status)
+            .order_by(model.fab_id)
+        )
+        if new_assignee_id is not None:
+            query = query.where(user_column != new_assignee_id)
+        for fab_id, user_id, first_name, last_name, username in (await db.execute(query)).all():
+            running.append(
+                f"FAB #{fab_id} has a running {label} timer started by "
+                f"{_person_name(first_name, last_name, username, user_id)}"
+            )
+
+    if running:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"{'; '.join(running)}. Stop the running timer before reassigning.",
         )
