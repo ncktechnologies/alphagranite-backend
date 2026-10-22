@@ -245,6 +245,9 @@ def _active_shop_cut_plan_visibility_filter():
         - Include FABs still in current_stage=cut_list when cutlist_complete=true and
           they either have no shop plans yet or at least one incomplete shop plan row.
         - Include FABs from any stage that still have incomplete shop plan rows.
+        - Include FABs from any stage except install_completion whose shop plans are all
+          100% but still have no shop_est_completion_date, so the missing date gets set
+          (flagged as needs_shop_est_date in the list response).
     """
 
     has_shop_plan_exists = (
@@ -286,10 +289,27 @@ def _active_shop_cut_plan_visibility_filter():
     # Include FABs from any stage with incomplete shop plans
     any_stage_with_incomplete_shop_plans = any_incomplete_shop_plan_exists
 
+    completed_plans_missing_est_date = and_(
+        has_shop_plan_exists,
+        ~any_incomplete_shop_plan_exists,
+        Fab.shop_est_completion_date.is_(None),
+        Fab.current_stage.is_distinct_from("install_completion"),
+    )
+
     return or_(
         shop_stage_visibility,
         cut_list_ready_for_shop_visibility,
         any_stage_with_incomplete_shop_plans,
+        completed_plans_missing_est_date,
+    )
+
+
+def _needs_shop_est_date(fab_dict: dict, plans: List[dict]) -> bool:
+    """All shop plans are done but no shop estimate date has been set yet."""
+    return (
+        bool(plans)
+        and all((p.get("work_percentage") or 0) >= 100 for p in plans)
+        and not fab_dict.get("shop_est_completion_date")
     )
 
 
@@ -1263,6 +1283,7 @@ async def get_fabs(
         f["estimated_completion_date"] = estimated_completion_date
         f["percentage_completion"] = percentage_completion
         f["shop_current_stage"] = _get_shop_current_stage(plans)
+        f["needs_shop_est_date"] = _needs_shop_est_date(f, plans)
 
     # Step 6.2: Batch load resurface scheduling and attach per FAB
     resurface_scheduling_map = await _batch_load_resurface_scheduling_responses(db, fab_ids)
