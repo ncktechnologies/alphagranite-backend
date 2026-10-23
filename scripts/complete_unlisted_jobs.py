@@ -6,7 +6,9 @@ matches "19954-A", not "19954"). Jobs already at status_id 3 are left alone, and
 are never changed (a listed job that is currently 3 is reported, not reopened).
 
 The CSV may have blank rows above the header; the first row with a "job_number" cell is the
-header. The database URL is DATABASE_URL from .env.production (use --env-file to pick another file).
+header. The database URL is DATABASE_URL from .env.production in the project folder. Inside the
+docker container that file isn't copied in (.dockerignore), so the DATABASE_URL environment variable
+that compose loads from it is used instead. Use --env-file to pick another file.
 
     python scripts/complete_unlisted_jobs.py           # preview
     python scripts/complete_unlisted_jobs.py --apply
@@ -54,31 +56,42 @@ def read_job_numbers(path: Path) -> dict[str, str]:
     return numbers
 
 
-def database_url(env_file: Path) -> str:
-    if not env_file.exists():
-        sys.exit(f"Env file not found: {env_file}")
-    url = dotenv_values(env_file).get("DATABASE_URL")
-    if not url:
-        sys.exit(f"DATABASE_URL not set in {env_file}")
+def database_url(env_file: Path | None) -> tuple[str, str]:
+    """Return (url, where it came from)."""
+    if env_file is None and DEFAULT_ENV.exists():
+        env_file = DEFAULT_ENV
+    if env_file is not None:
+        if not env_file.exists():
+            sys.exit(f"Env file not found: {env_file}")
+        url = dotenv_values(env_file).get("DATABASE_URL")
+        if not url:
+            sys.exit(f"DATABASE_URL not set in {env_file}")
+        source = str(env_file)
+    else:
+        url = os.environ.get("DATABASE_URL")
+        if not url:
+            sys.exit(f"No {DEFAULT_ENV} and no DATABASE_URL environment variable; pass --env-file")
+        source = "DATABASE_URL environment variable"
     url = url.replace("postgresql+asyncpg://", "postgresql://").replace("postgresql+psycopg2://", "postgresql://")
     if os.path.exists("/.dockerenv"):
         url = url.replace("@localhost:", "@host.docker.internal:", 1)
-    return url
+    return url, source
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--csv", type=Path, default=DEFAULT_CSV, help="Active jobs CSV (default: scripts/active_jobs.csv)")
-    ap.add_argument("--env-file", type=Path, default=DEFAULT_ENV, help="Env file with DATABASE_URL (default: .env.production)")
+    ap.add_argument("--env-file", type=Path, default=None,
+                    help="Env file with DATABASE_URL (default: .env.production, else the DATABASE_URL environment variable)")
     ap.add_argument("--apply", action="store_true", help="Write the changes (default: preview)")
     ap.add_argument("--show", type=int, default=50, help="How many jobs to list in the preview (default: 50, 0 for all)")
     args = ap.parse_args()
 
     csv_numbers = read_job_numbers(args.csv)
     active_numbers = sorted(csv_numbers)
-    url = database_url(args.env_file)
+    url, source = database_url(args.env_file)
     target = urlsplit(url)
-    print(f"Database: {target.path.lstrip('/')} on {target.hostname}:{target.port or 5432}")
+    print(f"Database: {target.path.lstrip('/')} on {target.hostname}:{target.port or 5432} (from {source})")
     print(f"CSV: {args.csv} ({len(active_numbers)} job numbers)")
 
     conn = psycopg2.connect(url, connect_timeout=10)
