@@ -399,3 +399,35 @@ async def test_dashboard_install_scheduling_count_and_ids_match_widget_eligibili
         assert "fabs.status_id IN (0, 1)" in sql
         assert "install_schedulings.installer_id IS NOT NULL" in sql
         assert "install_schedulings.scheduled_install_date IS NOT NULL" in sql
+
+def test_revision_list_orders_by_revision_request_date():
+    sql = compile_sql(fabs._apply_pagination_and_ordering(
+        select(Fab.id), 0, 25, "revision", latest_templating(),
+    ))
+    order_by = sql[sql.index("ORDER BY"):]
+    request_date = "coalesce((SELECT max(revisions.created_at)"
+    assert order_by.index(request_date) < order_by.index("fabs.sct_completed_date")
+    assert "fabs.revision_completed_date) ASC NULLS LAST" in order_by
+    assert "fabs.draft_completed_date" not in order_by
+
+
+@pytest.mark.asyncio
+async def test_fab_list_rows_carry_revision_request_date(monkeypatch):
+    """The Revisions page groups rows by this date, so it must match the sort key."""
+    for name in [
+        "_batch_load_fab_notes", "_batch_load_drafting_data", "_batch_load_cnc_data", "_batch_load_sales_ct_data",
+        "_batch_load_slabsmith_data", "_batch_load_resurface_data", "_batch_load_install_completion_data",
+        "_batch_load_stage_data", "_batch_load_drafting_sessions", "_batch_load_pending_shop_revision_flags",
+    ]:
+        monkeypatch.setattr(fabs, name, AsyncMock(return_value={}))
+    monkeypatch.setattr(fabs, "_batch_load_stage_timer_sessions", AsyncMock(return_value={}))
+    monkeypatch.setattr(fabs, "_batch_load_latest_revisions", AsyncMock(return_value={
+        1: {"created_at": "2026-10-20T09:00:00"},
+    }))
+    rows = [
+        {"id": 1, "revision_completed_date": "2026-10-01T08:00:00"},  # revisions row wins
+        {"id": 2, "revision_completed_date": "2026-10-05T08:00:00"},  # send-to-drafting stamp only
+        {"id": 3, "revision_completed_date": None},
+    ]
+    await fabs._batch_load_fab_related_data(SimpleNamespace(), rows)
+    assert [row["revision_requested_date"] for row in rows] == ["2026-10-20T09:00:00", "2026-10-05T08:00:00", None]

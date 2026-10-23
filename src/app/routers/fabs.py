@@ -4258,6 +4258,18 @@ def _latest_install_scheduled_date_expr():
         .scalar_subquery()
     )
 
+def _revision_requested_date_expr():
+    """When the current revision was requested: the latest revisions row, else the send-to-drafting stamp."""
+    latest_request = (
+        select(func.max(Revision.created_at))
+        .where(Revision.fab_id == Fab.id)
+        .correlate(Fab)
+        .scalar_subquery()
+    )
+    # send-to-drafting writes the request time into revision_completed_date (despite the name).
+    return func.coalesce(latest_request, Fab.revision_completed_date)
+
+
 def _paginate_fab_list_query(
     query, skip: int, limit: int, current_stage: Optional[str], latest_templating,
     needs_job_search: bool = False, needs_account_search: bool = False,
@@ -4311,10 +4323,10 @@ def _apply_pagination_and_ordering(query, skip: int, limit: int, current_stage: 
             Fab.created_at.asc()
         )
     elif current_stage == "revision":
-        # Sort by sct_completed_date (oldest first, nulls last)
+        # Oldest revision request first, so the queue follows the order revisions were asked for.
         return query.offset(skip).limit(limit).order_by(
+            _revision_requested_date_expr().asc().nullslast(),
             Fab.sct_completed_date.asc().nullslast(),
-            Fab.updated_at.asc().nullsfirst(),
             Fab.created_at.asc()
         )
     elif current_stage == "cut_list":
@@ -4507,6 +4519,7 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
             fab_dict["resurface_details"] = None
             fab_dict["install_details"] = None
             fab_dict["latest_revision"] = None
+            fab_dict["revision_requested_date"] = None
             fab_dict["has_pending_shop_revision"] = False
             fab_dict["drafting_session"] = None
             fab_dict["is_complete"] = False
@@ -4557,6 +4570,10 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
             install_by_fab[fab_id]["install_confirm"] if fab_id in install_by_fab else False
         )
         fab_dict["latest_revision"] = latest_revisions_by_fab.get(fab_id)
+        # Same date the revision list sorts by (_revision_requested_date_expr).
+        fab_dict["revision_requested_date"] = (
+            (fab_dict["latest_revision"] or {}).get("created_at") or fab_dict.get("revision_completed_date")
+        )
         fab_dict["has_pending_shop_revision"] = pending_shop_revision_by_fab.get(fab_id, False)
         fab_dict["drafting_session"] = drafting_sessions_by_fab.get(fab_id)
 
