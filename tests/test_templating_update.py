@@ -42,3 +42,18 @@ def test_templating_schedule_updates_preserve_null_and_reject_invalid_dates(fiel
     assert getattr(TemplatingScheduleUpdate.model_validate({field: None}), field) is None
     with pytest.raises(ValidationError):
         TemplatingScheduleUpdate.model_validate({field: "2026-02-30T01:00:00"})
+
+def test_unchecking_completed_reverts_templating_record():
+    from types import SimpleNamespace
+    from src.app.routers.templating import _mark_templating_incomplete
+
+    templating = SimpleNamespace(
+        is_completed=True, status_id=2, actual_end_date=datetime(2026, 10, 19, 1),
+        updated_at=None, updated_by=None,
+    )
+    _mark_templating_incomplete(templating, user_id=5)
+
+    assert templating.is_completed is False
+    assert templating.status_id == 1
+    assert templating.actual_end_date is None
+    assert templating.updated_by == 5

@@ -41,6 +41,16 @@ def _to_app_tz(dt: Optional[datetime]) -> Optional[datetime]:
     return to_app_tz(dt)
 
 
+def _mark_templating_incomplete(templating, user_id: int) -> None:
+    """Undo a completion on the templating record (status back to scheduled, completed date cleared)."""
+    templating.is_completed = False
+    if templating.status_id == 2:
+        templating.status_id = 1
+    templating.actual_end_date = None
+    templating.updated_at = app_now()
+    templating.updated_by = user_id
+
+
 def _mark_templating_complete(templating, fab: Optional[Fab], user_id: int) -> None:
     timestamp = app_now()
     templating.is_completed = True
@@ -275,6 +285,8 @@ async def update_templating(
     fab = fab_result.scalar_one_or_none()
     if update_dict.get("is_completed") is True:
         _mark_templating_complete(templating, fab, current_user.id)
+    elif update_dict.get("is_completed") is False:
+        _mark_templating_incomplete(templating, current_user.id)
     else:
         templating.updated_at = app_now()
         templating.updated_by = current_user.id
