@@ -67,3 +67,29 @@ async def test_redo_modal_submit_stores_negative_revenue(monkeypatch, patch, exp
 
     assert fab.revenue == expected_revenue
     db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("existing_cost_of_stone", [None, 850.0])
+async def test_redo_modal_submit_leaves_cost_of_stone_for_manual_entry(monkeypatch, existing_cost_of_stone):
+    fab = SimpleNamespace(
+        id=15988, fab_type="AG REDO", cost_per_sqft=None, redo_total_sqft=58, total_sqft=40,
+        revenue=None, cost_of_stone=existing_cost_of_stone, cost_of_stone_id=None, stone_color_id=1,
+        stone_type_id=1, no_of_pieces=1, redo_department=None, redo_requested_by=None, notes=None,
+        updated_at=None, updated_by=None,
+    )
+    results = iter([_result(fab)])
+    db = SimpleNamespace(
+        execute=AsyncMock(side_effect=lambda *_: next(results, _result())),
+        get=AsyncMock(return_value=None), add=Mock(), flush=AsyncMock(), commit=AsyncMock(),
+    )
+    monkeypatch.setattr(reports, "success_response", lambda data, message: data)
+
+    response = await reports.patch_redo_record(
+        redo_id=15988, patch=reports.RedoPatchRequest(cost_per_sqft=101.5), db=db, current_user=SimpleNamespace(id=1),
+    )
+
+    assert fab.cost_of_stone == existing_cost_of_stone
+    cost_record = next(call.args[0] for call in db.add.call_args_list if isinstance(call.args[0], reports.CostOfStone))
+    assert cost_record.total_cost == "12362.70"   # 101.5 * 58 redo sq ft * 2.1, as on the Redos page
+    assert response["total_cost"] == 12362.7

@@ -400,12 +400,17 @@ async def patch_redo_record(
         if patch.total_cost is not None:
             total_cost_value = patch.total_cost
         elif patch.cost_per_sqft is not None:
-            total_cost_value = patch.cost_per_sqft * _to_float(fab.total_sqft) * 2.1
+            # Same formula as the Redos report: redo sq ft, falling back to total sq ft on older rows.
+            redo_sqft = _to_float(fab.redo_total_sqft)
+            if redo_sqft <= 0:
+                redo_sqft = _to_float(fab.total_sqft)
+            total_cost_value = patch.cost_per_sqft * redo_sqft * 2.1
 
         if total_cost_value is not None:
             total_cost_value = round(total_cost_value, 2)
+            # Only the redo's cost record holds this total (shown on the Redos page);
+            # fabs.cost_of_stone stays for the manually entered stone cost.
             cost_record.total_cost = f"{total_cost_value:.2f}"
-            fab.cost_of_stone = total_cost_value
 
         cost_record.updated_at = now
         cost_record.updated_by = current_user.id
