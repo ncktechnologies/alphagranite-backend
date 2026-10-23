@@ -67,7 +67,7 @@ async def guard_message(db, *args, **kwargs):
     with pytest.raises(HTTPException) as error:
         await assert_no_running_timer_for_reassignment(db, *args, **kwargs)
     assert error.value.status_code == 409
-    return error.value.detail
+    return error.value.detail["message"]
 
 
 @pytest.mark.asyncio

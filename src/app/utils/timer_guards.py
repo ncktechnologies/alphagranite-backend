@@ -27,6 +27,7 @@ from src.app.database.shop_cut_plan_timer_session import ShopCutPlanTimerSession
 from src.app.database.slab_smith import SlabSmithSession
 from src.app.database.templater_job_timer_session import TemplaterJobTimerSession
 from src.app.database.user import User
+from src.app.utils.helpers import error_response
 from src.app.interface.generated_schemas import ShopRevision
 
 
@@ -292,7 +293,5 @@ async def assert_no_running_timer_for_reassignment(
             )
 
     if running:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"{'; '.join(running)}. Stop the running timer before reassigning.",
-        )
+        # error_response's {"message": ...} detail is what the web's error toast reads.
+        raise error_response(f"{'; '.join(running)}. Stop the running timer before reassigning.", status.HTTP_409_CONFLICT)

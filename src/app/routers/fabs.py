@@ -989,6 +989,19 @@ async def get_fab_notes(db: AsyncSession, fab_id: int) -> List[dict]:
     return notes
 
 
+STONE_ACTIVE_STATUS_ID = 1  # status.value_id "Active" for stone types and colors
+
+
+def _assert_active_stone_option(option, label: str) -> None:
+    """Inactive stone types/colors can't be picked for a FAB."""
+    if option is not None and option.status_id != STONE_ACTIVE_STATUS_ID:
+        # Raised (not returned) so it also stops update_fab; {"message": ...} is what the web toast shows.
+        raise HTTPException(
+            status_code=400,
+            detail={"success": False, "message": f'The {label} "{option.name}" is inactive. Choose an active {label}.'},
+        )
+
+
 @router.post("/fabs", response_model=SuccessResponse[FabResponse], status_code=201)
 async def create_fab(
     fab_data: FabCreate,
@@ -1029,6 +1042,8 @@ async def create_fab(
         return error_response("Stone color not found", 404)
     if stone_color.stone_type_id is not None and stone_color.stone_type_id != fab_data.stone_type_id:
         return error_response("Stone color does not belong to the selected stone type", 400)
+    _assert_active_stone_option(stone_type, "stone type")
+    _assert_active_stone_option(stone_color, "stone color")
     
     # Stone thickness validation
     stone_thickness = await db.get(StoneThickness, fab_data.stone_thickness_id)
@@ -2608,6 +2623,12 @@ async def update_fab(
     
     # Update fields (exclude notes and stage as they're for fab_notes)
     update_data = fab_data.model_dump(exclude_unset=True, exclude={"notes", "stage"})
+
+    # Switching to an inactive stone type/color is blocked; an unchanged one can stay.
+    if update_data.get("stone_type_id") is not None and update_data["stone_type_id"] != fab.stone_type_id:
+        _assert_active_stone_option(await db.get(StoneType, update_data["stone_type_id"]), "stone type")
+    if update_data.get("stone_color_id") is not None and update_data["stone_color_id"] != fab.stone_color_id:
+        _assert_active_stone_option(await db.get(StoneColor, update_data["stone_color_id"]), "stone color")
 
     if update_data.get("shop_est_completion_date") is not None:
         validation_error = await _validate_shop_plans_for_completion_date(db, fab, update_data)
