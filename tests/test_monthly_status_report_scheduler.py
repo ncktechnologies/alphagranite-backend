@@ -1,6 +1,8 @@
 import ast
 import asyncio
 import os
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
@@ -80,3 +82,21 @@ def test_standalone_runner_exits_when_disabled(monkeypatch):
     asyncio.run(namespace["_run_monthly_status_report_scheduler"]())
 
     namespace["_scheduler_loop"].assert_not_called()
+
+
+def test_standalone_report_module_configures_orm_mappers():
+    # Fresh interpreter, matching the monthly_reports container, so models
+    # imported by other tests can't mask a missing relationship target.
+    code = (
+        "import src.app.service.monthly_end_of_month_status_report\n"
+        "from sqlalchemy.orm import configure_mappers\n"
+        "configure_mappers()\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
