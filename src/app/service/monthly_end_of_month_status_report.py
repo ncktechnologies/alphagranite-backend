@@ -23,13 +23,7 @@ from src.app.database.shop_cut_plan import ShopCutPlan
 from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness
 from src.app.database.stone_type import StoneType
-# Not queried here, but User's relationships resolve these by name; the
-# standalone monthly_reports process doesn't import the routers that load them.
-from src.app.database.department import Department  # noqa: F401
-from src.app.database.job import JobApplication  # noqa: F401
-from src.app.database.password_reset_otp import PasswordResetOTP  # noqa: F401
-from src.app.database.role import Role  # noqa: F401
-from src.app.database.user_role import UserRole  # noqa: F401
+import src.app.database.model_registry  # noqa: F401  (runs standalone in monthly_reports)
 from src.app.interface.generated_schemas import CutList
 from src.app.interface.generated_schemas import InstallCompletion
 from src.app.service.background import send_email_with_attachments

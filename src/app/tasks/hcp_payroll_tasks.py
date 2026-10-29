@@ -6,6 +6,7 @@ from typing import Any, Awaitable, Callable
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+import src.app.database.model_registry  # noqa: F401  (worker doesn't load the API's models)
 from src.app.service.hcp_payroll_ingestion import (
     get_active_configs,
     ingest_hcp_payroll_report,
