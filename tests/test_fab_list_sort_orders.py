@@ -42,6 +42,15 @@ def test_latest_assignee_filter_matches_most_recent_record():
     assert unassigned.endswith("IS NULL")
 
 
+def test_drafter_filter_matches_the_drafter_the_widget_shows():
+    # Drafting/Final Programming show the latest drafting record's drafter, not fabs.drafter_id
+    sql = " ".join(str(fabs._drafter_condition(7).compile(dialect=postgresql.dialect())).split())
+    assert "FROM draftings" in sql and "ORDER BY draftings.created_at DESC, draftings.id DESC LIMIT" in sql
+    assert "fabs.drafter_id" not in sql
+    unassigned = " ".join(str(fabs._drafter_condition(0).compile(dialect=postgresql.dialect())).split())
+    assert unassigned.endswith("IS NULL")
+
+
 def test_sct_queue_orders_revised_fabs_by_revision_submission():
     sql = " ".join(str(fabs._apply_pagination_and_ordering(select(Fab.id), 0, 25, "sales_ct", None)
                        .compile(dialect=postgresql.dialect())).split())

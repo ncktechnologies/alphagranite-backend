@@ -93,18 +93,14 @@ ACCEPTED_PLAN_NAMES = {
 
 
 def _drafter_condition(drafter_id: int):
-    """drafter_id=0 means "no drafter assigned" (the drafting table's Unassigned filter)."""
-    return Fab.drafter_id.is_(None) if drafter_id == 0 else Fab.drafter_id == drafter_id
+    """The drafter the Drafting and Final Programming widgets show: the latest drafting record's
+    assignee (assigning a drafter doesn't update fabs.drafter_id). 0 = no drafter assigned."""
+    return _latest_assignee_condition(_drafting_model(), drafter_id)
 
 
 def _drafting_model():
     from src.app.database.drafting import Drafting  # local import, as elsewhere in this module
     return Drafting
-
-
-def _final_programming_model():
-    from src.app.database.final_programming import FinalProgramming
-    return FinalProgramming
 
 
 def _latest_assignee_condition(model, assignee_id: int):
@@ -3155,7 +3151,6 @@ async def get_pending_final_programming_fabs(
     limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
     job_id: Optional[int] = Query(None, description="Filter by job ID"),
     drafter_id: Optional[int] = Query(None, ge=0, description="Filter by drafter/programmer ID; 0 = no drafter assigned"),
-    final_programmer_id: Optional[int] = Query(None, ge=0, description="Final Programming widget: latest final programming assignee; 0 = unassigned"),
     status_id: Optional[int] = Query(None, description="Filter by status ID"),
     shop_date_start: Optional[date] = Query(None, description="Filter by shop_date_schedule on or after this date (YYYY-MM-DD)"),  # NEW
     shop_date_end: Optional[date] = Query(None, description="Filter by shop_date_schedule on or before this date (YYYY-MM-DD)"),  # NEW
@@ -3248,8 +3243,6 @@ async def get_pending_final_programming_fabs(
         query = query.where(Fab.job_id == job_id)
     if drafter_id is not None:
         query = query.where(_drafter_condition(drafter_id))
-    if final_programmer_id is not None:
-        query = query.where(_latest_assignee_condition(_final_programming_model(), final_programmer_id))
     if status_id:
         query = query.where(Fab.status_id == status_id)
     
@@ -3305,8 +3298,6 @@ async def get_pending_final_programming_fabs(
         count_query = count_query.where(Fab.job_id == job_id)
     if drafter_id is not None:
         count_query = count_query.where(_drafter_condition(drafter_id))
-    if final_programmer_id is not None:
-        count_query = count_query.where(_latest_assignee_condition(_final_programming_model(), final_programmer_id))
     if status_id:
         count_query = count_query.where(Fab.status_id == status_id)
     if shop_date_start:
@@ -6087,6 +6078,7 @@ async def get_resurface_schedule(
 
     fab_ids = [row[0].id for row in rows if row[0] and row[0].id is not None]
     plans_map = await get_plans_map_for_fabs(db, fab_ids)
+    notes_by_fab = await _batch_load_fab_notes(db, fab_ids)
 
     data = []
     for row in rows:
@@ -6114,6 +6106,7 @@ async def get_resurface_schedule(
         fab_dict["stone_thickness_value"] = row.stone_thickness_value
         fab_dict["edge_name"] = row.edge_name
         fab_dict["status_name"] = row.status_name
+        fab_dict["fab_notes"] = notes_by_fab.get(fab.id, [])
         
         # Attach plans array and computed shop-related fields
         plans = plans_map.get(fab.id, [])
