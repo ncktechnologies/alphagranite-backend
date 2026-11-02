@@ -149,6 +149,7 @@ async def schedule_templating(
         existing_templating.notes = templating_data.notes
         existing_templating.review_checklist = templating_data.review_checklist
         existing_templating.rescheduled = True  # NEW: Mark as rescheduled
+        existing_templating.reschedule_count = (existing_templating.reschedule_count or 0) + 1
         existing_templating.updated_at = app_now()
         existing_templating.updated_by = current_user.id
         templating = existing_templating
@@ -164,6 +165,7 @@ async def schedule_templating(
             review_checklist=templating_data.review_checklist,
             is_templating_schedule=True,
             rescheduled=False,  # NEW: First schedule is not a reschedule
+            reschedule_count=0,
             status_id=1,
             created_at=app_now(),
             updated_at=None,
@@ -205,7 +207,8 @@ async def schedule_templating(
         review_checklist=templating.review_checklist,
         is_templating_schedule=templating.is_templating_schedule,
         is_completed=templating.is_completed,
-        rescheduled=templating.rescheduled,  # NEW
+        rescheduled=templating.rescheduled,
+        reschedule_count=templating.reschedule_count or 0,  # NEW
         status_id=templating.status_id,
         status_name=status.name if status else None,
         created_at=templating.created_at,
@@ -291,6 +294,11 @@ async def update_templating(
         templating.updated_at = app_now()
         templating.updated_by = current_user.id
 
+    if update_dict.get("reschedule") and update_dict.get("is_completed") is not True:
+        # No limit: every reschedule counts.
+        templating.rescheduled = True
+        templating.reschedule_count = (templating.reschedule_count or 0) + 1
+
     await _sync_fab_total_sqft(db, templating.fab_id, update_data.total_sqft, current_user.id)
 
     await db.commit()
@@ -314,6 +322,7 @@ async def update_templating(
         is_templating_schedule=templating.is_templating_schedule,
         is_completed=templating.is_completed,
         rescheduled=templating.rescheduled,
+        reschedule_count=templating.reschedule_count or 0,
         status_id=templating.status_id,
         status_name=status.name if status else None,
         current_stage=fab.current_stage if fab else None,
@@ -370,6 +379,7 @@ async def update_templating_review_checklist(
         is_templating_schedule=templating.is_templating_schedule,
         is_completed=templating.is_completed,
         rescheduled=templating.rescheduled,
+        reschedule_count=templating.reschedule_count or 0,
         status_id=templating.status_id,
         status_name=status.name if status else None,
         current_stage=fab.current_stage if fab else None,
@@ -445,7 +455,8 @@ async def complete_templating(
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
         is_completed=templating.is_completed,
-        rescheduled=templating.rescheduled,  # NEW
+        rescheduled=templating.rescheduled,
+        reschedule_count=templating.reschedule_count or 0,  # NEW
         status_id=templating.status_id,
         status_name=status.name if status else None,
         current_stage=fab.current_stage,
@@ -543,7 +554,8 @@ async def get_templating(
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
         is_completed=templating.is_completed,
-        rescheduled=templating.rescheduled,  # NEW
+        rescheduled=templating.rescheduled,
+        reschedule_count=templating.reschedule_count or 0,  # NEW
         status_id=templating.status_id,
         status_name=status.name if status else None,
         current_stage=fab.current_stage,
@@ -589,7 +601,8 @@ async def get_templating_by_fab(
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
         is_completed=templating.is_completed,
-        rescheduled=templating.rescheduled,  # NEW
+        rescheduled=templating.rescheduled,
+        reschedule_count=templating.reschedule_count or 0,  # NEW
         status_id=templating.status_id,
         status_name=status.name if status else None,
         created_at=templating.created_at,

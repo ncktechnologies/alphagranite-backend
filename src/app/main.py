@@ -13,6 +13,7 @@ from src.app.routers import operators
 from src.app.routers import workstation
 from src.app.routers import shop_planning
 from src.app.routers import hcp_payroll
+from src.app.routers import notifications
 from src.app.routers import performance_data
 from fastapi.staticfiles import StaticFiles
 from src.app.routers.auth import auth_router
@@ -330,6 +331,7 @@ app.include_router(operator_workflow.router, prefix="/api/v1", tags=["Operator W
 app.include_router(dashboard.router, prefix="/api/v1", tags=["Dashboard"])
 app.include_router(performance_data.router, prefix="/api/v1", tags=["Performance Data"])
 app.include_router(hcp_payroll.router, prefix="/api/v1")
+app.include_router(notifications.router, prefix="/api/v1")
 
 # Register public routes WITHOUT authentication
 app.include_router(

@@ -26,6 +26,7 @@ from src.app.interface.response_wrappers import SuccessResponse
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.service.background import send_notification
 from src.app.service.file import FileService
+from src.app.service.notifications import notify_fab_event
 from src.app.utils.config import SUPPORT_EMAIL
 from src.app.utils.helpers import error_response, success_response, app_now
 
@@ -155,6 +156,7 @@ async def create_shop_revision(
     db.add(revision)
     await db.commit()
     await db.refresh(revision)
+    await notify_fab_event(revision.fab_id, "shop_revision_requested", current_user.id)
 
     requester_name = f"{current_user.first_name} {current_user.last_name}".strip()
     assignee_name = (
@@ -414,6 +416,7 @@ async def complete_shop_revision(
     db.add(revision)
     await db.commit()
     await db.refresh(revision)
+    await notify_fab_event(revision.fab_id, "shop_revision_completed", current_user.id)
 
     return success_response(_serialize_shop_revision(revision), "Shop revision completed successfully")
 

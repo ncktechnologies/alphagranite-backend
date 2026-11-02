@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import List, Optional
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -34,6 +34,14 @@ async def _sync_stone_types_id_sequence(db: AsyncSession) -> None:
     )
 
 
+async def _stone_type_name_taken(db: AsyncSession, name: str, exclude_id: Optional[int] = None) -> bool:
+    """Names are unique ignoring case and surrounding spaces ("Quartz" == " quartz")."""
+    query = select(StoneType.id).where(func.lower(func.trim(StoneType.name)) == name.strip().lower())
+    if exclude_id is not None:
+        query = query.where(StoneType.id != exclude_id)
+    return (await db.execute(query.limit(1))).first() is not None
+
+
 @router.post("/stone-types", response_model=SuccessResponse[StoneTypeResponse], status_code=201)
 async def create_stone_type(
     stone_type_data: StoneTypeCreate,
@@ -42,9 +50,10 @@ async def create_stone_type(
 ):
     """Create a new stone type"""
     
-    # Check if stone type name already exists
-    type_check = await db.execute(select(StoneType).where(StoneType.name == stone_type_data.name))
-    if type_check.scalar_one_or_none():
+    stone_type_data.name = stone_type_data.name.strip()
+    if not stone_type_data.name:
+        raise error_response("Stone type name is required", 400)
+    if await _stone_type_name_taken(db, stone_type_data.name):
         raise error_response("Stone type already exists", 400)
 
     if current_user.id is None:
@@ -149,9 +158,11 @@ async def update_stone_type(
         raise error_response("Stone type not found", 404)
     
     # Check name uniqueness if being updated
-    if stone_type_data.name and stone_type_data.name != stone_type.name:
-        type_check = await db.execute(select(StoneType).where(StoneType.name == stone_type_data.name))
-        if type_check.scalar_one_or_none():
+    if stone_type_data.name is not None:
+        stone_type_data.name = stone_type_data.name.strip()
+        if not stone_type_data.name:
+            raise error_response("Stone type name is required", 400)
+        if await _stone_type_name_taken(db, stone_type_data.name, exclude_id=type_id):
             raise error_response("Stone type already exists", 400)
     
     # Update fields

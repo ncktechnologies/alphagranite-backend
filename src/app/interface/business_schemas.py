@@ -513,6 +513,8 @@ class TemplatingScheduleUpdate(BaseModel):
     is_templating_schedule: Optional[bool] = None
     status_id: Optional[int] = None
     is_completed: Optional[bool] = None
+    # "Reschedule" on the templating activity form; each one bumps reschedule_count.
+    reschedule: Optional[bool] = None
 
     @field_validator("schedule_start_date", "schedule_due_date", mode="before")
     @classmethod
@@ -559,6 +561,7 @@ class TemplatingResponse(BaseModel):
     review_checklist: Optional[dict] = None
     is_templating_schedule: Optional[bool] = None
     rescheduled: bool = False  # NEW
+    reschedule_count: int = 0
     is_completed: Optional[bool] = None
     status_id: Optional[int] = None
     status_name: Optional[str] = None

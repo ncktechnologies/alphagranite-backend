@@ -41,6 +41,7 @@ from src.app.interface.business_schemas import (
 from src.app.interface.response_wrappers import SuccessResponse, error_response, success_response
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.utils.helpers import app_now, to_app_tz, app_today
+from src.app.service.notifications import schedule_est_completion_date_email
 from src.app.utils.redo import apply_ag_redo_revenue, is_ag_redo
 
 
@@ -78,11 +79,16 @@ SHOP_PLAN_REQUIREMENTS = {
     "wj_linft": ("CUT - WJ", {"CUT - WJ"}),
     "edging_linft": ("EDGING", {"EDGING"}),
     "cnc_linft": ("CNC", {"CNC"}),
-    "miter_linft": ("MITER", {"MITER"}),
     "saw_cut_lnft": ("CUT - SAW", {"CUT - SAW"}),
-    "saw_miter_lnft": ("MITER", {"MITER"}),
+    # A MITER plan is required only by WJ Miter LinFt; the other miter measurements
+    # (miter_linft, saw_miter_lnft) don't need a miter station.
     "wj_miter_lnft": ("MITER", {"MITER"}),
 }
+
+
+def _drafter_condition(drafter_id: int):
+    """drafter_id=0 means "no drafter assigned" (the drafting table's Unassigned filter)."""
+    return Fab.drafter_id.is_(None) if drafter_id == 0 else Fab.drafter_id == drafter_id
 
 
 def _normalize_shop_plan_name(plan_name: Optional[str]) -> str:
@@ -1141,7 +1147,7 @@ async def get_fabs(
     fab_type: Optional[str] = Query(None, description="Filter by fab type"),
     sales_person_id: Optional[int] = Query(None, description="Filter by sales person ID"),
     templater_id: Optional[int] = Query(None, description="Filter by templater/technician ID"),
-    drafter_id: Optional[int] = Query(None, description="Filter by drafter/programmer ID"),
+    drafter_id: Optional[int] = Query(None, ge=0, description="Filter by drafter/programmer ID; 0 = no drafter assigned"),
     status_id: Optional[int] = Query(None, description="Filter by status ID"),
     current_stage: Optional[str] = Query(None, description="Filter by current stage"),
     next_stage: Optional[str] = Query(None, description="Filter by next stage"),
@@ -1330,7 +1336,7 @@ async def get_fabs(
     if sales_person_id is not None:
         count_query = count_query.where(Fab.sales_person_id == sales_person_id)
     if drafter_id is not None:
-        count_query = count_query.where(Fab.drafter_id == drafter_id)
+        count_query = count_query.where(_drafter_condition(drafter_id))
     if status_id is not None:
         count_query = count_query.where(Fab.status_id == status_id)
     if current_stage:
@@ -1437,7 +1443,7 @@ async def get_fabs(
         if sales_person_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.sales_person_id == sales_person_id)
         if drafter_id is not None:
-            stage_totals_query = stage_totals_query.where(Fab.drafter_id == drafter_id)
+            stage_totals_query = stage_totals_query.where(_drafter_condition(drafter_id))
         if status_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.status_id == status_id)
         if installer_assignment_filter is not None:
@@ -1526,7 +1532,7 @@ async def get_fabs_for_cnc_widget(
     fab_type: Optional[str] = Query(None, description="Filter by fab type"),
     sales_person_id: Optional[int] = Query(None, description="Filter by sales person ID"),
     templater_id: Optional[int] = Query(None, description="Filter by templater/technician ID"),
-    drafter_id: Optional[int] = Query(None, description="Filter by drafter/programmer ID"),
+    drafter_id: Optional[int] = Query(None, ge=0, description="Filter by drafter/programmer ID; 0 = no drafter assigned"),
     status_id: Optional[int] = Query(None, description="Filter by status ID"),
     current_stage: Optional[str] = Query(None, description="Filter by current stage"),
     next_stage: Optional[str] = Query(None, description="Filter by next stage"),
@@ -1681,7 +1687,7 @@ async def get_fabs_for_cnc_widget(
     if sales_person_id is not None:
         count_query = count_query.where(Fab.sales_person_id == sales_person_id)
     if drafter_id is not None:
-        count_query = count_query.where(Fab.drafter_id == drafter_id)
+        count_query = count_query.where(_drafter_condition(drafter_id))
     if status_id is not None:
         count_query = count_query.where(Fab.status_id == status_id)
     if current_stage:
@@ -1804,7 +1810,7 @@ async def get_fabs_for_cnc_widget(
         if sales_person_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.sales_person_id == sales_person_id)
         if drafter_id is not None:
-            stage_totals_query = stage_totals_query.where(Fab.drafter_id == drafter_id)
+            stage_totals_query = stage_totals_query.where(_drafter_condition(drafter_id))
         if status_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.status_id == status_id)
 
@@ -2647,6 +2653,7 @@ async def update_fab(
         fab.drafter_assigned_at = app_now()
         fab.drafting_needed = True  # Set drafting_needed to True when drafter assigned
     
+    previous_est_completion_date = getattr(fab, "shop_est_completion_date", None)
     for field, value in update_data.items():
         if field == "current_stage":
             stage_changed = True
@@ -2682,6 +2689,10 @@ async def update_fab(
     
     await db.commit()
     await db.refresh(fab)
+
+    if "shop_est_completion_date" in update_data:
+        # Only a change to an already-established date emails the front office.
+        schedule_est_completion_date_email(fab_id, previous_est_completion_date, fab.shop_est_completion_date)
     
     # Return the updated FAB with full context (drafter info, notes, etc.)
     return await get_fab(fab_id, db, current_user)
@@ -3093,7 +3104,7 @@ async def get_pending_final_programming_fabs(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
     job_id: Optional[int] = Query(None, description="Filter by job ID"),
-    drafter_id: Optional[int] = Query(None, description="Filter by drafter/programmer ID"),
+    drafter_id: Optional[int] = Query(None, ge=0, description="Filter by drafter/programmer ID; 0 = no drafter assigned"),
     status_id: Optional[int] = Query(None, description="Filter by status ID"),
     shop_date_start: Optional[date] = Query(None, description="Filter by shop_date_schedule on or after this date (YYYY-MM-DD)"),  # NEW
     shop_date_end: Optional[date] = Query(None, description="Filter by shop_date_schedule on or before this date (YYYY-MM-DD)"),  # NEW
@@ -3185,7 +3196,7 @@ async def get_pending_final_programming_fabs(
     if job_id:
         query = query.where(Fab.job_id == job_id)
     if drafter_id is not None:
-        query = query.where(Fab.drafter_id == drafter_id)
+        query = query.where(_drafter_condition(drafter_id))
     if status_id:
         query = query.where(Fab.status_id == status_id)
     
@@ -3240,7 +3251,7 @@ async def get_pending_final_programming_fabs(
     if job_id:
         count_query = count_query.where(Fab.job_id == job_id)
     if drafter_id is not None:
-        count_query = count_query.where(Fab.drafter_id == drafter_id)
+        count_query = count_query.where(_drafter_condition(drafter_id))
     if status_id:
         count_query = count_query.where(Fab.status_id == status_id)
     if shop_date_start:
@@ -3961,7 +3972,7 @@ def _build_fab_list_query(
     if sales_person_id is not None:
         query = query.where(Fab.sales_person_id == sales_person_id)
     if drafter_id is not None:
-        query = query.where(Fab.drafter_id == drafter_id)
+        query = query.where(_drafter_condition(drafter_id))
     if status_id is not None:
         query = query.where(Fab.status_id == status_id)
     if current_stage:

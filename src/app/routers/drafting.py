@@ -29,6 +29,7 @@ from src.app.interface.business_schemas import (
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import error_response, success_response, strip_timezone, app_now, datetime_to_iso, to_app_tz, APP_TZ
+from src.app.service.notifications import notify_fab_event
 from src.app.utils.timer_guards import assert_no_active_timer_session, assert_no_running_timer_for_reassignment
 
 logger = logging.getLogger(__name__)
@@ -132,7 +133,8 @@ async def manage_drafting_session(
             # Calculate time since last resume or start
             naive_timestamp = strip_timezone(timestamp)
             naive_start_time = strip_timezone(active_session.session_start_time)
-            active_session.total_time_spent += int((naive_timestamp - naive_start_time).total_seconds()) - active_session.total_pause_duration
+            # Elapsed minus all pauses is already the session total, so assign (not +=).
+            active_session.total_time_spent = int((naive_timestamp - naive_start_time).total_seconds()) - active_session.total_pause_duration
         
         active_session.status = "paused"
         active_session.current_pause_start_time = strip_timezone(timestamp)
@@ -216,6 +218,9 @@ async def manage_drafting_session(
         
         # Similar to pause but with different status
         if active_session.current_pause_start_time is None and active_session.status == "drafting":
+            active_session.total_time_spent = int(
+                (strip_timezone(timestamp) - strip_timezone(active_session.session_start_time)).total_seconds()
+            ) - active_session.total_pause_duration
             active_session.current_pause_start_time = strip_timezone(timestamp)
         
         active_session.status = "on_hold"
@@ -639,6 +644,9 @@ async def update_drafting(
     
     # Also refresh fab to ensure we have latest state
     await db.refresh(fab)
+
+    if is_complete:
+        await notify_fab_event(fab.id, "draft_submitted", current_user.id)
     
     return success_response(drafting, "Drafting updated successfully")
 

@@ -32,6 +32,7 @@ def make_templating_record():
         review_checklist=None,
         is_templating_schedule=True,
         rescheduled=False,
+        reschedule_count=0,
         is_completed=False,
         created_at=None,
         updated_at=None,

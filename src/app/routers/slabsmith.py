@@ -307,6 +307,7 @@ async def get_slabsmith_session_status(
             "start_time": session.session_start_time.isoformat(),
             "paused_at": session.current_pause_start_time.isoformat() if session.current_pause_start_time else None,
             "duration_minutes": int(duration_minutes),
+            "total_pause_duration": int(session.total_pause_duration or 0),
             "sqft_completed": sqft_completed,
             "work_percentage_done": work_percentage_done,
         }

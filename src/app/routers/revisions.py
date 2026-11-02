@@ -17,6 +17,7 @@ from src.app.interface.business_schemas import (
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import error_response, success_response, app_now
+from src.app.service.notifications import notify_fab_event
 from src.app.utils.timer_guards import assert_no_running_timer_for_reassignment
 
 router = APIRouter()
@@ -135,6 +136,9 @@ async def update_revision(
     
     await db.commit()
     await db.refresh(revision)
+
+    if update_data.is_completed:
+        await notify_fab_event(revision.fab_id, "sales_revision_completed", current_user.id)
     
     return success_response(
         RevisionResponse(

@@ -1,7 +1,7 @@
 import mimetypes
 import os
 from datetime import date, datetime, timedelta
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File as FileUpload, Form, status
 from fastapi.responses import FileResponse
@@ -1643,7 +1643,7 @@ async def get_current_operator_job_timer_history(
                         "type": "object",
                         "required": ["file"],
                         "properties": {
-                            "file": {"type": "string", "format": "binary"},
+                            "file": {"type": "array", "items": {"type": "string", "format": "binary"}},
                             "file_design": {"type": "string"},
                             "stage_name": {"type": "string"},
                             "file_type": {"type": "string"},
@@ -1661,7 +1661,8 @@ async def upload_operator_job_qa_file(
     operator_id: int,
     fab_id: int,
     request: Request,
-    file: UploadFile = FileUpload(...),
+    # The web app sends every selected file under this one field name.
+    file: List[UploadFile] = FileUpload(...),
     file_design: str = Form("qa"),
     stage_name: str = Form("qa"),
     file_type: Optional[str] = Form(None),
@@ -1705,51 +1706,57 @@ async def upload_operator_job_qa_file(
 
     settings = get_settings()
 
-    # Check file size in chunks, then rewind.
-    file_size = 0
-    chunk_size = 1024 * 1024
-    while True:
-        chunk = await file.read(chunk_size)
-        if not chunk:
-            break
-        file_size += len(chunk)
-        if file_size > settings.MAX_UPLOAD_SIZE:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"File too large. Maximum size is {settings.MAX_UPLOAD_SIZE} bytes",
-            )
-    await file.seek(0)
+    # Validate every file before saving any, so a bad one doesn't leave a partial upload.
+    for upload in file:
+        # Check file size in chunks, then rewind.
+        file_size = 0
+        chunk_size = 1024 * 1024
+        while True:
+            chunk = await upload.read(chunk_size)
+            if not chunk:
+                break
+            file_size += len(chunk)
+            if file_size > settings.MAX_UPLOAD_SIZE:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=f"File too large. Maximum size is {settings.MAX_UPLOAD_SIZE} bytes",
+                )
+        await upload.seek(0)
 
-    # Validate extension against configured allow-list.
-    if file.filename:
-        ext = file.filename.split(".")[-1].lower() if "." in file.filename else None
-        if ext and ext not in settings.ALLOWED_EXTENSIONS:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"File extension not allowed. Allowed extensions: {', '.join(settings.ALLOWED_EXTENSIONS)}",
-            )
+        # Validate extension against configured allow-list.
+        if upload.filename:
+            ext = upload.filename.split(".")[-1].lower() if "." in upload.filename else None
+            if ext and ext not in settings.ALLOWED_EXTENSIONS:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"File extension not allowed. Allowed extensions: {', '.join(settings.ALLOWED_EXTENSIONS)}",
+                )
 
     upload_directory = directory or f"uploads/fabs/{fab_id}/qa"
 
     resolved_file_type = file_type or "qa"
 
-    file_data = await FileService.upload_file(
-        db=db,
-        file=file,
-        user_id=operator_id,
-        directory=upload_directory,
-        file_type=resolved_file_type,
-        file_design=file_design,
-        stage_name=stage_name,
-        job_id=job_id,
-        fab_id=fab_id,
-        task_id=task_id,
-        request=request,
-    )
+    uploaded = []
+    for upload in file:
+        uploaded.append(await FileService.upload_file(
+            db=db,
+            file=upload,
+            user_id=operator_id,
+            directory=upload_directory,
+            file_type=resolved_file_type,
+            file_design=file_design,
+            stage_name=stage_name,
+            job_id=job_id,
+            fab_id=fab_id,
+            task_id=task_id,
+            request=request,
+        ))
 
     return success_response(
         {
-            **file_data,
+            # First file's fields stay at the top level for existing callers.
+            **uploaded[0],
+            "files": uploaded,
             "fab_id": fab_id,
             "job_id": job_id,
             "task_id": task_id,

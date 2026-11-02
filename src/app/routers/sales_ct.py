@@ -16,6 +16,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.utils.helpers import app_now
+from src.app.service.notifications import notify_fab_event
 
 router = APIRouter(
     prefix="/sales-ct",
@@ -144,6 +145,7 @@ async def send_to_drafting(
     
     await db.commit()
     await db.refresh(fab)
+    await notify_fab_event(fab_id, "sales_revision_requested", current_user.id)
     
     return {
         "success": True,

@@ -30,6 +30,7 @@ from src.app.interface.business_schemas import (
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import error_response, success_response, app_now, to_app_tz
+from src.app.service.notifications import notify_fab_event
 from src.app.utils.timer_guards import assert_no_running_timer_for_reassignment
 from src.app.database.templating import Templating
 from src.app.routers.fabs import (
@@ -193,6 +194,7 @@ async def mark_slabsmith_completed(
         fab.updated_by = current_user.id
     
     await db.commit()
+    await notify_fab_event(slabsmith.fab_id, "slabsmith_completed", current_user.id)
     
     return success_response(None, "Slab smith marked as completed")
 
@@ -477,6 +479,9 @@ async def update_revision_type(
     sales_ct.updated_by = current_user.id
     
     await db.commit()
+
+    if revision_data.is_revision_completed:
+        await notify_fab_event(sales_ct.fab_id, "sales_revision_requested", current_user.id)
     
     return success_response(None, "Revision updated successfully")
 
