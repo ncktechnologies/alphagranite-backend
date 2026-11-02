@@ -89,11 +89,13 @@ def PermissionChecker(resource: str, action: str):
 
         # Permissions from multiple assigned roles are additive.
         for _, permission in role_permissions:
+            # The role editor only offers Read and Write, and Write is stored as can_create,
+            # so Write also grants update and delete.
             action_map = {
                 "create": permission.can_create,
                 "read": permission.can_read,
-                "update": permission.can_update,
-                "delete": permission.can_delete,
+                "update": permission.can_update or permission.can_create,
+                "delete": permission.can_delete or permission.can_create,
             }
 
             if action_map.get(action, False):

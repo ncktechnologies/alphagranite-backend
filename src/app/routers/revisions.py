@@ -119,6 +119,9 @@ async def update_revision(
 
     for key, value in update_dict.items():
         setattr(revision, key, value)
+    if update_data.is_completed and revision.actual_end_date is None:
+        # When CAD submitted the revision; SCT dates and orders returning FABs by this.
+        revision.actual_end_date = app_now()
     
     revision.updated_at = app_now()
     revision.updated_by = current_user.id

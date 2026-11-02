@@ -1208,6 +1208,8 @@ class InstallCompletionCreate(BaseModel):
     customer_signature: Optional[str] = None
     completion_notes: Optional[str] = None
     install_confirm: bool = False
+    # The Install Scheduled form can complete an install on its first save.
+    is_completed: bool = False
 
 
 class InstallCompletionUpdate(BaseModel):

@@ -570,6 +570,7 @@ async def get_pending_slabsmith_fab_ids(
     ),
     fab_type: Optional[str] = None,
     drafter_id: Optional[int] = Query(None, description="Filter by drafter/programmer ID"),
+    slabsmith_operator_id: Optional[int] = Query(None, ge=0, description="SlabSmith widget: latest SlabSmith assignee; 0 = unassigned"),
     skip: int = 0,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
@@ -655,6 +656,10 @@ async def get_pending_slabsmith_fab_ids(
 
     if drafter_id is not None:
         filters.append(Fab.drafter_id == drafter_id)
+
+    if slabsmith_operator_id is not None:
+        from src.app.routers.fabs import _latest_assignee_condition
+        filters.append(_latest_assignee_condition(SlabSmith, slabsmith_operator_id))
 
     # Build latest templating subquery (for consistent FAB payload)
     latest_templating = (

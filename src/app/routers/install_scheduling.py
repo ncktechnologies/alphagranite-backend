@@ -25,7 +25,9 @@ from src.app.utils.helpers import error_response, success_response, app_now
 router = APIRouter()
 
 
-async def _validate_shop_completion_for_install(db: AsyncSession, fab: Optional[Fab]) -> None:
+async def _validate_shop_completion_for_install(
+    db: AsyncSession, fab: Optional[Fab], action: str = "Install scheduling cannot be marked complete"
+) -> None:
     if fab and fab.fab_type in {"PUNCHOUT-AG", "PUNCHOUT-BILLABLE"}:
         return
 
@@ -40,13 +42,13 @@ async def _validate_shop_completion_for_install(db: AsyncSession, fab: Optional[
 
     if (plan_count or 0) == 0:
         raise error_response(
-            "Install scheduling cannot be marked complete until shop percentage_completion reaches 100%",
+            f"{action} until shop percentage_completion reaches 100%",
             400,
         )
 
     if percentage_completion < 100.0:
         raise error_response(
-            f"Install scheduling cannot be marked complete until shop percentage_completion reaches 100% (current: {round(percentage_completion, 2)}%)",
+            f"{action} until shop percentage_completion reaches 100% (current: {round(percentage_completion, 2)}%)",
             400,
         )
 

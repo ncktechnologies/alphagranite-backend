@@ -182,6 +182,9 @@ async def approve_and_send_to_slabsmith(
     
     # Mark SCT as completed
     fab.sct_completed = approval_data.sct_completed
+    if approval_data.sct_completed:
+        # Shown as "SCT Completed" (View All Fabs, reports); latest approval wins after a revision.
+        fab.sct_completed_date = app_now()
     
     # Update revenue if provided
     if approval_data.revenue is not None:

@@ -1,5 +1,5 @@
 from datetime import datetime, date, timedelta
-from typing import List, Optional
+from typing import List, Literal, Optional
 from decimal import Decimal
 import logging
 import sqlalchemy as sa
@@ -89,6 +89,29 @@ SHOP_PLAN_REQUIREMENTS = {
 def _drafter_condition(drafter_id: int):
     """drafter_id=0 means "no drafter assigned" (the drafting table's Unassigned filter)."""
     return Fab.drafter_id.is_(None) if drafter_id == 0 else Fab.drafter_id == drafter_id
+
+
+def _drafting_model():
+    from src.app.database.drafting import Drafting  # local import, as elsewhere in this module
+    return Drafting
+
+
+def _final_programming_model():
+    from src.app.database.final_programming import FinalProgramming
+    return FinalProgramming
+
+
+def _latest_assignee_condition(model, assignee_id: int):
+    """FABs whose most recent `model` record (drafting, CNC, SlabSmith) is assigned to
+    assignee_id - the person the widget shows. 0 = no one assigned yet."""
+    latest = (
+        select(model.drafter_id)
+        .where(model.fab_id == Fab.id)
+        .order_by(model.created_at.desc(), model.id.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+    return latest.is_(None) if assignee_id == 0 else latest == assignee_id
 
 
 def _normalize_shop_plan_name(plan_name: Optional[str]) -> str:
@@ -1148,6 +1171,7 @@ async def get_fabs(
     sales_person_id: Optional[int] = Query(None, description="Filter by sales person ID"),
     templater_id: Optional[int] = Query(None, description="Filter by templater/technician ID"),
     drafter_id: Optional[int] = Query(None, ge=0, description="Filter by drafter/programmer ID; 0 = no drafter assigned"),
+    revisor_id: Optional[int] = Query(None, ge=0, description="Revisions widget: latest drafting assignee; 0 = unassigned"),
     status_id: Optional[int] = Query(None, description="Filter by status ID"),
     current_stage: Optional[str] = Query(None, description="Filter by current stage"),
     next_stage: Optional[str] = Query(None, description="Filter by next stage"),
@@ -1171,6 +1195,7 @@ async def get_fabs(
     search: Optional[str] = Query(None, description="Search value"),
     type: Optional[str] = Query(None, description="Field to apply search to: fab_id, job_number, job_name, account_name"),  # NEW
     plan_view: Optional[str] = Query(None, description="Plan view filter for shop stage: 'all' to return all shop cut plans regardless of active status, 'active' (default) returns only active plans"),
+    sort_by: Optional[Literal["fab_id_desc", "job_number_desc"]] = Query(None, description="Override the stage ordering: 'fab_id_desc' (newest FABs first) or 'job_number_desc'"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -1244,6 +1269,8 @@ async def get_fabs(
         drafter_id,
         plan_view,
     )
+    if revisor_id is not None:
+        query = query.where(_latest_assignee_condition(_drafting_model(), revisor_id))
 
     if installer_assignment_filter is not None:
         query = query.where(installer_assignment_filter)
@@ -1286,6 +1313,7 @@ async def get_fabs(
     query = _paginate_fab_list_query(
         query, skip, limit, current_stage, latest_templating,
         needs_job_search, bool(search and type == "account_name"),
+        sort_by=sort_by,
     )
 
     result = await db.execute(query)
@@ -1337,6 +1365,8 @@ async def get_fabs(
         count_query = count_query.where(Fab.sales_person_id == sales_person_id)
     if drafter_id is not None:
         count_query = count_query.where(_drafter_condition(drafter_id))
+    if revisor_id is not None:
+        count_query = count_query.where(_latest_assignee_condition(_drafting_model(), revisor_id))
     if status_id is not None:
         count_query = count_query.where(Fab.status_id == status_id)
     if current_stage:
@@ -1444,6 +1474,8 @@ async def get_fabs(
             stage_totals_query = stage_totals_query.where(Fab.sales_person_id == sales_person_id)
         if drafter_id is not None:
             stage_totals_query = stage_totals_query.where(_drafter_condition(drafter_id))
+        if revisor_id is not None:
+            stage_totals_query = stage_totals_query.where(_latest_assignee_condition(_drafting_model(), revisor_id))
         if status_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.status_id == status_id)
         if installer_assignment_filter is not None:
@@ -1533,6 +1565,7 @@ async def get_fabs_for_cnc_widget(
     sales_person_id: Optional[int] = Query(None, description="Filter by sales person ID"),
     templater_id: Optional[int] = Query(None, description="Filter by templater/technician ID"),
     drafter_id: Optional[int] = Query(None, ge=0, description="Filter by drafter/programmer ID; 0 = no drafter assigned"),
+    cnc_operator_id: Optional[int] = Query(None, ge=0, description="CNC widget: latest CNC programming assignee; 0 = unassigned"),
     status_id: Optional[int] = Query(None, description="Filter by status ID"),
     current_stage: Optional[str] = Query(None, description="Filter by current stage"),
     next_stage: Optional[str] = Query(None, description="Filter by next stage"),
@@ -1612,6 +1645,8 @@ async def get_fabs_for_cnc_widget(
         None,
         drafter_id,
     )
+    if cnc_operator_id is not None:
+        query = query.where(_latest_assignee_condition(CNCDrafting, cnc_operator_id))
 
     if current_stage == "install_scheduling":
         query = query.where(
@@ -1688,6 +1723,8 @@ async def get_fabs_for_cnc_widget(
         count_query = count_query.where(Fab.sales_person_id == sales_person_id)
     if drafter_id is not None:
         count_query = count_query.where(_drafter_condition(drafter_id))
+    if cnc_operator_id is not None:
+        count_query = count_query.where(_latest_assignee_condition(CNCDrafting, cnc_operator_id))
     if status_id is not None:
         count_query = count_query.where(Fab.status_id == status_id)
     if current_stage:
@@ -1811,6 +1848,8 @@ async def get_fabs_for_cnc_widget(
             stage_totals_query = stage_totals_query.where(Fab.sales_person_id == sales_person_id)
         if drafter_id is not None:
             stage_totals_query = stage_totals_query.where(_drafter_condition(drafter_id))
+        if cnc_operator_id is not None:
+            stage_totals_query = stage_totals_query.where(_latest_assignee_condition(CNCDrafting, cnc_operator_id))
         if status_id is not None:
             stage_totals_query = stage_totals_query.where(Fab.status_id == status_id)
 
@@ -3105,6 +3144,7 @@ async def get_pending_final_programming_fabs(
     limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
     job_id: Optional[int] = Query(None, description="Filter by job ID"),
     drafter_id: Optional[int] = Query(None, ge=0, description="Filter by drafter/programmer ID; 0 = no drafter assigned"),
+    final_programmer_id: Optional[int] = Query(None, ge=0, description="Final Programming widget: latest final programming assignee; 0 = unassigned"),
     status_id: Optional[int] = Query(None, description="Filter by status ID"),
     shop_date_start: Optional[date] = Query(None, description="Filter by shop_date_schedule on or after this date (YYYY-MM-DD)"),  # NEW
     shop_date_end: Optional[date] = Query(None, description="Filter by shop_date_schedule on or before this date (YYYY-MM-DD)"),  # NEW
@@ -3197,6 +3237,8 @@ async def get_pending_final_programming_fabs(
         query = query.where(Fab.job_id == job_id)
     if drafter_id is not None:
         query = query.where(_drafter_condition(drafter_id))
+    if final_programmer_id is not None:
+        query = query.where(_latest_assignee_condition(_final_programming_model(), final_programmer_id))
     if status_id:
         query = query.where(Fab.status_id == status_id)
     
@@ -3252,6 +3294,8 @@ async def get_pending_final_programming_fabs(
         count_query = count_query.where(Fab.job_id == job_id)
     if drafter_id is not None:
         count_query = count_query.where(_drafter_condition(drafter_id))
+    if final_programmer_id is not None:
+        count_query = count_query.where(_latest_assignee_condition(_final_programming_model(), final_programmer_id))
     if status_id:
         count_query = count_query.where(Fab.status_id == status_id)
     if shop_date_start:
@@ -4269,6 +4313,18 @@ def _latest_install_scheduled_date_expr():
         .scalar_subquery()
     )
 
+def _sct_submitted_date_expr():
+    """When the FAB last reached SCT: its draft, or a later completed revision."""
+    revision_submitted = (
+        select(func.max(Revision.actual_end_date))
+        .where(Revision.fab_id == Fab.id, Revision.is_completed.is_(True))
+        .correlate(Fab)
+        .scalar_subquery()
+    )
+    # greatest() ignores NULLs, so a FAB with no revision keeps its draft date.
+    return func.greatest(Fab.draft_completed_date, revision_submitted)
+
+
 def _revision_requested_date_expr():
     """When the current revision was requested: the latest revisions row, else the send-to-drafting stamp."""
     latest_request = (
@@ -4281,13 +4337,25 @@ def _revision_requested_date_expr():
     return func.coalesce(latest_request, Fab.revision_completed_date)
 
 
+SORT_ORDERS = {
+    "fab_id_desc": (Fab.id.desc(),),
+    # job_number is text; length first keeps numeric job numbers in numeric order.
+    "job_number_desc": (
+        func.length(BusinessJob.job_number).desc().nullslast(),
+        BusinessJob.job_number.desc().nullslast(),
+        Fab.id.desc(),
+    ),
+}
+
+
 def _paginate_fab_list_query(
     query, skip: int, limit: int, current_stage: Optional[str], latest_templating,
     needs_job_search: bool = False, needs_account_search: bool = False,
+    sort_by: Optional[str] = None,
 ):
     """Select the requested FAB IDs before joining their detail records."""
     page_query = select(Fab.id).select_from(Fab)
-    if needs_job_search or needs_account_search:
+    if needs_job_search or needs_account_search or sort_by == "job_number_desc":
         page_query = page_query.outerjoin(BusinessJob, Fab.job_id == BusinessJob.id)
     if needs_account_search:
         page_query = page_query.outerjoin(Account, BusinessJob.account_id == Account.id)
@@ -4295,12 +4363,18 @@ def _paginate_fab_list_query(
         page_query = page_query.outerjoin(latest_templating, sa.literal(True))
     if query.whereclause is not None:
         page_query = page_query.where(query.whereclause)
-    page_query = _apply_pagination_and_ordering(
-        page_query, skip, limit, current_stage, latest_templating,
-    ).order_by(Fab.id.asc())
+    if sort_by in SORT_ORDERS:
+        # Page-level overrides (View All Fabs, Job Status) ignore the stage ordering.
+        page_query = page_query.order_by(*SORT_ORDERS[sort_by]).offset(skip).limit(limit)
+    else:
+        page_query = _apply_pagination_and_ordering(
+            page_query, skip, limit, current_stage, latest_templating,
+        ).order_by(Fab.id.asc())
     page = page_query.subquery("fab_page")
     # Re-applying the list filters here made Postgres join every matching FAB before narrowing to the page.
     query = _fab_list_detail_select(latest_templating).where(Fab.id.in_(select(page.c.id)))
+    if sort_by in SORT_ORDERS:
+        return query.order_by(*SORT_ORDERS[sort_by]).limit(limit)
     return _apply_pagination_and_ordering(
         query, 0, limit, current_stage, latest_templating,
     ).order_by(Fab.id.asc())
@@ -4327,9 +4401,9 @@ def _apply_pagination_and_ordering(query, skip: int, limit: int, current_stage: 
             Fab.created_at.asc()
         )
     elif current_stage == "sales_ct":
-        # Sort by draft_completed_date (oldest first, nulls last)
+        # Oldest submission first; a FAB back from revision queues by its revision date.
         return query.offset(skip).limit(limit).order_by(
-            Fab.draft_completed_date.asc().nullslast(),
+            _sct_submitted_date_expr().asc().nullslast(),
             Fab.updated_at.asc().nullsfirst(),
             Fab.created_at.asc()
         )
@@ -4531,6 +4605,7 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
             fab_dict["install_details"] = None
             fab_dict["latest_revision"] = None
             fab_dict["revision_requested_date"] = None
+            fab_dict["revision_submitted_date"] = None
             fab_dict["has_pending_shop_revision"] = False
             fab_dict["drafting_session"] = None
             fab_dict["is_complete"] = False
@@ -4584,6 +4659,10 @@ async def _batch_load_fab_related_data(db: AsyncSession, fab_dicts: List[dict]) 
         # Same date the revision list sorts by (_revision_requested_date_expr).
         fab_dict["revision_requested_date"] = (
             (fab_dict["latest_revision"] or {}).get("created_at") or fab_dict.get("revision_completed_date")
+        )
+        latest_revision = fab_dict["latest_revision"] or {}
+        fab_dict["revision_submitted_date"] = (
+            latest_revision.get("actual_end_date") if latest_revision.get("is_completed") else None
         )
         fab_dict["has_pending_shop_revision"] = pending_shop_revision_by_fab.get(fab_id, False)
         fab_dict["drafting_session"] = drafting_sessions_by_fab.get(fab_id)
