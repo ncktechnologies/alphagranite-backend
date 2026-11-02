@@ -75,14 +75,20 @@ PUNCHOUT_REDIRECT_FAB_TYPES = (
     "PUNCHOUT-BILLABLE",
 )
 
-SHOP_PLAN_REQUIREMENTS = {
-    "wj_linft": ("CUT - WJ", {"CUT - WJ"}),
-    "edging_linft": ("EDGING", {"EDGING"}),
-    "cnc_linft": ("CNC", {"CNC"}),
-    "saw_cut_lnft": ("CUT - SAW", {"CUT - SAW"}),
-    # A MITER plan is required only by WJ Miter LinFt; the other miter measurements
-    # (miter_linft, saw_miter_lnft) don't need a miter station.
-    "wj_miter_lnft": ("MITER", {"MITER"}),
+# Shop activity -> FAB form measurements that make it required (any > 0; NULL/blank = 0).
+# HANDWORK is required whenever any of these measurements is > 0.
+SHOP_PLAN_RULES = (
+    ("CUT - WJ", ("wj_linft", "wj_miter_lnft")),        # WJ STR / WJ MITER LIN FT
+    ("CUT - SAW", ("saw_cut_lnft", "saw_miter_lnft")),  # SAW STR / SAW MITER LIN FT
+    ("EDGING", ("edging_linft",)),
+    ("CNC", ("cnc_linft",)),
+    ("MITER", ("miter_linft",)),
+)
+HANDWORK_PLAN = "HANDWORK"
+# Planning section names that satisfy each activity (legacy "cut"/"wj" until every environment is renamed).
+ACCEPTED_PLAN_NAMES = {
+    "CUT - WJ": {"CUT - WJ", "WJ"},
+    "CUT - SAW": {"CUT - SAW", "CUT"},
 }
 
 
@@ -143,32 +149,40 @@ def _cut_plan_key_expr():
     )
 
 
+def _linear_feet(value) -> float:
+    """FAB form measurement as a number; NULL, blank or unreadable counts as 0."""
+    try:
+        return float(value) if value not in (None, "") else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _find_missing_shop_plan_data_points(
     fab: Fab,
     update_data: dict,
     existing_plan_names: set[str],
 ) -> List[dict]:
-    normalized_plan_names = {_normalize_shop_plan_name(name) for name in existing_plan_names}
-    missing_data_points = []
+    """Required shop activities with no plan yet, in shop order, each with the
+    FAB form values that require it."""
+    planned = {_normalize_shop_plan_name(name) for name in existing_plan_names}
 
-    for field_name, (required_plan, accepted_plan_names) in SHOP_PLAN_REQUIREMENTS.items():
-        value = update_data.get(field_name, getattr(fab, field_name, None))
-        if value is None or float(value) <= 0:
-            continue
+    def measured(field: str) -> float:
+        return _linear_feet(update_data.get(field, getattr(fab, field, None)))
 
-        normalized_accepted_names = {
-            _normalize_shop_plan_name(name) for name in accepted_plan_names
-        }
-        if normalized_plan_names.isdisjoint(normalized_accepted_names):
-            missing_data_points.append(
-                {
-                    "field": field_name,
-                    "value": float(value),
-                    "required_planning_section": required_plan,
-                }
-            )
+    def is_planned(activity: str) -> bool:
+        accepted = ACCEPTED_PLAN_NAMES.get(activity, {activity})
+        return not planned.isdisjoint(_normalize_shop_plan_name(name) for name in accepted)
 
-    return missing_data_points
+    missing = []
+    any_measured: dict[str, float] = {}
+    for activity, fields in SHOP_PLAN_RULES:
+        values = {field: measured(field) for field in fields if measured(field) > 0}
+        any_measured.update(values)
+        if values and not is_planned(activity):
+            missing.append({"required_planning_section": activity, "fields": values})
+    if any_measured and not is_planned(HANDWORK_PLAN):
+        missing.append({"required_planning_section": HANDWORK_PLAN, "fields": any_measured})
+    return missing
 
 
 async def _validate_shop_plans_for_completion_date(
@@ -191,15 +205,12 @@ async def _validate_shop_plans_for_completion_date(
     if not missing_data_points:
         return None
 
-    missing_fields = ", ".join(item["field"] for item in missing_data_points)
-    required_sections = sorted(
-        {item["required_planning_section"] for item in missing_data_points}
-    )
+    required_sections = [item["required_planning_section"] for item in missing_data_points]
     return error_response(
-        "Cannot set shop_est_completion_date because required shop cut plans are missing.",
+        f"Missing plans: {', '.join(required_sections)}",
         400,
         errors={
-            "note": f"Create shop cut plans for these FAB values: {missing_fields}.",
+            "note": "Plan these shop activities before setting the shop est. completion date.",
             "missing_data_points": missing_data_points,
             "required_planning_sections": required_sections,
         },
