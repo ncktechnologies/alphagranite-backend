@@ -109,6 +109,10 @@ async def update_revision(
     
     # Update fields
     update_dict = update_data.model_dump(exclude_unset=True)
+    # The type is chosen by whoever requested the revision; the revisor saving their
+    # work must not change it (the old client sent another revision's type here).
+    if (getattr(revision, "revision_type", None) or "").strip():
+        update_dict.pop("revision_type", None)
 
     # Revision work is timed with drafting sessions.
     if update_dict.get("assigned_to") is not None and update_dict["assigned_to"] != revision.assigned_to:
@@ -174,7 +178,11 @@ async def get_revisions_by_fab(
 ):
     """Get all revisions for a fab"""
     
-    result = await db.execute(select(Revision).where(Revision.fab_id == fab_id))
+    result = await db.execute(
+        select(Revision)
+        .where(Revision.fab_id == fab_id)
+        .order_by(Revision.created_at.desc(), Revision.id.desc())  # newest first
+    )
     revisions = result.scalars().all()
     
     if not revisions:
