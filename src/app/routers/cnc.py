@@ -26,7 +26,7 @@ from src.app.middleware.jwt_auth import get_current_user
 from src.app.service.file import FileService
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import error_response, success_response, strip_timezone, app_now, APP_TZ
-from src.app.utils.timer_guards import assert_no_active_timer_session
+from src.app.utils.timer_guards import assert_no_active_timer_session, assert_no_running_timer_for_reassignment
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +136,8 @@ async def manage_cnc_session(
         if active_session.current_pause_start_time is None:
             naive_ts = strip_timezone(timestamp)
             naive_start = strip_timezone(active_session.session_start_time)
-            active_session.total_time_spent += int((naive_ts - naive_start).total_seconds()) - active_session.total_pause_duration
+            # Elapsed minus all pauses is already the session total, so assign (not +=).
+            active_session.total_time_spent = int((naive_ts - naive_start).total_seconds()) - active_session.total_pause_duration
 
         active_session.status = "paused"
         active_session.current_pause_start_time = strip_timezone(timestamp)
@@ -204,6 +205,9 @@ async def manage_cnc_session(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No active CNC session found to put on hold")
 
         if active_session.current_pause_start_time is None and active_session.status == "drafting":
+            active_session.total_time_spent = int(
+                (strip_timezone(timestamp) - strip_timezone(active_session.session_start_time)).total_seconds()
+            ) - active_session.total_pause_duration
             active_session.current_pause_start_time = strip_timezone(timestamp)
 
         active_session.status = "on_hold"
@@ -465,6 +469,10 @@ async def create_cnc_drafting(
     )
     existing_by_fab = {row.fab_id: row for row in existing_result.scalars().all()}
 
+    await assert_no_running_timer_for_reassignment(
+        db, fab_ids, ["cnc"], new_assignee_id=drafting_data.drafter_id
+    )
+
     entries = []
     created_count = 0
     updated_count = 0
@@ -530,6 +538,11 @@ async def update_cnc_drafting(
 
     update_data = drafting_data.model_dump(exclude_unset=True)
     is_complete = update_data.get("is_completed", False)
+
+    if update_data.get("drafter_id") is not None and update_data["drafter_id"] != cnc.drafter_id:
+        await assert_no_running_timer_for_reassignment(
+            db, [cnc.fab_id], ["cnc"], new_assignee_id=update_data["drafter_id"]
+        )
 
     if "drafter_id" in update_data:
         drafter_result = await db.execute(select(User).where(User.id == update_data["drafter_id"]))
@@ -660,7 +673,8 @@ async def get_cnc_drafting_by_fab(
 async def add_file_to_cnc_drafting(
     cnc_id: int,
     request: Request,
-    file: UploadFile = FileUpload(...),
+    # The web app sends every selected file under this one field name.
+    file: List[UploadFile] = FileUpload(...),
     file_design: Optional[str] = Form(None),
     stage_name: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
@@ -674,25 +688,23 @@ async def add_file_to_cnc_drafting(
     if not cnc:
         raise error_response("CNC drafting not found", 404)
 
-    file_data = await FileService.upload_file(
-        db=db,
-        file=file,
-        user_id=current_user.id,
-        directory="uploads",
-        file_design=file_design,
-        stage_name=stage_name,
-        fab_id=cnc.fab_id,
-        request=request,
-    )
-    file_id = file_data["id"]
-
-    if cnc.file_ids:
-        file_ids_list = cnc.file_ids.split(",")
-        if str(file_id) not in file_ids_list:
-            file_ids_list.append(str(file_id))
-            cnc.file_ids = ",".join(file_ids_list)
-    else:
-        cnc.file_ids = str(file_id)
+    file_ids_list = cnc.file_ids.split(",") if cnc.file_ids else []
+    uploaded_ids = []
+    for upload in file:
+        file_data = await FileService.upload_file(
+            db=db,
+            file=upload,
+            user_id=current_user.id,
+            directory="uploads",
+            file_design=file_design,
+            stage_name=stage_name,
+            fab_id=cnc.fab_id,
+            request=request,
+        )
+        uploaded_ids.append(file_data["id"])
+        if str(file_data["id"]) not in file_ids_list:
+            file_ids_list.append(str(file_data["id"]))
+    cnc.file_ids = ",".join(file_ids_list)
 
     cnc.updated_at = strip_timezone(app_now())
     cnc.updated_by = current_user.id
@@ -700,6 +712,11 @@ async def add_file_to_cnc_drafting(
     await db.commit()
 
     return success_response(
-        {"file_id": file_id, "file_design": file_design, "stage_name": stage_name},
-        "File added to CNC drafting successfully",
+        {
+            "file_id": uploaded_ids[0],
+            "file_ids": uploaded_ids,
+            "file_design": file_design,
+            "stage_name": stage_name,
+        },
+        f"{len(uploaded_ids)} file(s) added to CNC drafting successfully",
     )

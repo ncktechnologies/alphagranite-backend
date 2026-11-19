@@ -17,6 +17,9 @@ from src.app.interface.business_schemas import (
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import error_response, success_response, app_now
+from src.app.routers.install_scheduling import _validate_shop_completion_for_install
+
+INSTALL_COMPLETE_BLOCKED = "Install cannot be marked complete"
 
 router = APIRouter()
 
@@ -47,6 +50,9 @@ async def create_install_completion(
     if existing.scalar_one_or_none():
         raise error_response("Install Completion already exists for this fab", 400)
     
+    if install_data.is_completed:
+        await _validate_shop_completion_for_install(db, fab, INSTALL_COMPLETE_BLOCKED)
+
     now = app_now()
     resolved_install_date = install_data.install_date or install_data.completion_date or now
 
@@ -60,6 +66,7 @@ async def create_install_completion(
         customer_signature=install_data.customer_signature,
         completion_notes=install_data.completion_notes,
         is_confirmed=install_data.install_confirm,
+        is_completed=install_data.is_completed,
         status_id=1,
         created_at=now
     )
@@ -123,6 +130,10 @@ async def update_install_completion(
     
     # Update fields
     update_dict = update_data.model_dump(exclude_unset=True)
+    if update_dict.get("is_completed") is True and not install_completion.is_completed:
+        # The FAB must be finished in the shop before its install can be completed.
+        fab = await db.get(Fab, install_completion.fab_id)
+        await _validate_shop_completion_for_install(db, fab, INSTALL_COMPLETE_BLOCKED)
     for key, value in update_dict.items():
         if key == "install_confirm":
             install_completion.is_confirmed = value

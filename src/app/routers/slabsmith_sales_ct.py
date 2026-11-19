@@ -30,6 +30,8 @@ from src.app.interface.business_schemas import (
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import error_response, success_response, app_now, to_app_tz
+from src.app.service.notifications import notify_fab_event
+from src.app.utils.timer_guards import assert_no_running_timer_for_reassignment
 from src.app.database.templating import Templating
 from src.app.routers.fabs import (
     _build_fab_list_query,
@@ -71,6 +73,10 @@ async def create_slabsmith(
     drafter_result = await db.execute(select(User).where(User.id == slabsmith_data.drafter_id))
     if not drafter_result.scalar_one_or_none():
         raise error_response("Drafter not found", 404)
+
+    await assert_no_running_timer_for_reassignment(
+        db, [slabsmith_data.fab_id], ["slabsmith"], new_assignee_id=slabsmith_data.drafter_id
+    )
     
     # Create slab smith
     slabsmith = SlabSmith(
@@ -128,6 +134,10 @@ async def update_slabsmith(
         drafter_result = await db.execute(select(User).where(User.id == update_data["drafter_id"]))
         if not drafter_result.scalar_one_or_none():
             raise error_response("Drafter not found", 404)
+        if update_data["drafter_id"] != slabsmith.drafter_id:
+            await assert_no_running_timer_for_reassignment(
+                db, [slabsmith.fab_id], ["slabsmith"], new_assignee_id=update_data["drafter_id"]
+            )
 
     for field, value in update_data.items():
         setattr(slabsmith, field, value)
@@ -184,6 +194,7 @@ async def mark_slabsmith_completed(
         fab.updated_by = current_user.id
     
     await db.commit()
+    await notify_fab_event(slabsmith.fab_id, "slabsmith_completed", current_user.id)
     
     return success_response(None, "Slab smith marked as completed")
 
@@ -468,6 +479,9 @@ async def update_revision_type(
     sales_ct.updated_by = current_user.id
     
     await db.commit()
+
+    if revision_data.is_revision_completed:
+        await notify_fab_event(sales_ct.fab_id, "sales_revision_requested", current_user.id)
     
     return success_response(None, "Revision updated successfully")
 
@@ -556,6 +570,7 @@ async def get_pending_slabsmith_fab_ids(
     ),
     fab_type: Optional[str] = None,
     drafter_id: Optional[int] = Query(None, description="Filter by drafter/programmer ID"),
+    slabsmith_operator_id: Optional[int] = Query(None, ge=0, description="SlabSmith widget: latest SlabSmith assignee; 0 = unassigned"),
     skip: int = 0,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
@@ -641,6 +656,10 @@ async def get_pending_slabsmith_fab_ids(
 
     if drafter_id is not None:
         filters.append(Fab.drafter_id == drafter_id)
+
+    if slabsmith_operator_id is not None:
+        from src.app.routers.fabs import _latest_assignee_condition
+        filters.append(_latest_assignee_condition(SlabSmith, slabsmith_operator_id))
 
     # Build latest templating subquery (for consistent FAB payload)
     latest_templating = (

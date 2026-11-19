@@ -66,6 +66,7 @@ from src.app.service.performance_data import (
 )
 from src.app.service.monthly_end_of_month_status_report import send_monthly_end_of_month_status_report
 from src.app.utils.helpers import error_response, app_now, to_app_tz, app_today
+from src.app.utils.redo import apply_ag_redo_revenue
 
 router = APIRouter()
 
@@ -399,18 +400,27 @@ async def patch_redo_record(
         if patch.total_cost is not None:
             total_cost_value = patch.total_cost
         elif patch.cost_per_sqft is not None:
-            total_cost_value = patch.cost_per_sqft * _to_float(fab.total_sqft) * 2.1
+            # Same formula as the Redos report: redo sq ft, falling back to total sq ft on older rows.
+            redo_sqft = _to_float(fab.redo_total_sqft)
+            if redo_sqft <= 0:
+                redo_sqft = _to_float(fab.total_sqft)
+            total_cost_value = patch.cost_per_sqft * redo_sqft * 2.1
 
         if total_cost_value is not None:
             total_cost_value = round(total_cost_value, 2)
+            # Only the redo's cost record holds this total (shown on the Redos page);
+            # fabs.cost_of_stone stays for the manually entered stone cost.
             cost_record.total_cost = f"{total_cost_value:.2f}"
-            fab.cost_of_stone = total_cost_value
 
         cost_record.updated_at = now
         cost_record.updated_by = current_user.id
         db.add(cost_record)
         if fab.cost_of_stone_id is None:
             fab.cost_of_stone_id = cost_record.id
+
+    # Revenue for an AG redo is -(cost per sq ft * redo sq ft); refresh it whenever either changes.
+    if patch.cost_per_sqft is not None or patch.sqft is not None:
+        apply_ag_redo_revenue(fab)
 
     fab.updated_at = now
     fab.updated_by = current_user.id
@@ -4904,11 +4914,15 @@ async def get_owner_installation_template_dashboard_report(
     InstallerUser = aliased(User)
     SalesPersonUser = aliased(User)
 
-    def _matches_common_filters(base_query, activity_date_field):
+    def _in_date_range(base_query, session_start_field):
+        """Keep only timer sessions started within the selected dates."""
         if start_dt is not None:
-            base_query = base_query.where(activity_date_field >= start_dt)
+            base_query = base_query.where(session_start_field >= start_dt)
         if end_dt is not None:
-            base_query = base_query.where(activity_date_field <= end_dt)
+            base_query = base_query.where(session_start_field <= end_dt)
+        return base_query
+
+    def _matches_common_filters(base_query):
         if fab_type:
             base_query = base_query.where(func.lower(Fab.fab_type) == fab_type.strip().lower())
         if sales_person_id is not None:
@@ -4934,8 +4948,10 @@ async def get_owner_installation_template_dashboard_report(
             return 1
         return 2
 
+    # The date range applies to each session before totals are summed, so a job shows when any of
+    # its sessions fall in the range and its hours/sq ft count only those sessions.
     installer_activity_totals = (
-        select(
+        _in_date_range(select(
             InstallerJobTimerSession.installer_id.label("installer_id"),
             InstallerJobTimerSession.job_id.label("job_id"),
             InstallerJobTimerSession.fab_id.label("fab_id"),
@@ -4950,7 +4966,7 @@ async def get_owner_installation_template_dashboard_report(
                 )
             ).label("activity_date"),
             func.max(case((InstallerJobTimerSession.status == "stopped", 1), else_=0)).label("is_completed_int"),
-        )
+        ), InstallerJobTimerSession.session_start_at)
         .group_by(
             InstallerJobTimerSession.installer_id,
             InstallerJobTimerSession.job_id,
@@ -4960,7 +4976,7 @@ async def get_owner_installation_template_dashboard_report(
     )
 
     templater_activity_totals = (
-        select(
+        _in_date_range(select(
             TemplaterJobTimerSession.templater_id.label("templater_id"),
             TemplaterJobTimerSession.job_id.label("job_id"),
             TemplaterJobTimerSession.fab_id.label("fab_id"),
@@ -4975,7 +4991,7 @@ async def get_owner_installation_template_dashboard_report(
                 )
             ).label("activity_date"),
             func.max(case((TemplaterJobTimerSession.status == "stopped", 1), else_=0)).label("is_completed_int"),
-        )
+        ), TemplaterJobTimerSession.session_start_at)
         .group_by(
             TemplaterJobTimerSession.templater_id,
             TemplaterJobTimerSession.job_id,
@@ -5013,7 +5029,7 @@ async def get_owner_installation_template_dashboard_report(
         .join(InstallerUser, InstallerUser.id == installer_activity_totals.c.installer_id, isouter=True)
         .join(SalesPersonUser, SalesPersonUser.id == Fab.sales_person_id, isouter=True)
         .order_by(installer_activity_totals.c.activity_date.desc(), installer_activity_totals.c.fab_id.desc())
-    , installer_activity_totals.c.activity_date)
+    )
 
     install_rows_db = (await db.execute(install_query)).all()
 
@@ -5048,7 +5064,7 @@ async def get_owner_installation_template_dashboard_report(
         .join(InstallerUser, InstallerUser.id == templater_activity_totals.c.templater_id, isouter=True)
         .join(SalesPersonUser, SalesPersonUser.id == Fab.sales_person_id, isouter=True)
         .order_by(templater_activity_totals.c.activity_date.desc())
-    , templater_activity_totals.c.activity_date)
+    )
 
     template_rows_db = (await db.execute(template_query)).all()
 
@@ -5100,7 +5116,7 @@ async def get_owner_installation_template_dashboard_report(
     if installer_job_ids and installer_ids:
         installer_sessions = (
             await db.execute(
-                select(InstallerJobTimerSession)
+                _in_date_range(select(InstallerJobTimerSession), InstallerJobTimerSession.session_start_at)
                 .where(
                     InstallerJobTimerSession.job_id.in_(installer_job_ids),
                     InstallerJobTimerSession.installer_id.in_(installer_ids),
@@ -5151,7 +5167,7 @@ async def get_owner_installation_template_dashboard_report(
     if templater_job_ids and templater_ids:
         templater_sessions = (
             await db.execute(
-                select(TemplaterJobTimerSession)
+                _in_date_range(select(TemplaterJobTimerSession), TemplaterJobTimerSession.session_start_at)
                 .where(
                     TemplaterJobTimerSession.job_id.in_(templater_job_ids),
                     TemplaterJobTimerSession.templater_id.in_(templater_ids),

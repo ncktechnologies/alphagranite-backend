@@ -194,6 +194,13 @@ class StoneColorResponse(BaseModel):
     updated_by: Optional[int]
 
 
+class StoneColorPageResponse(BaseModel):
+    total: int
+    page: int
+    per_page: int
+    data: List[StoneColorResponse]
+
+
 # Edge Schemas
 class EdgeCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
@@ -506,6 +513,20 @@ class TemplatingScheduleUpdate(BaseModel):
     is_templating_schedule: Optional[bool] = None
     status_id: Optional[int] = None
     is_completed: Optional[bool] = None
+    # "Reschedule" on the templating activity form; each one bumps reschedule_count.
+    reschedule: Optional[bool] = None
+
+    @field_validator("schedule_start_date", "schedule_due_date", mode="before")
+    @classmethod
+    def normalize_schedule_date(cls, value):
+        if isinstance(value, str):
+            try:
+                value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return value
+        if isinstance(value, datetime):
+            return value.date()
+        return value
 
     class Config:
         from_attributes = True
@@ -540,6 +561,7 @@ class TemplatingResponse(BaseModel):
     review_checklist: Optional[dict] = None
     is_templating_schedule: Optional[bool] = None
     rescheduled: bool = False  # NEW
+    reschedule_count: int = 0
     is_completed: Optional[bool] = None
     status_id: Optional[int] = None
     status_name: Optional[str] = None
@@ -1186,6 +1208,8 @@ class InstallCompletionCreate(BaseModel):
     customer_signature: Optional[str] = None
     completion_notes: Optional[str] = None
     install_confirm: bool = False
+    # The Install Scheduled form can complete an install on its first save.
+    is_completed: bool = False
 
 
 class InstallCompletionUpdate(BaseModel):

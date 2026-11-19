@@ -3,13 +3,14 @@ from typing import List, Optional
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 
 from src.app.database import get_db
 from src.app.database.user import User
 from src.app.database.stone_color import StoneColor
 from src.app.database.stone_type import StoneType
 from src.app.interface.business_schemas import (
-    StoneColorCreate, StoneColorUpdate, StoneColorResponse,
+    StoneColorCreate, StoneColorUpdate, StoneColorResponse, StoneColorPageResponse,
 )
 from src.app.utils.permissions import PermissionChecker
 from src.app.middleware.jwt_auth import get_current_user
@@ -17,6 +18,17 @@ from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import error_response, success_response, app_now
 
 router = APIRouter()
+
+
+def _filter_stone_colors(query, stone_type_id: Optional[int], status_id: Optional[int], search: Optional[str]):
+    if stone_type_id is not None:
+        query = query.where(StoneColor.stone_type_id == stone_type_id)
+    # Use explicit None check so a provided 0 (invalid) won't be treated as "no filter".
+    if status_id is not None:
+        query = query.where(StoneColor.status_id == status_id)
+    if search and search.strip():
+        query = query.where(StoneColor.name.ilike(f"%{search.strip()}%"))
+    return query
 
 
 @router.post("/stone-colors", response_model=SuccessResponse[StoneColorResponse], status_code=201)
@@ -71,19 +83,7 @@ async def get_stone_colors(
 ):
     """Get list of stone colors with optional filtering"""
     
-    query = select(StoneColor)
-    
-    # Apply filters
-    if stone_type_id is not None:
-        query = query.where(StoneColor.stone_type_id == stone_type_id)
-
-    # Use explicit None check so a provided 0 (invalid) won't be treated as "no filter".
-    if status_id is not None:
-        query = query.where(StoneColor.status_id == status_id)
-    
-    if search:
-        search_term = f"%{search}%"
-        query = query.where(StoneColor.name.ilike(search_term))
+    query = _filter_stone_colors(select(StoneColor), stone_type_id, status_id, search)
     
     # Apply pagination
     query = query.offset(skip).limit(limit).order_by(StoneColor.name.asc())
@@ -92,6 +92,32 @@ async def get_stone_colors(
     colors = result.scalars().all()
 
     return success_response(colors, "Stone colors fetched successfully")
+
+
+@router.get("/stone-colors/paginated", response_model=SuccessResponse[StoneColorPageResponse])
+async def get_stone_colors_paginated(
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(50, ge=1, le=500, description="Number of records to return"),
+    stone_type_id: Optional[int] = Query(None, description="Filter by stone type ID"),
+    status_id: Optional[int] = Query(None, description="Filter by status ID"),
+    search: Optional[str] = Query(None, description="Search by name"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Page of stone colors with the total matching count"""
+
+    total = (await db.execute(
+        _filter_stone_colors(select(func.count(StoneColor.id)), stone_type_id, status_id, search)
+    )).scalar_one()
+    query = _filter_stone_colors(select(StoneColor), stone_type_id, status_id, search)
+    result = await db.execute(query.order_by(StoneColor.name.asc(), StoneColor.id.asc()).offset(skip).limit(limit))
+
+    return success_response({
+        "total": total,
+        "page": (skip // limit) + 1,
+        "per_page": limit,
+        "data": result.scalars().all(),
+    }, "Stone colors fetched successfully")
 
 
 @router.get("/stone-colors/{color_id}", response_model=SuccessResponse[StoneColorResponse])
@@ -144,7 +170,7 @@ async def update_stone_color(
         # Lazily import Status to avoid circular imports
         from src.app.database.status import Status
 
-        status_result = await db.execute(select(Status).where(Status.id == status_val))
+        status_result = await db.execute(select(Status).where(Status.value_id == status_val))
         if not status_result.scalar_one_or_none():
             raise error_response("Provided 'status_id' does not exist", 400)
 
@@ -201,12 +227,17 @@ async def delete_stone_color(
 @router.get("/stone-types/{stone_type_id}/stone-colors", response_model=SuccessResponse[List[StoneColorResponse]])
 async def get_stone_colors_by_type(
     stone_type_id: int,
+    status_id: Optional[int] = Query(None, description="Filter by status ID"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Get all stone colors for a specific stone type"""
 
-    result = await db.execute(select(StoneColor).where(StoneColor.stone_type_id == stone_type_id))
+    query = select(StoneColor).where(StoneColor.stone_type_id == stone_type_id)
+    if status_id is not None:
+        query = query.where(StoneColor.status_id == status_id)
+
+    result = await db.execute(query.order_by(StoneColor.name.asc()))
     colors = result.scalars().all()
 
     return success_response(colors, "Stone colors fetched successfully")

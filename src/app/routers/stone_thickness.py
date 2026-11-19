@@ -58,7 +58,7 @@ async def get_stone_thicknesses(
 ):
     """Get list of stone thicknesses with optional filtering"""
     
-    query = select(StoneThickness)
+    query = select(StoneThickness).where(StoneThickness.status_id != 0)
     
     # Apply filters
     # Use explicit None check so a provided 0 (invalid) won't be treated as "no filter".

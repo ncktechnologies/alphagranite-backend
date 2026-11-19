@@ -23,6 +23,7 @@ from src.app.interface.business_schemas import (
 )
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.utils.helpers import error_response, success_response, app_now, to_app_tz, app_today
+from src.app.utils.permissions import has_permission
 from src.app.database.work_station import WorkStation
 from src.app.interface.generated_schemas import PlanningSection, ShopRevision
 from src.app.database.business_job import BusinessJob
@@ -818,7 +819,11 @@ async def _can_manage_shop_cut_plan_timer(db: AsyncSession, current_user: User, 
         .where(UserRole.user_id == current_user.id)
     )
     role_names = {str(r[0]).strip().lower() for r in roles_result.all() if r[0]}
-    return any(name in role_names for name in {"admin", "administrator", "supervisor"})
+    if any(name in role_names for name in {"admin", "administrator", "supervisor"}):
+        return True
+
+    # Shop Status lets users with update permission run plan timers.
+    return await has_permission(db, current_user.id, "Shop Status", "update")
 
 
 async def _recalculate_shop_plan_work_percentage(
@@ -892,6 +897,50 @@ async def _get_work_progress_by_plan(
         for plan in plans
         if plan.id is not None
     }
+
+
+async def get_plan_timer_states(db: AsyncSession, plans: List[ShopCutPlan]) -> Dict[int, dict]:
+    """Timer status and elapsed work seconds per plan, for list views (three queries in total).
+
+    status is the active session's status ("running"/"paused"), else "stopped" when time was
+    logged, else "idle". Like the timer endpoints, only the plan operator's session counts.
+    """
+    plans = [plan for plan in plans if plan.id is not None]
+    if not plans:
+        return {}
+
+    as_of = app_now()
+    progress = await _get_work_progress_by_plan(db, plans, as_of)
+    active_result = await db.execute(
+        select(
+            ShopCutPlanTimerSession.shop_cut_plan_id,
+            ShopCutPlanTimerSession.operator_id,
+            ShopCutPlanTimerSession.status,
+            ShopCutPlanTimerSession.id,
+        )
+        .where(
+            ShopCutPlanTimerSession.shop_cut_plan_id.in_([plan.id for plan in plans]),
+            ShopCutPlanTimerSession.status.in_(["running", "paused"]),
+        )
+        .order_by(ShopCutPlanTimerSession.created_at.desc())
+    )
+    operator_by_plan = {plan.id: plan.user_id for plan in plans}
+    active_by_plan: Dict[int, Tuple[str, int]] = {}
+    for plan_id, operator_id, status, session_id in active_result.all():
+        if operator_id == operator_by_plan.get(plan_id) and plan_id not in active_by_plan:
+            active_by_plan[plan_id] = (status, session_id)
+
+    states = {}
+    for plan in plans:
+        elapsed_seconds = progress.get(plan.id, (0, 0.0, 0))[2]
+        active = active_by_plan.get(plan.id)
+        states[plan.id] = {
+            "status": active[0] if active else ("stopped" if elapsed_seconds > 0 else "idle"),
+            "session_id": active[1] if active else None,
+            "elapsed_seconds": elapsed_seconds,
+            "as_of": as_of.isoformat(),
+        }
+    return states
 
 
 def _compute_work_progress(

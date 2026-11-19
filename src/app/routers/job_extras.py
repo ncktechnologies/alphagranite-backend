@@ -20,6 +20,7 @@ from src.app.interface.generated_schemas import (
 from src.app.service.drafting import DraftingService
 from src.app.service.templating import TemplatingService
 from src.app.utils.helpers import success_response, error_response, app_now, to_app_tz
+from src.app.service.notifications import notify_fab_event
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File as FastAPIFile, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
@@ -500,6 +501,7 @@ async def mark_slabsmith_completed(
     
     await db.commit()
     await db.refresh(slabsmith)
+    await notify_fab_event(slabsmith.fab_id, "slabsmith_completed", current_user.id)
     
     return success_response(slabsmith, "SlabSmith marked as completed successfully")
 

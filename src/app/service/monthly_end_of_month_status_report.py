@@ -23,6 +23,7 @@ from src.app.database.shop_cut_plan import ShopCutPlan
 from src.app.database.stone_color import StoneColor
 from src.app.database.stone_thickness import StoneThickness
 from src.app.database.stone_type import StoneType
+import src.app.database.model_registry  # noqa: F401  (runs standalone in monthly_reports)
 from src.app.interface.generated_schemas import CutList
 from src.app.interface.generated_schemas import InstallCompletion
 from src.app.service.background import send_email_with_attachments

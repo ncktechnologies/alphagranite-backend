@@ -17,6 +17,8 @@ from src.app.interface.business_schemas import (
 from src.app.middleware.jwt_auth import get_current_user
 from src.app.interface.response_wrappers import SuccessResponse
 from src.app.utils.helpers import error_response, success_response, app_now
+from src.app.service.notifications import notify_fab_event
+from src.app.utils.timer_guards import assert_no_running_timer_for_reassignment
 
 router = APIRouter()
 
@@ -107,8 +109,23 @@ async def update_revision(
     
     # Update fields
     update_dict = update_data.model_dump(exclude_unset=True)
+    # The type is chosen by whoever requested the revision; the revisor saving their
+    # work must not change it (the old client sent another revision's type here).
+    if (getattr(revision, "revision_type", None) or "").strip():
+        update_dict.pop("revision_type", None)
+
+    # Revision work is timed with drafting sessions.
+    if update_dict.get("assigned_to") is not None and update_dict["assigned_to"] != revision.assigned_to:
+        await assert_no_running_timer_for_reassignment(
+            db, [revision.fab_id], ["drafting"], new_assignee_id=update_dict["assigned_to"],
+            labels={"drafting": "Revision"},
+        )
+
     for key, value in update_dict.items():
         setattr(revision, key, value)
+    if update_data.is_completed and revision.actual_end_date is None:
+        # When CAD submitted the revision; SCT dates and orders returning FABs by this.
+        revision.actual_end_date = app_now()
     
     revision.updated_at = app_now()
     revision.updated_by = current_user.id
@@ -126,6 +143,9 @@ async def update_revision(
     
     await db.commit()
     await db.refresh(revision)
+
+    if update_data.is_completed:
+        await notify_fab_event(revision.fab_id, "sales_revision_completed", current_user.id)
     
     return success_response(
         RevisionResponse(
@@ -158,7 +178,11 @@ async def get_revisions_by_fab(
 ):
     """Get all revisions for a fab"""
     
-    result = await db.execute(select(Revision).where(Revision.fab_id == fab_id))
+    result = await db.execute(
+        select(Revision)
+        .where(Revision.fab_id == fab_id)
+        .order_by(Revision.created_at.desc(), Revision.id.desc())  # newest first
+    )
     revisions = result.scalars().all()
     
     if not revisions:

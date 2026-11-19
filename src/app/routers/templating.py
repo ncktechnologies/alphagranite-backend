@@ -41,6 +41,52 @@ def _to_app_tz(dt: Optional[datetime]) -> Optional[datetime]:
     return to_app_tz(dt)
 
 
+def _mark_templating_incomplete(templating, user_id: int) -> None:
+    """Undo a completion on the templating record (status back to scheduled, completed date cleared)."""
+    templating.is_completed = False
+    if templating.status_id == 2:
+        templating.status_id = 1
+    templating.actual_end_date = None
+    templating.updated_at = app_now()
+    templating.updated_by = user_id
+
+
+def _mark_templating_complete(templating, fab: Optional[Fab], user_id: int) -> None:
+    timestamp = app_now()
+    templating.is_completed = True
+    templating.status_id = 2
+    templating.actual_end_date = templating.actual_end_date or timestamp
+    templating.updated_at = timestamp
+    templating.updated_by = user_id
+
+    if not fab:
+        return
+
+    fab.template_review_complete = True
+    fab.template_completed_date = fab.template_completed_date or timestamp
+
+    if fab.current_stage == "templating":
+        from src.app.routers.fabs import get_next_stage
+
+        next_stage = get_next_stage(
+            fab.current_stage,
+            drafting_needed=fab.drafting_needed,
+            slab_smith_ag_needed=fab.slab_smith_ag_needed,
+            slab_smith_cust_needed=fab.slab_smith_cust_needed,
+        )
+        if next_stage:
+            fab.current_stage = next_stage
+            fab.next_stage = get_next_stage(
+                next_stage,
+                drafting_needed=fab.drafting_needed,
+                slab_smith_ag_needed=fab.slab_smith_ag_needed,
+                slab_smith_cust_needed=fab.slab_smith_cust_needed,
+            )
+
+    fab.updated_at = timestamp
+    fab.updated_by = user_id
+
+
 # helper to keep Fab.total_sqft in sync with Templating
 async def _sync_fab_total_sqft(db: AsyncSession, fab_id: int, total_sqft, user_id: int):
     if total_sqft is None:
@@ -103,6 +149,7 @@ async def schedule_templating(
         existing_templating.notes = templating_data.notes
         existing_templating.review_checklist = templating_data.review_checklist
         existing_templating.rescheduled = True  # NEW: Mark as rescheduled
+        existing_templating.reschedule_count = (existing_templating.reschedule_count or 0) + 1
         existing_templating.updated_at = app_now()
         existing_templating.updated_by = current_user.id
         templating = existing_templating
@@ -118,6 +165,7 @@ async def schedule_templating(
             review_checklist=templating_data.review_checklist,
             is_templating_schedule=True,
             rescheduled=False,  # NEW: First schedule is not a reschedule
+            reschedule_count=0,
             status_id=1,
             created_at=app_now(),
             updated_at=None,
@@ -159,7 +207,8 @@ async def schedule_templating(
         review_checklist=templating.review_checklist,
         is_templating_schedule=templating.is_templating_schedule,
         is_completed=templating.is_completed,
-        rescheduled=templating.rescheduled,  # NEW
+        rescheduled=templating.rescheduled,
+        reschedule_count=templating.reschedule_count or 0,  # NEW
         status_id=templating.status_id,
         status_name=status.name if status else None,
         created_at=templating.created_at,
@@ -218,7 +267,8 @@ async def update_templating(
         raise error_response("Templating not found", 404)
 
     # IMPORTANT: ignore keys explicitly sent as null
-    for field, value in update_data.model_dump(exclude_unset=True, exclude_none=True).items():
+    update_dict = update_data.model_dump(exclude_unset=True, exclude_none=True)
+    for field, value in update_dict.items():
         if hasattr(templating, field):
             if isinstance(value, datetime):
                 value = _to_app_tz(value)
@@ -234,11 +284,20 @@ async def update_templating(
 
             setattr(templating, field, value)
 
-    if getattr(templating, "is_completed", False) and not templating.actual_end_date:
-        templating.actual_end_date = app_now()
+    fab_result = await db.execute(select(Fab).where(Fab.id == templating.fab_id))
+    fab = fab_result.scalar_one_or_none()
+    if update_dict.get("is_completed") is True:
+        _mark_templating_complete(templating, fab, current_user.id)
+    elif update_dict.get("is_completed") is False:
+        _mark_templating_incomplete(templating, current_user.id)
+    else:
+        templating.updated_at = app_now()
+        templating.updated_by = current_user.id
 
-    templating.updated_at = app_now()
-    templating.updated_by = current_user.id
+    if update_dict.get("reschedule") and update_dict.get("is_completed") is not True:
+        # No limit: every reschedule counts.
+        templating.rescheduled = True
+        templating.reschedule_count = (templating.reschedule_count or 0) + 1
 
     await _sync_fab_total_sqft(db, templating.fab_id, update_data.total_sqft, current_user.id)
 
@@ -247,10 +306,6 @@ async def update_templating(
 
     technician = await db.get(User, templating.technician_id) if templating.technician_id else None
     status = await db.get(Status, templating.status_id)
-
-    # FIX: fetch fab before using current_stage/next_stage
-    fab_result = await db.execute(select(Fab).where(Fab.id == templating.fab_id))
-    fab = fab_result.scalar_one_or_none()
 
     response_data = TemplatingResponse(
         id=templating.id,
@@ -267,6 +322,7 @@ async def update_templating(
         is_templating_schedule=templating.is_templating_schedule,
         is_completed=templating.is_completed,
         rescheduled=templating.rescheduled,
+        reschedule_count=templating.reschedule_count or 0,
         status_id=templating.status_id,
         status_name=status.name if status else None,
         current_stage=fab.current_stage if fab else None,
@@ -323,6 +379,7 @@ async def update_templating_review_checklist(
         is_templating_schedule=templating.is_templating_schedule,
         is_completed=templating.is_completed,
         rescheduled=templating.rescheduled,
+        reschedule_count=templating.reschedule_count or 0,
         status_id=templating.status_id,
         status_name=status.name if status else None,
         current_stage=fab.current_stage if fab else None,
@@ -373,36 +430,7 @@ async def complete_templating(
         existing_notes = templating.notes or []
         templating.notes = existing_notes + request_data.notes
     
-    # Mark templating as completed (status_id = 2 for completed)
-    templating.status_id = 2
-    templating.updated_at = app_now()
-    templating.updated_by = current_user.id
-
-    # Update FAB stage: Move to next stage based on current stage.
-    # Pass drafting_needed so that when the FAB lands on pre_draft_review the
-    # correct downstream stage (sales_ct vs drafting) is reflected in next_stage.
-    from src.app.routers.fabs import get_next_stage
-    if fab.current_stage:
-        fab.next_stage = get_next_stage(
-            fab.current_stage,
-            drafting_needed=fab.drafting_needed,
-            slab_smith_ag_needed=fab.slab_smith_ag_needed,
-            slab_smith_cust_needed=fab.slab_smith_cust_needed,
-        )
-        if fab.next_stage:
-            fab.current_stage = fab.next_stage
-            fab.next_stage = get_next_stage(
-                fab.current_stage,
-                drafting_needed=fab.drafting_needed,
-                slab_smith_ag_needed=fab.slab_smith_ag_needed,
-                slab_smith_cust_needed=fab.slab_smith_cust_needed,
-            )
-        fab.updated_at = app_now()
-        fab.updated_by = current_user.id
-
-    # Set flags/dates on FAB
-    fab.template_review_complete = True
-    fab.template_completed_date = app_now()
+    _mark_templating_complete(templating, fab, current_user.id)
 
     await db.commit()
     await db.refresh(templating)
@@ -427,7 +455,8 @@ async def complete_templating(
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
         is_completed=templating.is_completed,
-        rescheduled=templating.rescheduled,  # NEW
+        rescheduled=templating.rescheduled,
+        reschedule_count=templating.reschedule_count or 0,  # NEW
         status_id=templating.status_id,
         status_name=status.name if status else None,
         current_stage=fab.current_stage,
@@ -503,6 +532,9 @@ async def get_templating(
     if not templating:
         raise error_response("Templating not found", 404)
     
+    fab_result = await db.execute(select(Fab).where(Fab.id == templating.fab_id))
+    fab = fab_result.scalar_one_or_none()
+
     # Fetch technician and status details
     technician = await db.get(User, templating.technician_id) if templating.technician_id else None
     status = await db.get(Status, templating.status_id)
@@ -522,7 +554,8 @@ async def get_templating(
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
         is_completed=templating.is_completed,
-        rescheduled=templating.rescheduled,  # NEW
+        rescheduled=templating.rescheduled,
+        reschedule_count=templating.reschedule_count or 0,  # NEW
         status_id=templating.status_id,
         status_name=status.name if status else None,
         current_stage=fab.current_stage,
@@ -568,7 +601,8 @@ async def get_templating_by_fab(
         notes=templating.notes,
         is_templating_schedule=templating.is_templating_schedule,
         is_completed=templating.is_completed,
-        rescheduled=templating.rescheduled,  # NEW
+        rescheduled=templating.rescheduled,
+        reschedule_count=templating.reschedule_count or 0,  # NEW
         status_id=templating.status_id,
         status_name=status.name if status else None,
         created_at=templating.created_at,

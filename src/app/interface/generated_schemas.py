@@ -24,6 +24,7 @@ class Templating(SQLModel, table=True):
     review_checklist: Optional[dict] = Field(default=None, sa_column=Column(JSONB), description="FAB review checklist with checkbox states")
     is_templating_schedule: bool = Field(default=False, description="Is templating scheduled")
     rescheduled: bool = Field(default=False, description="Was this templating rescheduled after unscheduling")
+    reschedule_count: int = Field(default=0, description="Times this templating has been rescheduled")
     is_completed: Optional[bool] = Field(default=None)  
     status_id: int = Field()
     created_at: datetime = Field()

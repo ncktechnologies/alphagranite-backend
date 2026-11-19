@@ -1,6 +1,8 @@
 import ast
 import asyncio
 import os
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
@@ -80,3 +82,34 @@ def test_standalone_runner_exits_when_disabled(monkeypatch):
     asyncio.run(namespace["_run_monthly_status_report_scheduler"]())
 
     namespace["_scheduler_loop"].assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "entrypoint",
+    [
+        "src.app.service.monthly_end_of_month_status_report",
+        "src.app.tasks.hcp_payroll_tasks",
+    ],
+)
+def test_standalone_entrypoint_resolves_models(entrypoint):
+    # Fresh interpreter, matching the monthly_reports/celery_worker containers,
+    # so models imported by other tests can't mask a missing relationship or
+    # foreign-key target. jobs.company_id has no model in the API either.
+    code = (
+        f"import {entrypoint}\n"
+        "from sqlalchemy.orm import configure_mappers\n"
+        "from sqlmodel import SQLModel\n"
+        "configure_mappers()\n"
+        "for table in SQLModel.metadata.tables.values():\n"
+        "    for fk in table.foreign_keys:\n"
+        "        if fk.target_fullname != 'companies.id':\n"
+        "            fk.column\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
